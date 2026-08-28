@@ -312,6 +312,8 @@ UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
 // be passed through untouched.
 thread_local bool g_inUnhide = false;
 
+const int kUnhideRequestStateChanged = 9;
+
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
@@ -468,6 +470,22 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     UINT edge = CurrentStuckPlace(pThis);
     DiagLog(L"Unhide(flags=%d request=%d) ENTER [edge=%u %s]", flags, request,
             edge, EdgeName(edge));
+
+    // request 9 is Windows' "auto-hide state changed, ensure shown" reflex. It
+    // fires in the same millisecond as our forced 0x3 because we inject the
+    // hidden state at a moment Windows has not itself decided to hide, and it
+    // immediately undoes the hide. On the bottom edge the 0x1->0x3 transition
+    // is Windows' own, so no such Unhide follows.
+    //
+    // Genuine reveals use other request codes -- hovering the edge produced
+    // request 1 in the pre-fix traces, and disabling produced request 5 -- so
+    // suppressing 9 off-bottom leaves real unhides untouched.
+    if (request == kUnhideRequestStateChanged && edge < ABE_BOTTOM &&
+        (UINT)g_desiredFlags & 1) {
+        DiagLog(L"Unhide: suppressing request=9 reflex [edge=%u %s]", edge,
+                EdgeName(edge));
+        return;
+    }
 
     bool prev = g_inUnhide;
     g_inUnhide = true;
