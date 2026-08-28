@@ -99,3 +99,77 @@ planning:
    succeeds. Narrower lie, but depends on the gate actually consulting
    `GetStuckPlace` rather than reading a member directly — which is not yet
    established and should be tested first.
+
+---
+
+# Resolution (2026-08-28, later)
+
+The phase 1 conclusion above was **wrong in an important way**, and it is worth
+recording why rather than quietly correcting it.
+
+Phase 1 concluded "the auto-hide flags never become non-zero off-bottom", and
+inferred that the *store* was refused. It is not. The store always succeeds.
+`TrayUI::GetAutoHideFlags` masks the result:
+
+    cmpl $0x3,0x118(%rbx)     ; edge == ABE_BOTTOM ?
+    je   .return_real
+    xor  %eax,%eax            ; otherwise report no flags
+    ret
+  .return_real:
+    mov  0x44(%rbx),%eax      ; the genuinely stored flags
+
+That distinction cost three failed attempts, all of which tried to make a store
+succeed that was never failing. The getter was named in the very first trace;
+disassembling it earlier would have saved most of the investigation.
+
+## Everything the working fix needed
+
+1. Report the stored flags instead of the masked zero.
+2. Store `ABS_ALWAYSONTOP` alongside `ABS_AUTOHIDE` off-bottom. `GetDockedRect`
+   returns the hidden rect only when `(flags & 3) == 3`; Windows adds the second
+   bit itself on the bottom edge but not elsewhere.
+3. Suppress `Unhide(request=9)` when the cursor is away. Injecting the hidden
+   state prompts an immediate "ensure shown" reflex that undoes the hide.
+4. Drive reveal and hide from a timer. Windows' cursor-at-edge detection does
+   not run off-bottom, and there is no polling site among the hooks:
+   `GetAutoHideFlags` fires in bursts around state changes and not at all while
+   the taskbar sits hidden -- one run produced two cursor samples 28 seconds
+   apart.
+5. Issue the hide slide explicitly. `Unhide` performs its own reveal slide, but
+   nothing performs the hide slide off-bottom, so storing the flag changed the
+   state and moved nothing.
+6. Use two regions: a thin trigger strip to reveal, the full docked rect to stay
+   revealed. One tolerance for both hid the taskbar as soon as the pointer moved
+   onto it.
+
+## Pointer bases
+
+Three different `this` bases are in play, which caused a crash and a silent
+no-op before being pinned down:
+
+| Function | Base | Edge at | Flags at |
+|---|---|---|---|
+| `SetAutoHideFlags`, `GetDockedRect`, `Unhide`, `SlideWindow` | B | `0x110` | `0x3c` |
+| `GetAutoHideFlags` | B - 8 | `0x118` | `0x44` |
+| `_ComputeHiddenRect` | B - 0x30 | | |
+
+The V1 driver crashed Explorer by calling `_ComputeHiddenRect` with base B. The
+`ALWAYSONTOP` store silently did nothing for one round because it read the edge
+at `0x118` from a base-B pointer.
+
+## Ruled out
+
+- `ViewCoordinator` in `Taskbar.View.dll`. The hooks bound and never fired once:
+  that class implements collapse-to-smaller-size, not auto-hide.
+- The predicate at `Taskbar.dll+0x5CFF4`, which `SetAutoHideState` and
+  `SetAutoHideFlags` both call. It returns false on this machine and suppresses
+  nothing.
+- Spoofing `GetStuckPlace` around either `SetAutoHideFlags` or
+  `SetAutoHideState`. Neither consults it for the gate.
+
+## Still open
+
+- No smooth animation: the Windows 11 easing is a XAML compositor animation
+  that is never triggered off-bottom.
+- Top and right edges are implemented but untested.
+- Secondary taskbars remain out of scope.
