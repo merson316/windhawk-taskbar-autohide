@@ -233,44 +233,63 @@ UINT CurrentStuckPlace(void* pThis) {
 
 using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void* pThis);
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
+// TrayUI::GetAutoHideFlags is itself the gate. Disassembled:
+//
+//     lea  <feature flag>,%rcx
+//     call <is feature enabled>
+//     test %al,%al
+//     je   .return_real
+//     cmpl $0x3,0x118(%rbx)     ; edge == ABE_BOTTOM ?
+//     je   .return_real
+//     xor  %eax,%eax            ; otherwise report no flags
+//     ret
+//   .return_real:
+//     mov  0x44(%rbx),%eax      ; the genuinely stored flags
+//
+// The flags are stored correctly at this+0x44 on every edge; the getter masks
+// them to zero off-bottom, and everything downstream is gated on the result.
+//
+// Reporting the real stored value is therefore the whole fix. Fabricating a
+// value instead leaves this+0x44 disagreeing with the getter, which is why an
+// earlier attempt hid the taskbar but never released the work area or armed
+// the unhide.
+
+const size_t kTrayUiFlagsOffset = 0x44;
+const size_t kTrayUiEdgeOffset = 0x118;
+
+// The two offsets above are read out of GetAutoHideFlags itself, so verify the
+// function still looks the way it was decoded before trusting them. The
+// sequence encodes both: cmpl $0x3,0x118(%rbx) / xor %eax,%eax / mov 0x44(%rbx).
+const size_t kFlagsGateSigOffset = 0x19;
+const BYTE kFlagsGateSig[] = {
+    0x83, 0xBB, 0x18, 0x01, 0x00, 0x00, 0x03,  // cmpl $0x3,0x118(%rbx)
+    0x74, 0x04,                                // je   .return_real
+    0x33, 0xC0,                                // xor  %eax,%eax
+    0xEB, 0x03,                                // jmp
+    0x8B, 0x43, 0x44,                          // mov  0x44(%rbx),%eax
+};
+
+bool g_flagsOffsetsVerified = false;
+
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
-
-    UINT edge = (UINT)g_currentEdge;
-    UINT desired = (UINT)g_desiredFlags;
-
-    if (edge == ABE_BOTTOM) {
-        return ret;   // works natively; never interfere
+    if (!pThis || !g_flagsOffsetsVerified) {
+        return ret;
     }
 
-    UINT eff = ret;
-
-    // The store is refused off-bottom, so report what was asked for.
-    if (eff == 0 && desired != 0) {
-        eff = desired;
+    // Read the edge from the same member the function itself uses, so this
+    // cannot disagree with the original.
+    UINT edge = *(UINT*)((BYTE*)pThis + kTrayUiEdgeOffset);
+    if (edge >= ABE_BOTTOM) {
+        return ret;   // bottom works natively; anything higher is implausible
     }
 
-    // GetDockedRect computes the hidden rect only when (flags & 3) == 3, i.e.
-    // ABS_AUTOHIDE | ABS_ALWAYSONTOP:
-    //
-    //     call GetAutoHideFlags
-    //     and  $0x3,%eax
-    //     cmp  $0x3,%al
-    //     jne  <return docked rect>
-    //     call _ComputeHiddenRect
-    //
-    // On the bottom edge Windows stores 0x1 and then follows up with 0x3. Off
-    // bottom the follow-up never happens and the flags stay 0x1, one bit short
-    // of the test. Supply the missing bit.
-    if (eff & 1) {
-        eff |= 2;
+    UINT stored = *(UINT*)((BYTE*)pThis + kTrayUiFlagsOffset);
+    if (stored != ret) {
+        DiagLog(L"GetAutoHideFlags: stored 0x%X, masked to 0x%X [edge=%u %s]",
+                stored, ret, edge, EdgeName(edge));
     }
-
-    if (eff != ret) {
-        DiagLog(L"GetAutoHideFlags -> 0x%X (real 0x%X, edge %u %s)", eff, ret,
-                edge, EdgeName(edge));
-    }
-    return eff;
+    return stored;
 }
 
 using TrayUI_GetDesktopModeAutoHide_t = UINT(WINAPI*)(void* pThis);
@@ -440,75 +459,6 @@ void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
     DiagLog(L"_AutoHideCollision LEAVE");
 }
 
-// ---------------------------------------------------------------- the gate
-
-// Disassembly of TrayUI::SetAutoHideState shows:
-//
-//     lea   -0x28(%rcx),%r12      ; adjust `this`
-//     mov   %r12,%rcx
-//     call  sub_18005CFF4         ; predicate
-//     xor   %edi,%edi
-//     test  %al,%al
-//     cmove %ebx,%edi             ; predicate true -> requested state forced 0
-//
-// so a true return silently disables auto-hide. The predicate itself is:
-//
-//     add   $0x298,%rcx
-//     cmp   (%rcx),0              ; null -> false
-//     call  ...                   ; resolve member
-//     call  sub_18005D398         ; query
-//     cmp   $0x2,%eax             ; == 2 -> true (suppress)
-//
-// It has no exported symbol, so it is hooked by relative address, guarded by
-// a byte signature so that a Windows update which moves or changes it causes
-// the hook to be skipped rather than applied to the wrong code.
-
-const DWORD kAutoHideSuppressedRva = 0x5CFF4;
-
-const BYTE kAutoHideSuppressedSig[] = {
-    0x48, 0x89, 0x5C, 0x24, 0x18,              // mov  %rbx,0x18(%rsp)
-    0x57,                                      // push %rdi
-    0x48, 0x83, 0xEC, 0x20,                    // sub  $0x20,%rsp
-    0x33, 0xDB,                                // xor  %ebx,%ebx
-    0x8B, 0xFB,                                // mov  %ebx,%edi
-    0x89, 0x5C, 0x24, 0x30,                    // mov  %ebx,0x30(%rsp)
-    0x48, 0x81, 0xC1, 0x98, 0x02, 0x00, 0x00,  // add  $0x298,%rcx
-};
-
-using AutoHideSuppressed_t = BYTE(WINAPI*)(void* pThis);
-AutoHideSuppressed_t AutoHideSuppressed_Original;
-BYTE WINAPI AutoHideSuppressed_Hook(void* pThis) {
-    BYTE ret = AutoHideSuppressed_Original(pThis);
-    UINT edge = (UINT)g_currentEdge;
-
-    if (ret && edge != ABE_BOTTOM) {
-        DiagLog(L"GATE: suppressed=1 at edge %u %s -> overriding to 0", edge,
-                EdgeName(edge));
-        return 0;
-    }
-
-    if (ret) {
-        DiagLog(L"GATE: suppressed=1 at BOTTOM, left alone");
-    }
-    return ret;
-}
-
-bool HookAutoHideGate(HMODULE module) {
-    BYTE* target = (BYTE*)module + kAutoHideSuppressedRva;
-
-    if (memcmp(target, kAutoHideSuppressedSig,
-               sizeof(kAutoHideSuppressedSig)) != 0) {
-        DiagLog(L"GATE: signature mismatch at +0x%X, not hooking",
-                kAutoHideSuppressedRva);
-        return false;
-    }
-
-    Wh_SetFunctionHook((void*)target, (void*)AutoHideSuppressed_Hook,
-                       (void**)&AutoHideSuppressed_Original);
-    DiagLog(L"GATE: hooked at +0x%X", kAutoHideSuppressedRva);
-    return true;
-}
-
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
@@ -629,7 +579,18 @@ BOOL Wh_ModInit() {
     if (seeded != 0xFFFFFFFF) {
         InterlockedExchange(&g_currentEdge, (LONG)seeded);
     }
-    HookAutoHideGate(g_taskbarModule);
+    if (TrayUI_GetAutoHideFlags_Original) {
+        const BYTE* p = (const BYTE*)TrayUI_GetAutoHideFlags_Original +
+                        kFlagsGateSigOffset;
+        g_flagsOffsetsVerified =
+            memcmp(p, kFlagsGateSig, sizeof(kFlagsGateSig)) == 0;
+        DiagLog(L"flags gate signature verified: %d",
+                (int)g_flagsOffsetsVerified);
+        if (!g_flagsOffsetsVerified) {
+            DiagLog(L"WARNING: GetAutoHideFlags does not match the decoded "
+                    L"form; member offsets are not trustworthy, mod inert");
+        }
+    }
 
     DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
             EdgeName((UINT)g_currentEdge));
