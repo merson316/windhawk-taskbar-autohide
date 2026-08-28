@@ -149,6 +149,10 @@ void** WINAPI Expand_Hook(void* pThis, void* sret) {
 // r14d comes from this+0x168 when hiding and this+0x16c when showing. The
 // bottom edge animates, so gates 2 and 3 pass; log the durations to see whether
 // gate 1 is what differs off-bottom.
+// Defined below with the SetWindowPos step logging.
+extern bool g_inSlide;
+extern int g_stepCount;
+
 #define SLIDE_HIDE_DURATION_OFFSET 0x168
 #define SLIDE_SHOW_DURATION_OFFSET 0x16c
 
@@ -199,15 +203,41 @@ void WINAPI SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
     // call take roughly the duration; an instant return means it was skipped
     // regardless of what the gates reported.
     ULONGLONG t0 = GetTickCount64();
+    g_stepCount = 0;
+    g_inSlide = true;
     SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+    g_inSlide = false;
     ULONGLONG elapsed = GetTickCount64() - t0;
 
     RECT after{};
     if (hWnd) {
         GetWindowRect(hWnd, &after);
     }
-    Log(L"  -> took %llu ms, now (%ld,%ld)-(%ld,%ld)", elapsed, after.left,
-        after.top, after.right, after.bottom);
+    Log(L"  -> took %llu ms, %d SetWindowPos steps, now (%ld,%ld)-(%ld,%ld)",
+        elapsed, g_stepCount, after.left, after.top, after.right, after.bottom);
+}
+
+// ------------------------------------------------------ intermediate steps
+
+// The animation loop runs for its full duration on both edges, so it is
+// stepping the window. Watch the individual SetWindowPos steps to see whether
+// the intermediate positions actually differ, or whether the window sits still
+// and lands at the end.
+bool g_inSlide = false;
+int g_stepCount = 0;
+
+using SetWindowPos_t = decltype(&SetWindowPos);
+SetWindowPos_t SetWindowPos_Original;
+BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND after, int x, int y, int cx,
+                              int cy, UINT flags) {
+    if (g_inSlide) {
+        g_stepCount++;
+        if (g_stepCount <= 40) {
+            Log(L"    step %2d: (%d,%d) %dx%d flags=0x%X", g_stepCount, x, y,
+                cx, cy, flags);
+        }
+    }
+    return SetWindowPos_Original(hWnd, after, x, y, cx, cy, flags);
 }
 
 // ------------------------------------------------------- animation gate hook
@@ -299,6 +329,16 @@ BOOL Wh_ModInit() {
         WindhawkUtils::HookSymbols(taskbar, slideHook, ARRAYSIZE(slideHook));
         Log(L"slide hook: %p", (void*)SlideWindow_Original);
         HookAnimGate(taskbar);
+
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        if (user32) {
+            void* target = (void*)GetProcAddress(user32, "SetWindowPos");
+            if (target) {
+                Wh_SetFunctionHook(target, (void*)SetWindowPos_Hook,
+                                   (void**)&SetWindowPos_Original);
+                Log(L"SetWindowPos hooked");
+            }
+        }
     }
 
     return TRUE;
