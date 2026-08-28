@@ -795,11 +795,29 @@ void WatcherTick() {
     if (!g_trayUI || !g_offsetsVerified || g_inWatcherCall ||
         !TrayUI_Unhide_Original || !TrayUI_SetAutoHideFlags_Original ||
         !TrayUI_GetDockedRect_Original) {
+        static ULONGLONG lastLog = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - lastLog > 2000) {
+            lastLog = now;
+            DbgLog(L"idle: prerequisites. trayUI=%p verified=%d inCall=%d "
+                   L"unhide=%p setflags=%p dockedrect=%p",
+                   g_trayUI, (int)g_offsetsVerified, (int)g_inWatcherCall,
+                   (void*)TrayUI_Unhide_Original,
+                   (void*)TrayUI_SetAutoHideFlags_Original,
+                   (void*)TrayUI_GetDockedRect_Original);
+        }
         return;
     }
 
     UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
+        static ULONGLONG lastLog = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - lastLog > 2000) {
+            lastLog = now;
+            DbgLog(L"idle: edge. edge=%u enabled=%d trayUI=%p", edge,
+                   (int)EdgeEnabled(edge), g_trayUI);
+        }
         return;
     }
 
