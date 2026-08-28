@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32
+// @compilerOptions -lcomctl32 -lgdi32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -687,7 +687,29 @@ RECT g_clipRect{};
 // Set when the taskbar was hidden with ShowWindow because there was no
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
+volatile LONG g_regionSet = 0;
 RECT g_dockedBeforeHide{};
+
+// Clip the window to its own monitor. Unlike resizing, a window region also
+// clips child windows, which is what the taskbar's content lives in.
+void ApplyMonitorClip(LONG x, LONG y, LONG w, LONG h, const RECT& mon) {
+    RECT winRect{x, y, x + w, y + h};
+    RECT visible{};
+    if (!IntersectRect(&visible, &winRect, &mon)) {
+        visible = RECT{0, 0, 0, 0};
+    }
+
+    // SetWindowRgn wants window-relative coordinates, and takes ownership.
+    HRGN rgn = CreateRectRgn(visible.left - x, visible.top - y,
+                             visible.right - x, visible.bottom - y);
+    SetWindowRgn(g_trayWnd, rgn, TRUE);
+}
+
+void ClearMonitorClip() {
+    if (InterlockedCompareExchange(&g_regionSet, 0, 1) == 1 && g_trayWnd) {
+        SetWindowRgn(g_trayWnd, nullptr, TRUE);
+    }
+}
 
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
@@ -709,17 +731,15 @@ void RunHideAnimation() {
            to.top, to.right, to.bottom, mon.left, mon.top, mon.right,
            mon.bottom, (int)haveMon, (int)spills, (int)clip);
 
+    // With a display beyond this edge there is no off-screen space, so the
+    // taskbar would slide onto the neighbour. Resizing the window does not help
+    // -- its content lives in a child window that renders past the parent --
+    // and hiding it outright does not hold, because Windows shows it again.
+    //
+    // A window region does clip child windows, so the taskbar can travel to its
+    // hidden position with everything past the monitor edge clipped away.
     if (clip) {
-        // Nowhere to slide to: every position beyond this edge is on the
-        // neighbouring display, and the taskbar's content renders past any clip
-        // we apply, so animating would just play the slide over there. Hide it
-        // outright instead.
-        DbgLog(L"hide anim: no off-screen space, hiding window without a slide");
-        InterlockedExchange(&g_clipHold, 0);
-        InterlockedExchange(&g_windowHidden, 1);
-        ShowWindow(g_trayWnd, SW_HIDE);
-        InterlockedExchange(&g_animOverride, 0);
-        return;
+        DbgLog(L"hide anim: clipping to the monitor while sliding");
     }
 
 
@@ -730,16 +750,25 @@ void RunHideAnimation() {
             break;
         }
         const double t = (double)elapsed / ms;
-        LONG x = from.left + (LONG)((to.left - from.left) * t);
-        LONG y = from.top + (LONG)((to.top - from.top) * t);
+        const LONG x = from.left + (LONG)((to.left - from.left) * t);
+        const LONG y = from.top + (LONG)((to.top - from.top) * t);
 
         SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        if (clip) {
+            ApplyMonitorClip(x, y, from.right - from.left,
+                             from.bottom - from.top, mon);
+        }
         Sleep(16);
     }
 
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (clip) {
+        ApplyMonitorClip(to.left, to.top, from.right - from.left,
+                         from.bottom - from.top, mon);
+        InterlockedExchange(&g_regionSet, 1);
+    }
 
     InterlockedExchange(&g_animOverride, 0);
 }
@@ -781,6 +810,7 @@ void WatcherTick() {
 
         // If the taskbar was hidden outright on the old edge, make it visible
         // again: the position it was hidden at means nothing now.
+        ClearMonitorClip();
         if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1 &&
             g_trayWnd) {
             ShowWindow(g_trayWnd, SW_SHOWNA);
@@ -826,6 +856,8 @@ void WatcherTick() {
 
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
+
+        ClearMonitorClip();
 
         if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
             // Was hidden outright rather than moved. Only make it visible here:
@@ -1121,6 +1153,7 @@ void RestoreTaskbarIfHidden() {
 
     *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
 
+    ClearMonitorClip();
     if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
         ShowWindow(g_trayWnd, SW_SHOWNA);
     }
