@@ -786,17 +786,29 @@ void WatcherTick() {
         InterlockedExchange(&g_clipHold, 0);
 
         if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
-            // Was hidden outright rather than moved: put it back before asking
-            // Windows to unhide, so it reappears at full size in place.
-            DbgLog(L"reveal: restoring hidden window to (%ld,%ld) %ldx%ld",
-                   g_dockedBeforeHide.left, g_dockedBeforeHide.top,
-                   g_dockedBeforeHide.right - g_dockedBeforeHide.left,
-                   g_dockedBeforeHide.bottom - g_dockedBeforeHide.top);
-            SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
-                         g_dockedBeforeHide.top,
-                         g_dockedBeforeHide.right - g_dockedBeforeHide.left,
-                         g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
+            // Was hidden outright rather than moved, so restore it before
+            // asking Windows to unhide.
+            //
+            // Only reposition when a real docked rect was recorded. It is
+            // zero-initialised, and moving the window to (0,0) with zero size
+            // makes the taskbar flash at the opposite edge.
+            const bool haveRect =
+                g_dockedBeforeHide.right > g_dockedBeforeHide.left &&
+                g_dockedBeforeHide.bottom > g_dockedBeforeHide.top;
+
+            DbgLog(L"reveal: restoring hidden window, haveRect=%d "
+                   L"(%ld,%ld)-(%ld,%ld)",
+                   (int)haveRect, g_dockedBeforeHide.left,
+                   g_dockedBeforeHide.top, g_dockedBeforeHide.right,
+                   g_dockedBeforeHide.bottom);
+
+            if (haveRect) {
+                SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
+                             g_dockedBeforeHide.top,
+                             g_dockedBeforeHide.right - g_dockedBeforeHide.left,
+                             g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+            }
             ShowWindow(g_trayWnd, SW_SHOWNA);
         }
 
@@ -1071,7 +1083,8 @@ void RestoreTaskbarIfHidden() {
         ShowWindow(g_trayWnd, SW_SHOWNA);
     }
 
-    if (g_lastDockedRect.right > g_lastDockedRect.left) {
+    if (g_lastDockedRect.right > g_lastDockedRect.left &&
+        g_lastDockedRect.bottom > g_lastDockedRect.top) {
         SetWindowPos(g_trayWnd, nullptr, g_lastDockedRect.left,
                      g_lastDockedRect.top,
                      g_lastDockedRect.right - g_lastDockedRect.left,
