@@ -32,32 +32,28 @@ continuation of this one. `ViewCoordinator` is ruled out as an entry point.
 
 ## 3. Secondary monitor support
 
-Currently out of scope, and `MMTaskbarEnabled` is `0` on the development
-machine, so nothing exercises it.
+Nothing here is exercised yet: `MMTaskbarEnabled` is `0` on the development
+machine, so no secondary taskbars exist. **The first step is not code** -- enable
+"show my taskbar on all displays", dock to a non-bottom edge, and find out
+whether the secondary taskbar auto-hides natively. It may not have the bug at
+all.
 
-Secondary taskbars are a separate class with their own copies of the same
-machinery:
+### What transfers from the primary-taskbar work
 
-    CSecondaryTray::_AutoHide(bool)
-    CSecondaryTray::_ComputeHiddenRect(struct tagRECT *)
-    CSecondaryTray::Unhide(enum TrayCommon::UnhideRequest)
-    CSecondaryTray::GetStuckPlace(unsigned long *)
+- Restoring the requested position in `WM_WINDOWPOSCHANGING`. This was the
+  central discovery and is not tied to `TrayUI`.
+- Driving the slide from the watch thread rather than through `SlideWindow`.
+- Pointer polling, the reveal dwell, and the spill handling -- the last is more
+  relevant here, since a secondary monitor usually has neighbours on both sides.
 
-Note the different signatures -- `GetStuckPlace` takes an out-parameter rather
-than returning the edge, so the pointer-base assumptions from `TrayUI` do not
-carry over. Re-derive them.
+### What does not
 
-The timer watcher currently tracks a single `g_trayUI` captured from
-`GetDockedRect`. Multi-taskbar support means tracking one state per taskbar
-rather than one global.
+- `CSecondaryTray` is a different class with different signatures; its
+  `GetStuckPlace` takes an out-parameter rather than returning the edge. The
+  member offsets this mod depends on -- `0x3c`/`0x44` for flags, `0x110`/`0x118`
+  for the edge -- are `TrayUI` layout and must be re-derived.
+- The fix hinges on `TrayUI::GetAutoHideFlags` masking the flags off-bottom.
+  Whether `CSecondaryTray` does anything equivalent is unknown.
+- State is single-taskbar throughout: one `g_trayUI`, one `g_trayWnd`, one
+  animation. Multi-taskbar support means per-taskbar state everywhere.
 
-## Working practices that paid off
-
-- Measure before theorising. `GetWindowRect` and cursor logging each overturned
-  a confident theory in one test cycle.
-- Compile and link locally with `tools/whcompile.sh` before pasting into
-  Windhawk. A syntax-only check once passed a build that could not link.
-- Truncate logs with `tools/clearlog.sh`; never delete them. The mod holds the
-  file open, so an unlink loses the whole run.
-- Check the PDB's date before mining it. One round of symbol names came from a
-  build two months stale.

@@ -441,3 +441,26 @@ ruled out as an entry point -- its hooks bound and never fired.
 
 Nothing at the Win32 layer will change this, and that is now demonstrated rather
 than assumed.
+
+## Multiple monitors: hiding onto a neighbouring display
+
+With a display beyond the docked edge there is no off-screen space. Docked right
+on a 3440-wide primary, the hidden rect Windows computes is `(3438,0)-(3486,…)`
+and everything past 3440 is the next monitor, so the taskbar hides *onto* it.
+
+Two remedies were tried:
+
+1. **Clip the window to its own monitor while sliding.** The window ended up
+   exactly right -- logged as a 2 px sliver at `(3438,0) 2x1440` -- and the
+   taskbar was still visible on the neighbour, because its content lives in a
+   child window (`Windows.UI.Composition.DesktopWindowContentBridge`) that keeps
+   its own size and renders past the shrunken parent.
+2. **Hide the window outright.** Works. The watcher polls the pointer, so it
+   does not need a visible sliver to detect the reveal.
+
+The animation is skipped on such an edge: any position to animate towards is on
+the other display, so the slide simply played over there. This is a limitation of
+the situation, not of the implementation -- there is nowhere to slide to.
+
+Detection asks which monitor the far edge of the hidden rect lands on:
+a different monitor means spill, no monitor means genuine off-screen space.
