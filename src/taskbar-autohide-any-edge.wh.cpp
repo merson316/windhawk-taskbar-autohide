@@ -588,39 +588,36 @@ volatile LONG g_animRequested = 0;
 volatile LONG g_animOverride = 0;
 RECT g_animFrom{}, g_animTo{};
 int g_animDurationMs = 400;
+UINT g_animEdge = ABE_LEFT;
 
 // True when another display occupies the space the taskbar would hide into.
 // Sliding a right-docked taskbar off a 3440-wide primary puts it at x >= 3440,
-// which is the next monitor, so it would hide onto that screen instead of out
-// of sight.
-BOOL CALLBACK HiddenRectMonitorEnum(HMONITOR mon, HDC, LPRECT, LPARAM data) {
-    auto* ctx = (std::pair<RECT, bool>*)data;
-    MONITORINFO mi{};
-    mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(mon, &mi)) {
-        return TRUE;
+// which is the next monitor, so it would hide onto that screen rather than out
+// of sight. Tested by asking which monitor the far edge lands on.
+bool HiddenRectSpillsOntoAnotherDisplay(const RECT& hidden, UINT edge) {
+    if (!g_trayWnd) {
+        return false;
     }
-    RECT own{};
-    if (g_trayWnd) {
-        GetWindowRect(g_trayWnd, &own);
+
+    HMONITOR own = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
+    POINT probe{};
+    const LONG midX = (hidden.left + hidden.right) / 2;
+    const LONG midY = (hidden.top + hidden.bottom) / 2;
+    switch (edge) {
+        case ABE_LEFT:  probe.x = hidden.left;      probe.y = midY; break;
+        case ABE_RIGHT: probe.x = hidden.right - 1; probe.y = midY; break;
+        case ABE_TOP:   probe.x = midX; probe.y = hidden.top;        break;
+        default:        probe.x = midX; probe.y = hidden.bottom - 1; break;
     }
-    // Ignore the taskbar's own monitor.
-    if (PtInRect(&mi.rcMonitor, POINT{own.left, own.top})) {
-        return TRUE;
-    }
-    RECT tmp{};
-    if (IntersectRect(&tmp, &mi.rcMonitor, &ctx->first)) {
-        ctx->second = true;
-    }
-    return TRUE;
+
+    HMONITOR there = MonitorFromPoint(probe, MONITOR_DEFAULTTONULL);
+    return there != nullptr && there != own;
 }
 
-bool HiddenRectSpillsOntoAnotherDisplay(const RECT& hidden) {
-    std::pair<RECT, bool> ctx{hidden, false};
-    EnumDisplayMonitors(nullptr, nullptr, HiddenRectMonitorEnum,
-                        (LPARAM)&ctx);
-    return ctx.second;
-}
+// Set while the taskbar is parked as a clipped sliver, so the clamp can be held
+// against Windows reasserting its own hidden rect.
+volatile LONG g_clipHold = 0;
+RECT g_clipRect{};
 
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
@@ -633,7 +630,7 @@ void RunHideAnimation() {
     // sliding onto the neighbouring screen.
     RECT mon{};
     const bool clip = TrayMonitorRect(&mon) &&
-                      HiddenRectSpillsOntoAnotherDisplay(to);
+                      HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
 
     const LONG w = from.right - from.left;
     const LONG h = from.bottom - from.top;
@@ -671,9 +668,12 @@ void RunHideAnimation() {
         LONG fx = to.left, fy = to.top, fw = w, fh = h;
         if (to.left + w > mon.right) { fx = mon.right - sliver; fw = sliver; }
         if (to.top + h > mon.bottom) { fy = mon.bottom - sliver; fh = sliver; }
+        g_clipRect = RECT{fx, fy, fx + fw, fy + fh};
+        InterlockedExchange(&g_clipHold, 1);
         SetWindowPos(g_trayWnd, nullptr, fx, fy, fw, fh,
                      SWP_NOZORDER | SWP_NOACTIVATE);
     } else {
+        InterlockedExchange(&g_clipHold, 0);
         SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
     }
@@ -724,6 +724,7 @@ void WatcherTick() {
         }
 
         ApplyDurationOverrides(g_trayUI);
+        InterlockedExchange(&g_clipHold, 0);
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
@@ -773,6 +774,7 @@ void WatcherTick() {
         g_animTo = hidden;
         g_animDurationMs =
             g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
+        g_animEdge = edge;
         InterlockedExchange(&g_animRequested, 1);
     }
     g_inWatcherCall = false;
@@ -780,6 +782,21 @@ void WatcherTick() {
 
 LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
+    if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
+        InterlockedCompareExchange(&g_clipHold, 0, 0) &&
+        !InterlockedCompareExchange(&g_animOverride, 0, 0)) {
+        // Parked as a clipped sliver: Windows would otherwise put the window
+        // back at its own hidden rect, which is on the neighbouring display.
+        WINDOWPOS* wp = (WINDOWPOS*)lParam;
+        LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        wp->x = g_clipRect.left;
+        wp->y = g_clipRect.top;
+        wp->cx = g_clipRect.right - g_clipRect.left;
+        wp->cy = g_clipRect.bottom - g_clipRect.top;
+        wp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
+        return r;
+    }
+
     if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
         InterlockedCompareExchange(&g_animOverride, 0, 0)) {
         WINDOWPOS* wp = (WINDOWPOS*)lParam;
