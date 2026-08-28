@@ -148,7 +148,9 @@ the gate, not when the mod runs.
    return address so only that caller is affected.
 3. **Hide runs but the rect is wrong** — correct `_ComputeHiddenRect` per edge.
 4. **Hide works but unhide-on-hover does not** — supply the trigger in the mod
-   (edge hover detection calling `TrayUI::Unhide`).
+   (edge hover detection calling `TrayUI::Unhide`). Subject to the input-hook
+   constraint below: this must be implemented with in-process cursor polling or
+   an existing appbar mechanism, never a global low-level input hook.
 5. **Nothing in the chain fires at all** — the gate is upstream of `TrayUI`,
    meaning the auto-hide request never reaches the tray code. Most likely the
    XAML layer or the settings read path. Investigate `Taskbar.View.dll`, whose
@@ -158,6 +160,66 @@ the gate, not when the mod runs.
 
 Settings are deliberately minimal: which edges to apply to, and nothing more
 until asked. No option is added speculatively.
+
+## Anti-cheat and games
+
+The user plays games with kernel-level anti-cheat, so the mod must not increase
+the chance of an anti-cheat incident.
+
+### Verified facts
+
+- Windhawk installs **no kernel driver**. The `Windhawk` service is
+  `Type=0x10` (SERVICE_WIN32_OWN_PROCESS, user-mode, LocalSystem) running
+  `windhawk.exe -service`. `AppInit_DLLs` is empty.
+- Windhawk's engine is nevertheless **injected into all processes by default**,
+  minus predefined exclusion lists. Per the project wiki: "the Windhawk engine
+  is injected into all processes, except for predefined lists of excluded
+  processes, which are system-critical or known to be incompatible."
+- Therefore a mod's `@include explorer.exe` limits where the **mod** runs, not
+  where the **engine** is injected. Per-mod targeting is not the protection and
+  must not be presented as such.
+- Installed game libraries: `<GameDrive>:\SteamLibrary`, `<GameDrive>:\SteamLibrary`,
+  `<GameDrive>:\SteamLibrary`, `<GameDrive>:\Origin`, `<GameDrive>:\BNet`. The Steam paths match the
+  default `steamapps\common\` exclusion. `<GameDrive>:\BNet` is a custom folder name
+  unlikely to match the default Battle.net/Blizzard patterns.
+
+### Configuration requirement
+
+Every mod on this machine targets only `explorer.exe`, `<other-app>.exe` and
+`StartMenuExperienceHost.exe`, and the new mod adds no fourth target. Windhawk
+is therefore to be reconfigured as an explicit allowlist:
+
+- Process exclusion list: `*`
+- Process inclusion list: `explorer.exe`, `<other-app>.exe`,
+  `StartMenuExperienceHost.exe`
+
+This removes the engine from every game process regardless of install path. The
+wiki describes blanket exclusion as a last resort because delayed injection can
+break some mods, so this configuration is to be applied and verified **before**
+the diagnostic mod is enabled, not after, so that any mod breakage is attributed
+correctly.
+
+### Design constraint
+
+The mod must confine its footprint to `explorer.exe`:
+
+- No global or low-level input hooks (`WH_MOUSE_LL`, `WH_KEYBOARD_LL`) and no
+  system-wide `SetWindowsHookEx`. Beyond being unnecessary, system-wide input
+  interception is exactly the behaviour anti-cheat heuristics look for.
+- No injection, memory access or handle acquisition against any process other
+  than `explorer.exe`.
+- Cursor-position work, if needed, uses in-process polling via `GetCursorPos`
+  on an existing tray timer.
+
+### Residual risk
+
+No configuration makes injection-based modding provably safe against kernel
+anti-cheat, and this spec does not claim otherwise. The allowlist removes the
+known injection vector; it cannot guarantee how a given anti-cheat vendor
+classifies a LocalSystem service that performs injection at all. The only
+posture with no residual risk is Windhawk not running during a session, via
+`windhawk.exe -exit`. Auto-hide simply reverts to stock behaviour while it is
+closed, so this costs nothing but the taskbar tweak.
 
 ## Error handling and safety
 
@@ -185,6 +247,7 @@ For each of left, top and right:
   returned to applications.
 - A fullscreen application does not force the taskbar to appear over it.
 - A flashing taskbar button behaves sanely.
+- With the allowlist configuration applied, all existing mods still work.
 - Disabling the mod restores stock behaviour. An Explorer restart is acceptable
   to fully clear state, but disabling must never leave the taskbar in a stuck
   hidden state that requires one.
