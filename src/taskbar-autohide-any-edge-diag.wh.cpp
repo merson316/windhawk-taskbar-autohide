@@ -150,7 +150,7 @@ PCWSTR EdgeName(UINT edge) {
         case 1: return L"TOP";
         case 2: return L"RIGHT";
         case 3: return L"BOTTOM";
-        default: return L"?";
+        default: return L"?(bad this)";
     }
 }
 
@@ -221,6 +221,101 @@ void WINAPI TrayUI_AutoHideChangedOnMonitor_Hook(void* pThis,
     DiagLog(L"AutoHideChangedOnMonitor(%p) LEAVE", (void*)monitor);
 }
 
+// ----------------------------------------------------- geometry/motion hooks
+
+using TrayUI_ComputeHiddenRect_t = void(WINAPI*)(void* pThis, RECT* rect,
+                                                 UINT edge);
+TrayUI_ComputeHiddenRect_t TrayUI_ComputeHiddenRect_Original;
+void WINAPI TrayUI_ComputeHiddenRect_Hook(void* pThis, RECT* rect, UINT edge) {
+    DiagLog(L"_ComputeHiddenRect(edge=%u %s) ENTER this=%p", edge,
+            EdgeName(edge), pThis);
+    TrayUI_ComputeHiddenRect_Original(pThis, rect, edge);
+    if (rect) {
+        DiagLog(L"_ComputeHiddenRect LEAVE -> (%ld,%ld)-(%ld,%ld)", rect->left,
+                rect->top, rect->right, rect->bottom);
+    } else {
+        DiagLog(L"_ComputeHiddenRect LEAVE -> null rect");
+    }
+}
+
+using TrayUI_GetDockedRect_t = UINT(WINAPI*)(void* pThis, RECT* rect,
+                                             int param);
+TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
+UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int param) {
+    UINT ret = TrayUI_GetDockedRect_Original(pThis, rect, param);
+    if (rect) {
+        DiagLog(L"GetDockedRect(%d) -> 0x%X (%ld,%ld)-(%ld,%ld)", param, ret,
+                rect->left, rect->top, rect->right, rect->bottom);
+    } else {
+        DiagLog(L"GetDockedRect(%d) -> 0x%X null rect", param, ret);
+    }
+    return ret;
+}
+
+using TrayUI_ShrinkRectToStuckEdge_t = void(WINAPI*)(void* pThis, RECT* rect,
+                                                     int param);
+TrayUI_ShrinkRectToStuckEdge_t TrayUI_ShrinkRectToStuckEdge_Original;
+void WINAPI TrayUI_ShrinkRectToStuckEdge_Hook(void* pThis, RECT* rect,
+                                              int param) {
+    TrayUI_ShrinkRectToStuckEdge_Original(pThis, rect, param);
+    if (rect) {
+        DiagLog(L"ShrinkRectToStuckEdge(%d) -> (%ld,%ld)-(%ld,%ld)", param,
+                rect->left, rect->top, rect->right, rect->bottom);
+    }
+}
+
+using TrayUI_GetStuckInfo_t = void(WINAPI*)(void* pThis, RECT* rect,
+                                            UINT* edge);
+TrayUI_GetStuckInfo_t TrayUI_GetStuckInfo_Original;
+void WINAPI TrayUI_GetStuckInfo_Hook(void* pThis, RECT* rect, UINT* edge) {
+    TrayUI_GetStuckInfo_Original(pThis, rect, edge);
+    DiagLog(L"GetStuckInfo -> edge=%u %s rect=(%ld,%ld)-(%ld,%ld)",
+            edge ? *edge : 0xFFFFFFFF, EdgeName(edge ? *edge : 0xFFFFFFFF),
+            rect ? rect->left : 0, rect ? rect->top : 0,
+            rect ? rect->right : 0, rect ? rect->bottom : 0);
+}
+
+using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
+                                           const RECT* rect, HMONITOR monitor,
+                                           bool show, bool animate);
+TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
+void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
+                                    HMONITOR monitor, bool show, bool animate) {
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"*** SlideWindow show=%d animate=%d [edge=%u %s] rect=(%ld,%ld)-(%ld,%ld)",
+            (int)show, (int)animate, edge, EdgeName(edge),
+            rect ? rect->left : 0, rect ? rect->top : 0,
+            rect ? rect->right : 0, rect ? rect->bottom : 0);
+    TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+    DiagLog(L"*** SlideWindow LEAVE show=%d", (int)show);
+}
+
+using TrayUI_Unhide_t = void(WINAPI*)(void* pThis, int flags, int request);
+TrayUI_Unhide_t TrayUI_Unhide_Original;
+void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"Unhide(flags=%d request=%d) ENTER [edge=%u %s]", flags, request,
+            edge, EdgeName(edge));
+    TrayUI_Unhide_Original(pThis, flags, request);
+    DiagLog(L"Unhide LEAVE");
+}
+
+using TrayUI_SetUnhideTimer_t = void(WINAPI*)(void* pThis, LONG a, LONG b);
+TrayUI_SetUnhideTimer_t TrayUI_SetUnhideTimer_Original;
+void WINAPI TrayUI_SetUnhideTimer_Hook(void* pThis, LONG a, LONG b) {
+    DiagLog(L"SetUnhideTimer(%ld, %ld)", a, b);
+    TrayUI_SetUnhideTimer_Original(pThis, a, b);
+}
+
+using TrayUI_AutoHideCollision_t = void(WINAPI*)(void* pThis);
+TrayUI_AutoHideCollision_t TrayUI_AutoHideCollision_Original;
+void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"_AutoHideCollision ENTER [edge=%u %s]", edge, EdgeName(edge));
+    TrayUI_AutoHideCollision_Original(pThis);
+    DiagLog(L"_AutoHideCollision LEAVE");
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
@@ -252,25 +347,48 @@ BOOL Wh_ModInit() {
 
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         // Resolved only; deliberately not hooked.
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))"}, &g_pGetStuckPlace, nullptr,
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))", LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"}, &g_pGetStuckPlace, nullptr,
          true},
 
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))", LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
          &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
 
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const)"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const)", LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const )"},
          &TrayUI_GetDesktopModeAutoHide_Original,
          TrayUI_GetDesktopModeAutoHide_Hook, true},
 
-        {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))"},
+        {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))", LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int) )"},
          &TrayUI_SetAutoHideFlags_Original, TrayUI_SetAutoHideFlags_Hook, true},
 
-        {{LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int))"},
+        {{LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int))", LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int) )"},
          &TrayUI_SetAutoHideState_Original, TrayUI_SetAutoHideState_Hook, true},
 
-        {{LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *))"},
+        {{LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *))", LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *) )"},
          &TrayUI_AutoHideChangedOnMonitor_Original,
          TrayUI_AutoHideChangedOnMonitor_Hook, true},
+        {{LR"(public: void __cdecl TrayUI::_ComputeHiddenRect(struct tagRECT *,unsigned int))", LR"(public: void __cdecl TrayUI::_ComputeHiddenRect(struct tagRECT *,unsigned int) )"},
+         &TrayUI_ComputeHiddenRect_Original, TrayUI_ComputeHiddenRect_Hook, true},
+
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int))", LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int) )"},
+         &TrayUI_GetDockedRect_Original, TrayUI_GetDockedRect_Hook, true},
+
+        {{LR"(private: void __cdecl TrayUI::ShrinkRectToStuckEdge(struct tagRECT &,int)const)", LR"(private: void __cdecl TrayUI::ShrinkRectToStuckEdge(struct tagRECT &,int)const )"},
+         &TrayUI_ShrinkRectToStuckEdge_Original, TrayUI_ShrinkRectToStuckEdge_Hook, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::GetStuckInfo(struct tagRECT *,unsigned int *))", LR"(public: virtual void __cdecl TrayUI::GetStuckInfo(struct tagRECT *,unsigned int *) )"},
+         &TrayUI_GetStuckInfo_Original, TrayUI_GetStuckInfo_Hook, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))", LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
+         &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))", LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
+         &TrayUI_Unhide_Original, TrayUI_Unhide_Hook, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long))", LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long) )"},
+         &TrayUI_SetUnhideTimer_Original, TrayUI_SetUnhideTimer_Hook, true},
+
+        {{LR"(public: void __cdecl TrayUI::_AutoHideCollision(void))", LR"(public: void __cdecl TrayUI::_AutoHideCollision(void) )"},
+         &TrayUI_AutoHideCollision_Original, TrayUI_AutoHideCollision_Hook, true},
     };
 
     if (!WindhawkUtils::HookSymbols(g_taskbarModule, hooks, ARRAYSIZE(hooks))) {
@@ -292,6 +410,14 @@ BOOL Wh_ModInit() {
         {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
         {L"SetAutoHideState", (void*)TrayUI_SetAutoHideState_Original},
         {L"AutoHideChangedOnMonitor", (void*)TrayUI_AutoHideChangedOnMonitor_Original},
+        {L"_ComputeHiddenRect", (void*)TrayUI_ComputeHiddenRect_Original},
+        {L"GetDockedRect", (void*)TrayUI_GetDockedRect_Original},
+        {L"ShrinkRectToStuckEdge", (void*)TrayUI_ShrinkRectToStuckEdge_Original},
+        {L"GetStuckInfo", (void*)TrayUI_GetStuckInfo_Original},
+        {L"SlideWindow", (void*)TrayUI_SlideWindow_Original},
+        {L"Unhide", (void*)TrayUI_Unhide_Original},
+        {L"SetUnhideTimer", (void*)TrayUI_SetUnhideTimer_Original},
+        {L"_AutoHideCollision", (void*)TrayUI_AutoHideCollision_Original},
     };
 
     int resolvedCount = 0;
@@ -303,7 +429,7 @@ BOOL Wh_ModInit() {
         }
     }
 
-    DiagLog(L"state/flags hooks installed: %d/%d resolved", resolvedCount,
+    DiagLog(L"hooks installed: %d/%d resolved", resolvedCount,
             (int)ARRAYSIZE(checks));
 
     if (!TrayUI_SetAutoHideState_Original) {
