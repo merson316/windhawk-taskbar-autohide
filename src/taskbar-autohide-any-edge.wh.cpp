@@ -798,6 +798,21 @@ void WatcherTick() {
 
     UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
     if (!(stored & ABS_AUTOHIDE)) {
+        // Silent until now, which hid the reason the watcher stopped working
+        // after a move: either Windows cleared auto-hide, or the pointer is
+        // stale and this is not the taskbar's state at all.
+        static ULONGLONG lastLog = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - lastLog > 2000) {
+            lastLog = now;
+            DbgLog(L"idle: auto-hide not set. edge=%u stored=0x%X trayUI=%p "
+                   L"realFlagsViaGetter=0x%X",
+                   edge, stored, g_trayUI,
+                   TrayUI_GetAutoHideFlags_Original
+                       ? TrayUI_GetAutoHideFlags_Original(
+                             (BYTE*)g_trayUI - 8)
+                       : 0xFFFFFFFF);
+        }
         return;
     }
 
