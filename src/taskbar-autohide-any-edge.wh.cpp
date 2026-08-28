@@ -391,9 +391,16 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     }
 
     if (!g_inWatcherCall) {
-        InterlockedExchange64(
-            &g_holdVisibleUntil,
-            (LONG64)(GetTickCount64() + g_settings.notificationHoldMs));
+        // Count from the first unhide of a burst, not the last. An app flashing
+        // its taskbar button produces one unhide per flash, and refreshing the
+        // deadline each time keeps the taskbar up for the whole sequence rather
+        // than for the configured hold.
+        LONG64 now = (LONG64)GetTickCount64();
+        LONG64 current = InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0);
+        if (now >= current) {
+            InterlockedExchange64(&g_holdVisibleUntil,
+                                  now + g_settings.notificationHoldMs);
+        }
     }
 
     bool prev = g_inUnhide;
