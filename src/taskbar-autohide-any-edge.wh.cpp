@@ -162,8 +162,21 @@ PCWSTR EdgeName(UINT edge) {
 volatile LONG g_desiredFlags = 0;
 volatile LONG g_currentEdge = ABE_BOTTOM;
 
+// Set only for the duration of a SetAutoHideState call on this thread, so the
+// edge check inside it passes. The gate lives in SetAutoHideState, not in the
+// flag store: on the bottom edge the entire hide (flags 0x3, hidden-rect
+// computation and slide) happens inside one SetAutoHideState bracket, and on
+// other edges everything after the first SetAutoHideFlags is skipped.
+thread_local bool g_pretendBottom = false;
+
 using TrayUI_GetStuckPlace_t = UINT(WINAPI*)(void* pThis);
-TrayUI_GetStuckPlace_t g_pGetStuckPlace = nullptr;
+TrayUI_GetStuckPlace_t TrayUI_GetStuckPlace_Original = nullptr;
+UINT WINAPI TrayUI_GetStuckPlace_Hook(void* pThis) {
+    if (g_pretendBottom) {
+        return ABE_BOTTOM;
+    }
+    return TrayUI_GetStuckPlace_Original(pThis);
+}
 
 using TrayUI_SetStuckPlace_t = void(WINAPI*)(void* pThis, UINT edge);
 TrayUI_SetStuckPlace_t TrayUI_SetStuckPlace_Original;
@@ -176,10 +189,10 @@ void WINAPI TrayUI_SetStuckPlace_Hook(void* pThis, UINT edge) {
 // Resolved but never hooked, so calling it from inside another hook cannot
 // re-enter our own instrumentation.
 UINT CurrentStuckPlace(void* pThis) {
-    if (!g_pGetStuckPlace || !pThis) {
+    if (!TrayUI_GetStuckPlace_Original || !pThis) {
         return 0xFFFFFFFF;
     }
-    return g_pGetStuckPlace(pThis);
+    return TrayUI_GetStuckPlace_Original(pThis);
 }
 
 // --------------------------------------------------------- state/flags hooks
@@ -231,10 +244,22 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
 using TrayUI_SetAutoHideState_t = LONG(WINAPI*)(void* pThis, int state);
 TrayUI_SetAutoHideState_t TrayUI_SetAutoHideState_Original;
 LONG WINAPI TrayUI_SetAutoHideState_Hook(void* pThis, int state) {
-    UINT edge = CurrentStuckPlace(pThis);
-    DiagLog(L"SetAutoHideState(%d) ENTER [edge=%u %s]", state, edge,
-            EdgeName(edge));
-    LONG ret = TrayUI_SetAutoHideState_Original(pThis, state);
+    // `this` is adjusted here, so use the tracked edge rather than pThis.
+    UINT realEdge = (UINT)g_currentEdge;
+    bool spoof = (realEdge != ABE_BOTTOM);
+
+    DiagLog(L"SetAutoHideState(%d) ENTER [realEdge=%u %s] spoof=%d", state,
+            realEdge, EdgeName(realEdge), (int)spoof);
+
+    LONG ret;
+    if (spoof) {
+        g_pretendBottom = true;
+        ret = TrayUI_SetAutoHideState_Original(pThis, state);
+        g_pretendBottom = false;
+    } else {
+        ret = TrayUI_SetAutoHideState_Original(pThis, state);
+    }
+
     DiagLog(L"SetAutoHideState(%d) LEAVE -> 0x%08X", state, ret);
     return ret;
 }
@@ -257,6 +282,15 @@ using TrayUI_ComputeHiddenRect_t = void(WINAPI*)(void* pThis, RECT* rect,
                                                  UINT edge);
 TrayUI_ComputeHiddenRect_t TrayUI_ComputeHiddenRect_Original;
 void WINAPI TrayUI_ComputeHiddenRect_Hook(void* pThis, RECT* rect, UINT edge) {
+    // While spoofing, the caller passes BOTTOM. Restore the true edge so the
+    // taskbar hides towards the edge it is actually docked to.
+    UINT realEdge = (UINT)g_currentEdge;
+    if (g_pretendBottom && edge == ABE_BOTTOM && realEdge != ABE_BOTTOM) {
+        DiagLog(L"_ComputeHiddenRect edge override %u -> %u %s", edge, realEdge,
+                EdgeName(realEdge));
+        edge = realEdge;
+    }
+
     DiagLog(L"_ComputeHiddenRect(edge=%u %s) ENTER this=%p", edge,
             EdgeName(edge), pThis);
     TrayUI_ComputeHiddenRect_Original(pThis, rect, edge);
@@ -377,8 +411,8 @@ BOOL Wh_ModInit() {
 
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         // Resolved only; deliberately not hooked.
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))", LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"}, &g_pGetStuckPlace, nullptr,
-         true},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))", LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"},
+         &TrayUI_GetStuckPlace_Original, TrayUI_GetStuckPlace_Hook, true},
 
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))", LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
          &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
@@ -437,7 +471,7 @@ BOOL Wh_ModInit() {
         PCWSTR name;
         void* resolved;
     } checks[] = {
-        {L"GetStuckPlace", (void*)g_pGetStuckPlace},
+        {L"GetStuckPlace", (void*)TrayUI_GetStuckPlace_Original},
         {L"GetAutoHideFlags", (void*)TrayUI_GetAutoHideFlags_Original},
         {L"GetDesktopModeAutoHide", (void*)TrayUI_GetDesktopModeAutoHide_Original},
         {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
