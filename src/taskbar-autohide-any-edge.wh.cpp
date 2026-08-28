@@ -573,6 +573,14 @@ BOOL Wh_ModInit() {
         Wh_Log(L"could not subclass Shell_TrayWnd, reveal will not work");
     }
 
+    // The watcher needs a TrayUI pointer, which is only captured when
+    // GetDockedRect runs, and that only happens on a layout pass. Without a
+    // nudge the taskbar stays visible after enabling until something else
+    // triggers one.
+    if (g_trayWnd) {
+        PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+    }
+
     return TRUE;
 }
 
