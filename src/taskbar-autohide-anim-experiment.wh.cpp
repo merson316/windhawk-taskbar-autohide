@@ -655,6 +655,33 @@ PCWSTR DescribeCaller(void* ret, DWORD* offsetOut) {
     return name;
 }
 
+// The taskbar is also moved through the DeferWindowPos family, which does not
+// go through SetWindowPos -- which is why the earlier trace looked clean while
+// the window was demonstrably being corrected.
+using DeferWindowPos_t = decltype(&DeferWindowPos);
+DeferWindowPos_t DeferWindowPos_Original;
+HDWP WINAPI DeferWindowPos_Hook(HDWP hdwp, HWND hWnd, HWND after, int x, int y,
+                                int cx, int cy, UINT flags) {
+    if (hWnd && hWnd == g_trayWnd) {
+        DWORD off = 0;
+        PCWSTR who = DescribeCaller(RETURN_ADDRESS(), &off);
+        ExpLog(L"    DeferWindowPos tray -> (%d,%d) %dx%d flags=0x%X  from %s+0x%X",
+               x, y, cx, cy, flags, who, off);
+    }
+    return DeferWindowPos_Original(hdwp, hWnd, after, x, y, cx, cy, flags);
+}
+
+using SetWindowPlacement_t = decltype(&SetWindowPlacement);
+SetWindowPlacement_t SetWindowPlacement_Original;
+BOOL WINAPI SetWindowPlacement_Hook(HWND hWnd, const WINDOWPLACEMENT* p) {
+    if (hWnd && hWnd == g_trayWnd) {
+        DWORD off = 0;
+        PCWSTR who = DescribeCaller(RETURN_ADDRESS(), &off);
+        ExpLog(L"    SetWindowPlacement tray  from %s+0x%X", who, off);
+    }
+    return SetWindowPlacement_Original(hWnd, p);
+}
+
 using SetWindowPos_t = decltype(&SetWindowPos);
 SetWindowPos_t SetWindowPos_Original;
 BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND after, int x, int y, int cx,
@@ -1077,8 +1104,19 @@ BOOL Wh_ModInit() {
         if (swp) {
             Wh_SetFunctionHook(swp, (void*)SetWindowPos_Hook,
                                (void**)&SetWindowPos_Original);
-            ExpLog(L"SetWindowPos hooked");
         }
+        void* dwp = (void*)GetProcAddress(user32, "DeferWindowPos");
+        if (dwp) {
+            Wh_SetFunctionHook(dwp, (void*)DeferWindowPos_Hook,
+                               (void**)&DeferWindowPos_Original);
+        }
+        void* swpl = (void*)GetProcAddress(user32, "SetWindowPlacement");
+        if (swpl) {
+            Wh_SetFunctionHook(swpl, (void*)SetWindowPlacement_Hook,
+                               (void**)&SetWindowPlacement_Original);
+        }
+        ExpLog(L"hooked SetWindowPos=%d DeferWindowPos=%d SetWindowPlacement=%d",
+               swp != nullptr, dwp != nullptr, swpl != nullptr);
     }
 
     ExpLog(L"=== experiment ready, trayWnd=%p ===", (void*)g_trayWnd);
