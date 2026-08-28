@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.1.0
+// @version         1.2.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -66,9 +66,12 @@ or the other, not both, since they hook the same function.
 - hideDurationMs: 0
   $name: Hide animation duration (ms)
   $description: >-
-    0 keeps the Windows default (400 ms). Range 25-600: the slide runs
-    synchronously on the taskbar's own thread, so longer values freeze it rather
-    than slowing the animation.
+    How long the taskbar takes to slide out of view. 0 uses 400 ms. Range
+    25-2000.
+
+    The hide is animated by the mod rather than by Windows, because Windows
+    clamps every intermediate position to the endpoint, which is why an
+    unmodified vertical taskbar appears to vanish instantly.
 - showDurationMs: 0
   $name: Reveal animation duration (ms)
   $description: >-
@@ -156,12 +159,8 @@ int ClampDuration(int ms) {
     if (ms < 25) {
         return 25;
     }
-    // SlideWindow animates with a synchronous loop on the taskbar's UI thread,
-    // so the duration is also how long the shell is blocked. Beyond a few
-    // hundred milliseconds the taskbar stops repainting and ignores input,
-    // which reads as an instant vanish followed by a frozen taskbar.
-    if (ms > 600) {
-        return 600;
+    if (ms > 2000) {
+        return 2000;
     }
     return ms;
 }
@@ -534,6 +533,49 @@ int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
     return CTaskListWnd_PermitAutoHide_Original(pThis);
 }
 
+// ------------------------------------------------------------- hide animation
+
+// The taskbar rewrites requested window positions in its WM_WINDOWPOSCHANGING
+// handler, forcing every intermediate position to the endpoint the auto-hide
+// flags imply. That is why the hide appeared instant: the window jumped to the
+// hidden rect on the first step of the slide and never occupied the positions
+// in between.
+//
+// Animating here means two things: move the window from the watch thread rather
+// than through SlideWindow, which runs its loop on the taskbar's UI thread and
+// blocks the repaint; and restore the requested position after the clamp, so
+// intermediate frames survive.
+
+volatile LONG g_animRequested = 0;
+volatile LONG g_animOverride = 0;
+RECT g_animFrom{}, g_animTo{};
+int g_animDurationMs = 400;
+
+void RunHideAnimation() {
+    const RECT from = g_animFrom, to = g_animTo;
+    const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
+
+    InterlockedExchange(&g_animOverride, 1);
+
+    const ULONGLONG start = GetTickCount64();
+    for (;;) {
+        const ULONGLONG elapsed = GetTickCount64() - start;
+        if (elapsed >= (ULONGLONG)ms) {
+            break;
+        }
+        const double t = (double)elapsed / ms;
+        const LONG x = from.left + (LONG)((to.left - from.left) * t);
+        const LONG y = from.top + (LONG)((to.top - from.top) * t);
+        SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        Sleep(16);
+    }
+
+    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    InterlockedExchange(&g_animOverride, 0);
+}
+
 // ------------------------------------------------------------ pointer watcher
 
 // Windows' cursor-at-edge detection does not run off-bottom, and none of the
@@ -619,25 +661,35 @@ void WatcherTick() {
     g_inWatcherCall = true;
     TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
-    if (TrayUI_SlideWindow_Original && g_trayWnd) {
+    if (g_trayWnd) {
         RECT hidden{};
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
 
-        // Apply immediately before the slide: SetAutoHideFlags above resets
-        // these members, which is why applying earlier worked for the reveal
-        // (nothing intervenes before Unhide) but not for the hide.
-        ApplyDurationOverrides(g_trayUI);
-
-        TrayUI_SlideWindow_Original(
-            g_trayUI, g_trayWnd, &hidden,
-            MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
-            true);
+        GetWindowRect(g_trayWnd, &g_animFrom);
+        g_animTo = hidden;
+        g_animDurationMs =
+            g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
+        InterlockedExchange(&g_animRequested, 1);
     }
     g_inWatcherCall = false;
 }
 
 LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
+    if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
+        InterlockedCompareExchange(&g_animOverride, 0, 0)) {
+        WINDOWPOS* wp = (WINDOWPOS*)lParam;
+        const int reqX = wp->x, reqY = wp->y;
+
+        LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+
+        // Put back what we asked for: the taskbar clamps every intermediate
+        // position to the endpoint, which is what made the slide invisible.
+        wp->x = reqX;
+        wp->y = reqY;
+        return r;
+    }
+
     if (g_watchMsg && uMsg == g_watchMsg) {
         WatcherTick();
         return 0;
@@ -648,6 +700,10 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
 DWORD WINAPI WatchThreadProc(LPVOID) {
     while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+        if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
+            RunHideAnimation();
+        }
+
         if (g_trayWnd && g_watchMsg) {
             PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
         }
