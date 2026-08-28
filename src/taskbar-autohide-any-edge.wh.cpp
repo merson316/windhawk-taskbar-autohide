@@ -786,53 +786,34 @@ void WatcherTick() {
         InterlockedExchange(&g_clipHold, 0);
 
         if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
-            // Was hidden outright rather than moved, so restore it before
-            // asking Windows to unhide.
-            //
-            // Only reposition when a real docked rect was recorded. It is
-            // zero-initialised, and moving the window to (0,0) with zero size
-            // makes the taskbar flash at the opposite edge.
-            const bool haveRect =
-                g_dockedBeforeHide.right > g_dockedBeforeHide.left &&
-                g_dockedBeforeHide.bottom > g_dockedBeforeHide.top;
-
-            DbgLog(L"reveal: restoring hidden window, haveRect=%d "
-                   L"(%ld,%ld)-(%ld,%ld)",
-                   (int)haveRect, g_dockedBeforeHide.left,
-                   g_dockedBeforeHide.top, g_dockedBeforeHide.right,
-                   g_dockedBeforeHide.bottom);
-
-            RECT r{};
-            GetWindowRect(g_trayWnd, &r);
-            DbgLog(L"  reveal step 0 (before restore): (%ld,%ld)-(%ld,%ld)",
-                   r.left, r.top, r.right, r.bottom);
-
-            if (haveRect) {
-                SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
-                             g_dockedBeforeHide.top,
-                             g_dockedBeforeHide.right - g_dockedBeforeHide.left,
-                             g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
-                GetWindowRect(g_trayWnd, &r);
-                DbgLog(L"  reveal step 1 (after SetWindowPos): (%ld,%ld)-(%ld,%ld)",
-                       r.left, r.top, r.right, r.bottom);
-            }
-
+            // Was hidden outright rather than moved. Only make it visible here:
+            // repositioning before Unhide is pointless, because the hidden flag
+            // is still set and the taskbar clamps the window straight back to
+            // its hidden rect. Unhide moves it once the flag is cleared.
             ShowWindow(g_trayWnd, SW_SHOWNA);
-            GetWindowRect(g_trayWnd, &r);
-            DbgLog(L"  reveal step 2 (after ShowWindow): (%ld,%ld)-(%ld,%ld)",
-                   r.left, r.top, r.right, r.bottom);
         }
 
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
+
+        // Unhide does not always clear the hidden bit on this path. Left set,
+        // the watcher sees a hidden taskbar every tick and reveals it again,
+        // which reads as the taskbar never hiding at all.
+        UINT after = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+        if (after & ABS_ALWAYSONTOP) {
+            TrayUI_SetAutoHideFlags_Original(g_trayUI,
+                                             after & ~(UINT)ABS_ALWAYSONTOP);
+            DbgLog(L"  reveal: cleared a stuck hidden bit (0x%X -> 0x%X)", after,
+                   after & ~(UINT)ABS_ALWAYSONTOP);
+        }
         g_inWatcherCall = false;
 
         if (g_settings.debugLog && g_trayWnd) {
             RECT r{};
             GetWindowRect(g_trayWnd, &r);
-            DbgLog(L"  reveal step 3 (after Unhide): (%ld,%ld)-(%ld,%ld)",
-                   r.left, r.top, r.right, r.bottom);
+            DbgLog(L"  reveal done: (%ld,%ld)-(%ld,%ld) flags=0x%X", r.left,
+                   r.top, r.right, r.bottom,
+                   *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET));
         }
         g_leaveTicks = 0;
         return;
