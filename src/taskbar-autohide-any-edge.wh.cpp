@@ -169,6 +169,40 @@ volatile LONG g_currentEdge = ABE_BOTTOM;
 // other edges everything after the first SetAutoHideFlags is skipped.
 thread_local bool g_pretendBottom = false;
 
+// The tracked edge is only corrected once SetAutoHideFlags or SetStuckPlace
+// runs, but SetAutoHideState -- which contains the gate -- is the OUTER call.
+// Without seeding, the first and decisive SetAutoHideState sees the default and
+// is not spoofed. Derive the edge from the reserved work area instead, which
+// needs no window messaging and so cannot re-enter the shell.
+UINT DetectEdgeFromWorkArea() {
+    RECT wa{};
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0)) {
+        return 0xFFFFFFFF;
+    }
+
+    LONG sw = GetSystemMetrics(SM_CXSCREEN);
+    LONG sh = GetSystemMetrics(SM_CYSCREEN);
+
+    LONG insetLeft = wa.left;
+    LONG insetTop = wa.top;
+    LONG insetRight = sw - wa.right;
+    LONG insetBottom = sh - wa.bottom;
+
+    LONG best = insetLeft;
+    UINT edge = ABE_LEFT;
+    if (insetTop > best) { best = insetTop; edge = ABE_TOP; }
+    if (insetRight > best) { best = insetRight; edge = ABE_RIGHT; }
+    if (insetBottom > best) { best = insetBottom; edge = ABE_BOTTOM; }
+
+    // No reservation at all: the taskbar is already hidden, or on another
+    // monitor. Caller keeps whatever it had.
+    if (best <= 0) {
+        return 0xFFFFFFFF;
+    }
+
+    return edge;
+}
+
 using TrayUI_GetStuckPlace_t = UINT(WINAPI*)(void* pThis);
 TrayUI_GetStuckPlace_t TrayUI_GetStuckPlace_Original = nullptr;
 UINT WINAPI TrayUI_GetStuckPlace_Hook(void* pThis) {
@@ -245,6 +279,13 @@ using TrayUI_SetAutoHideState_t = LONG(WINAPI*)(void* pThis, int state);
 TrayUI_SetAutoHideState_t TrayUI_SetAutoHideState_Original;
 LONG WINAPI TrayUI_SetAutoHideState_Hook(void* pThis, int state) {
     // `this` is adjusted here, so use the tracked edge rather than pThis.
+    if (!g_pretendBottom) {
+        UINT detected = DetectEdgeFromWorkArea();
+        if (detected != 0xFFFFFFFF) {
+            InterlockedExchange(&g_currentEdge, (LONG)detected);
+        }
+    }
+
     UINT realEdge = (UINT)g_currentEdge;
     bool spoof = (realEdge != ABE_BOTTOM);
 
@@ -495,6 +536,13 @@ BOOL Wh_ModInit() {
             resolvedCount++;
         }
     }
+
+    UINT seeded = DetectEdgeFromWorkArea();
+    if (seeded != 0xFFFFFFFF) {
+        InterlockedExchange(&g_currentEdge, (LONG)seeded);
+    }
+    DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
+            EdgeName((UINT)g_currentEdge));
 
     DiagLog(L"hooks installed: %d/%d resolved", resolvedCount,
             (int)ARRAYSIZE(checks));
