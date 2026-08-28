@@ -422,13 +422,18 @@ void WatcherTick() {
     // Unhide slides itself, but nothing performs the hide slide off-bottom, so
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
-    ApplyDurationOverrides(g_trayUI);
     g_inWatcherCall = true;
     TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
     if (TrayUI_SlideWindow_Original && g_trayWnd) {
         RECT hidden{};
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
+
+        // Apply immediately before the slide: SetAutoHideFlags above resets
+        // these members, which is why applying earlier worked for the reveal
+        // (nothing intervenes before Unhide) but not for the hide.
+        ApplyDurationOverrides(g_trayUI);
+
         TrayUI_SlideWindow_Original(
             g_trayUI, g_trayWnd, &hidden,
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
