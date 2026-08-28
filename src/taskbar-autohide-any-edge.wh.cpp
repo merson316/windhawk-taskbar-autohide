@@ -224,9 +224,9 @@ HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
 int g_leaveTicks = 0;
 
-// When Windows unhides the taskbar itself -- a notification, a flashing button
-// -- re-hiding immediately makes it flap: it unhides, the watcher hides it, and
-// round again. Hold it visible for a while after any unhide we did not issue.
+// Windows unhides the taskbar itself for notifications and flashing buttons.
+// Re-hiding immediately makes it flap, so hold it visible for a while after any
+// unhide the mod did not issue.
 volatile LONG64 g_holdVisibleUntil = 0;
 #define HOLD_VISIBLE_MS 4000
 RECT g_lastDockedRect{};
@@ -234,13 +234,6 @@ RECT g_lastDockedRect{};
 // Set while Windows is unhiding, and while the watcher is calling in.
 thread_local bool g_inUnhide = false;
 thread_local bool g_inWatcherCall = false;
-
-// Set only while the hide sequence toggles the flags to read the hidden rect.
-// That toggling fires Windows' state-change unhide reflex, which would undo the
-// hide, so Unhide is suppressed outright for the duration. It cannot share
-// g_inWatcherCall, which is also set while the reveal deliberately calls
-// Unhide.
-thread_local bool g_inHideSequence = false;
 
 UINT CurrentStuckPlace(void* pThis) {
     if (!TrayUI_GetStuckPlace_Original || !pThis) {
@@ -367,17 +360,12 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
 void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     UINT edge = CurrentStuckPlace(pThis);
 
-    if (g_inHideSequence) {
-        return;   // our own flag toggling, not a real request to show
-    }
-
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
         EdgeEnabled(edge) && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
         return;
     }
 
     if (!g_inWatcherCall) {
-        // Not ours: Windows wants it visible, so stop trying to hide it.
         InterlockedExchange64(&g_holdVisibleUntil,
                               (LONG64)(GetTickCount64() + HOLD_VISIBLE_MS));
     }
@@ -522,34 +510,22 @@ void WatcherTick() {
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
     g_inWatcherCall = true;
+    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
-    // Setting the hidden flag drops the taskbar's rendered content, so sliding
-    // afterwards animates an empty window and the motion cannot be seen. Set
-    // the flag only long enough to read the hidden rect, restore it so the
-    // content keeps drawing, run the slide, and mark it hidden at the end.
-    RECT hidden{};
-    bool haveRect = false;
-    if (TrayUI_GetDockedRect_Original) {
-        g_inHideSequence = true;
-        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
+    if (TrayUI_SlideWindow_Original && g_trayWnd) {
+        RECT hidden{};
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
-        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored);
-        g_inHideSequence = false;
-        haveRect = hidden.right > hidden.left || hidden.bottom > hidden.top;
-    }
 
-    if (haveRect && TrayUI_SlideWindow_Original && g_trayWnd) {
+        // Apply immediately before the slide: SetAutoHideFlags above resets
+        // these members, which is why applying earlier worked for the reveal
+        // (nothing intervenes before Unhide) but not for the hide.
         ApplyDurationOverrides(g_trayUI);
+
         TrayUI_SlideWindow_Original(
             g_trayUI, g_trayWnd, &hidden,
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
             true);
     }
-
-    // Now record it as hidden, so the reveal path takes over from here.
-    g_inHideSequence = true;
-    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
-    g_inHideSequence = false;
     g_inWatcherCall = false;
 }
 
