@@ -812,11 +812,12 @@ HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
 bool g_timerSet = false;
 thread_local bool g_inWatcherCall = false;
-bool g_watcherLastAtEdge = false;
+int g_leaveTicks = 0;
 
 void WatcherTick() {
     if (!g_trayUI || !g_flagsOffsetsVerified || g_inWatcherCall ||
-        !TrayUI_Unhide_Original || !TrayUI_SetAutoHideFlags_Original) {
+        !TrayUI_Unhide_Original || !TrayUI_SetAutoHideFlags_Original ||
+        !TrayUI_GetDockedRect_Original) {
         return;
     }
 
@@ -827,52 +828,70 @@ void WatcherTick() {
 
     UINT stored = *(UINT*)((BYTE*)g_trayUI + 0x3c);
     if (!(stored & 1)) {
-        return;   // auto-hide not on
+        return;   // auto-hide not enabled
     }
 
-    bool atEdge = CursorAtDockedEdge(edge);
-    if (atEdge == g_watcherLastAtEdge) {
-        return;
-    }
-    g_watcherLastAtEdge = atEdge;
+    // Two different regions, which is what auto-hide actually needs:
+    //   hidden -> reveal when the cursor reaches the thin trigger strip
+    //   shown  -> stay up while the cursor is anywhere over the taskbar
+    // Using the 4px trigger for both meant that at x=20, over a revealed 48px
+    // taskbar, the cursor counted as "away" and it hid immediately.
+    if (stored & 2) {
+        if (!CursorAtDockedEdge(edge)) {
+            g_leaveTicks = 0;
+            return;
+        }
 
-    if (atEdge && (stored & 2)) {
         DiagLog(L"watcher: cursor at edge, Unhide(2,1)");
         LogTrayWindowRect(L"before-unhide");
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
         LogTrayWindowRect(L"after-unhide");
-    } else if (!atEdge && !(stored & 2)) {
-        DiagLog(L"watcher: cursor left, storing 0x%X", stored | 2);
-        LogTrayWindowRect(L"before-hide");
-
-        g_inWatcherCall = true;
-        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | 2);
-
-        // Storing the flag sets the state but moves nothing: Unhide performs
-        // the reveal slide itself, and the hide has no counterpart off-bottom
-        // because Windows' own SetAutoHideState flow never runs there.
-        //
-        // Issue the slide. With the flags now 0x3, GetDockedRect returns the
-        // hidden rect, and it takes the same base as this pointer. SlideWindow
-        // does too. _ComputeHiddenRect is deliberately not used: it wants a
-        // base 0x30 lower, which is what crashed V1.
-        if (TrayUI_GetDockedRect_Original && TrayUI_SlideWindow_Original &&
-            g_trayWnd) {
-            RECT hidden{};
-            TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
-            DiagLog(L"watcher: sliding to (%ld,%ld)-(%ld,%ld)", hidden.left,
-                    hidden.top, hidden.right, hidden.bottom);
-            TrayUI_SlideWindow_Original(
-                g_trayUI, g_trayWnd, &hidden,
-                MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
-                true);
-        }
-
-        g_inWatcherCall = false;
-        LogTrayWindowRect(L"after-hide");
+        g_leaveTicks = 0;
+        return;
     }
+
+    RECT docked{};
+    TrayUI_GetDockedRect_Original(g_trayUI, &docked, 0);
+
+    POINT pt{};
+    if (!GetCursorPos(&pt)) {
+        return;
+    }
+
+    // Stay up while the cursor is over the taskbar, or while the taskbar is the
+    // active window, which covers Start being open.
+    if (PtInRect(&docked, pt) || GetForegroundWindow() == g_trayWnd) {
+        g_leaveTicks = 0;
+        return;
+    }
+
+    // A couple of ticks outside, so a fast pass along the edge cannot flap it.
+    if (++g_leaveTicks < 2) {
+        return;
+    }
+    g_leaveTicks = 0;
+
+    DiagLog(L"watcher: cursor left the taskbar, storing 0x%X", stored | 2);
+    LogTrayWindowRect(L"before-hide");
+
+    g_inWatcherCall = true;
+    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | 2);
+
+    if (TrayUI_SlideWindow_Original && g_trayWnd) {
+        RECT hiddenRect{};
+        TrayUI_GetDockedRect_Original(g_trayUI, &hiddenRect, 0);
+        DiagLog(L"watcher: sliding to (%ld,%ld)-(%ld,%ld)", hiddenRect.left,
+                hiddenRect.top, hiddenRect.right, hiddenRect.bottom);
+        TrayUI_SlideWindow_Original(
+            g_trayUI, g_trayWnd, &hiddenRect,
+            MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
+            true);
+    }
+
+    g_inWatcherCall = false;
+    LogTrayWindowRect(L"after-hide");
 }
 
 LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
