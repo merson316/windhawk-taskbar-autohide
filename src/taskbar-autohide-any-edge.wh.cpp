@@ -23,7 +23,6 @@ This mod is a diagnostic step, not a fix. Disable it once the log is captured.
 */
 // ==/WindhawkModReadme==
 
-
 #include <windhawk_utils.h>
 
 #include <stdarg.h>
@@ -260,12 +259,6 @@ UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
             EdgeName(edge));
     return ret;
 }
-
-// Defined below in the hide driver section.
-extern void* g_trayUI;
-LRESULT CALLBACK TraySubclassProc(HWND, UINT, WPARAM, LPARAM, DWORD_PTR);
-void EngageDriver();
-void DisengageDriver();
 
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
@@ -614,8 +607,6 @@ BOOL Wh_ModInit() {
         InterlockedExchange(&g_currentEdge, (LONG)seeded);
     }
     HookAutoHideGate(g_taskbarModule);
-
-
 
     DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
             EdgeName((UINT)g_currentEdge));
