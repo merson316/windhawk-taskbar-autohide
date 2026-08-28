@@ -311,9 +311,26 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     }
     InterlockedExchange(&g_desiredFlags, (LONG)flags);
 
-    DiagLog(L"SetAutoHideFlags(0x%X)  ENTER [edge=%u %s]", flags, edge,
-            EdgeName(edge));
-    TrayUI_SetAutoHideFlags_Original(pThis, flags);
+    // On the bottom edge Windows stores ABS_AUTOHIDE and then follows up with
+    // ABS_AUTOHIDE|ABS_ALWAYSONTOP (0x3). Off-bottom the follow-up never
+    // happens, so the stored value stays 0x1 -- and GetDockedRect computes the
+    // hidden rect only when (flags & 3) == 3, so nothing ever hides.
+    //
+    // Store the same 0x3 the bottom edge stores. Doing it here rather than
+    // faking it in the getter keeps this+0x44 and GetAutoHideFlags in
+    // agreement; an earlier attempt faked it in the getter and the taskbar hid
+    // without the work area being released or unhide being armed.
+    UINT effective = flags;
+    if (g_flagsOffsetsVerified && pThis && (flags & 1)) {
+        UINT storeEdge = *(UINT*)((BYTE*)pThis + kTrayUiEdgeOffset);
+        if (storeEdge < ABE_BOTTOM) {
+            effective = flags | 2;
+        }
+    }
+
+    DiagLog(L"SetAutoHideFlags(0x%X)%s ENTER [edge=%u %s]", flags,
+            effective != flags ? L" -> 0x3" : L"", edge, EdgeName(edge));
+    TrayUI_SetAutoHideFlags_Original(pThis, effective);
     DiagLog(L"SetAutoHideFlags(0x%X)  LEAVE", flags);
 
 }
