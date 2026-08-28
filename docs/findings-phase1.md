@@ -353,7 +353,7 @@ in `Taskbar.View.dll`. Note that `ViewCoordinator` is already ruled out -- its
 hooks bound and never fired, because it implements collapse-to-smaller-size, not
 auto-hide.
 
-The experimental mod is kept at `src/taskbar-autohide-anim-experiment.wh.cpp` as
+The experimental mod is kept at `dev/taskbar-autohide-anim-experiment.wh.cpp` as
 the record of this test.
 
 ## Why the hide slide is invisible: position enforcement

@@ -100,12 +100,12 @@ capped at 600 ms. A low value such as 25 ms makes hiding effectively instant.
   changes that function, the mod goes inert rather than misbehaving.
 - Top and right edges are implemented but have not been tested as thoroughly as
   the left.
-- **An edge with another display beyond it cannot hide.** The hidden position is
-  off that edge of the primary display, which is real screen space on the
-  neighbouring monitor, so the taskbar slides into view there instead of out of
-  sight. Turn that edge off in the settings above: the mod then stands down
-  completely and the taskbar behaves as it does with the mod uninstalled. See
-  `docs/ROADMAP.md` for why a fix was attempted and abandoned.
+- **An edge with another display beyond it cannot hide.** The hidden position
+  is real screen space on the neighbouring monitor, so the taskbar would slide
+  into view there instead of out of sight. Detected automatically and skipped:
+  that edge then behaves as it does with the mod uninstalled. Controlled by
+  "Skip edges facing another display". `docs/ROADMAP.md` records why two fixes
+  were attempted and abandoned.
 
 ## Anti-cheat note
 
@@ -123,6 +123,11 @@ crash and a silent no-op.
 
 `tools/whcompile.sh` compiles and links a mod using Windhawk's own clang, so
 build errors surface before pasting into the editor.
+
+Layout: `src/` holds the mod that ships. `dev/` holds the read-only diagnostic
+builds and an experiment build with its own `@id`, so they can be installed
+alongside the real one. `research/` keeps the traces and the abandoned attempts,
+which are worth reading before retrying either.
 
 ## License
 

@@ -51,10 +51,9 @@ or the other, not both, since they hook the same function.
   animation that is never triggered off-bottom.
 - Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
   class.
-- If a second display sits beyond the docked edge, the taskbar shrinks into
-  that edge rather than sliding out of view, since there is no off-screen space
-  to slide into. Revealing it there also needs a deliberate pause, so that
-  moving between monitors does not summon it -- see the reveal dwell setting.
+- An edge with another display beyond it has nowhere off-screen to hide into,
+  so the mod skips it and that edge behaves as it does without the mod. This is
+  detected automatically; see "Skip edges facing another display".
 - Requires Windows 11 build 26200 or newer.
 */
 // ==/WindhawkModReadme==
@@ -63,71 +62,74 @@ or the other, not both, since they hook the same function.
 /*
 - edgeLeft: true
   $name: Enable on the left edge
+  $description: >-
+    Automatically skipped while another display sits beyond this edge, since
+    there is nowhere off-screen to hide into.
 - edgeTop: true
   $name: Enable on the top edge
+  $description: >-
+    Automatically skipped while another display sits beyond this edge, since
+    there is nowhere off-screen to hide into.
 - edgeRight: true
   $name: Enable on the right edge
+  $description: >-
+    Automatically skipped while another display sits beyond this edge, since
+    there is nowhere off-screen to hide into.
+- skipAdjacentEdges: true
+  $name: Skip edges facing another display
+  $description: >-
+    An edge with a monitor beyond it has nowhere to hide into: the hidden
+    position is occupied screen space on the neighbour, so the taskbar would
+    slide into view there rather than out of sight. Such an edge is left to
+    behave as it does without this mod.
 - hideDurationMs: 0
   $name: Hide animation duration (ms)
   $description: >-
-    How long the taskbar takes to slide out of view. 0 uses 400 ms. Range
+    How long the taskbar takes to slide out of view. 0 uses 400 ms; range
     25-2000.
 
-    The hide is animated by the mod rather than by Windows, because Windows
-    clamps every intermediate position to the endpoint, which is why an
-    unmodified vertical taskbar appears to vanish instantly.
+    The mod animates the hide itself: Windows clamps each intermediate position
+    to the endpoint, which is why an unmodified vertical taskbar appears to
+    vanish instantly.
 - showDurationMs: 0
   $name: Reveal animation duration (ms)
-  $description: >-
-    0 keeps the Windows default (200 ms). Range 25-600.
+  $description: 0 keeps the Windows default of 200 ms. Range 25-600.
 - notificationHoldMs: 1500
   $name: Notifications - keep visible for (ms)
   $description: >-
-    When an app wants attention it flashes its taskbar button, and Windows then
-    refuses to auto-hide the taskbar until the flashing stops - which can leave
-    it on screen indefinitely.
+    Windows will not auto-hide the taskbar while an app is flashing its taskbar
+    button, which can leave it on screen indefinitely. Instead, the taskbar
+    shows once, stays for this long, then hides for the rest of the flashing.
 
-    With this set, the taskbar appears once, stays for this long, then hides
-    again and stays hidden for the rest of the flashing.
-
-    Set to 0 to turn notification handling off completely: the taskbar then
-    behaves as Windows intends, staying up for the whole notification on the
-    bottom edge, and hiding as soon as the pointer leaves on other edges.
-
-    Applies on every edge, including the bottom, regardless of the per-edge
-    switches above.
+    Set to 0 to turn notification handling off. Applies on every edge,
+    including the bottom, whatever the per-edge switches say.
 - notificationBurstGapMs: 5000
   $name: Notifications - treat as one within (ms)
   $description: >-
-    Only used when the setting above is not 0.
+    A flashing button asks for the taskbar once per flash, not once per
+    notification. Requests closer together than this count as one, so the
+    taskbar shows once instead of repeatedly.
 
-    A flashing taskbar button asks for the taskbar once per flash, not once per
-    notification. Requests closer together than this are treated as the same
-    notification, so the taskbar shows once instead of popping up repeatedly.
-
-    Raise it if the taskbar keeps reappearing during a single notification.
-    Lower it if two genuinely separate notifications get merged into one.
-- debugLog: false
-  $name: Write a debug log
-  $description: >-
-    Writes diagnostics to %LOCALAPPDATA%\windhawk-autohide-fix.log. Off by
-    default; only useful when investigating a problem.
+    Raise it if the taskbar keeps reappearing during a single notification;
+    lower it if two separate notifications get merged. Unused when the setting
+    above is 0.
 - revealDwellMs: 120
   $name: Reveal dwell (ms)
   $description: >-
     How long the pointer must stay in the trigger strip before the taskbar
-    appears.
-
-    This matters when another display sits beyond the docked edge: without a
-    dwell the taskbar pops out whenever you move between monitors, and a quick
-    pass can be missed entirely. Raise it if the taskbar appears when you were
-    only moving to the next screen; set 0 for an instant reveal.
+    appears. Raise it if the taskbar appears when you were only moving to the
+    next screen; 0 reveals instantly.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
-    How close to the screen edge the pointer must get before the taskbar
-    reappears. Raise it if the taskbar is hard to summon, lower it if it
-    appears when you did not mean to.
+    How close to the screen edge the pointer must get to bring the taskbar
+    back. Raise it if the taskbar is hard to summon, lower it if it appears
+    when you did not mean it to.
+- debugLog: false
+  $name: Write a debug log
+  $description: >-
+    Writes to %LOCALAPPDATA%\windhawk-autohide-fix.log. Only useful when
+    investigating a problem.
 */
 // ==/WindhawkModSettings==
 
@@ -169,6 +171,7 @@ struct Settings {
     bool edgeLeft = true;
     bool edgeTop = true;
     bool edgeRight = true;
+    bool skipAdjacentEdges = true;
     int revealTolerance = 8;
     int revealDwellMs = 120;
     bool debugLog = false;
@@ -195,6 +198,8 @@ void LoadSettings() {
     g_settings.edgeLeft = Wh_GetIntSetting(L"edgeLeft") != 0;
     g_settings.edgeTop = Wh_GetIntSetting(L"edgeTop") != 0;
     g_settings.edgeRight = Wh_GetIntSetting(L"edgeRight") != 0;
+    g_settings.skipAdjacentEdges =
+        Wh_GetIntSetting(L"skipAdjacentEdges") != 0;
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
     if (g_settings.revealTolerance < 1) {
         g_settings.revealTolerance = 1;
@@ -295,13 +300,66 @@ void DbgLog(PCWSTR fmt, ...) {
 }
 
 
-bool EdgeEnabled(UINT edge) {
+extern HWND g_trayWnd;   // defined with the taskbar state below
+
+// True when another display sits immediately beyond this edge of the taskbar's
+// own monitor. Such an edge has nowhere to hide into -- the hidden position is
+// occupied screen space on the neighbour -- so the mod leaves it alone.
+bool DisplayBeyondEdge(UINT edge) {
+    if (!g_trayWnd) {
+        return false;
+    }
+
+    HMONITOR own = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTONULL);
+    MONITORINFO mi{sizeof(mi)};
+    if (!own || !GetMonitorInfoW(own, &mi)) {
+        return false;
+    }
+
+    const RECT& m = mi.rcMonitor;
+    POINT probe{};
     switch (edge) {
-        case ABE_LEFT:  return g_settings.edgeLeft;
-        case ABE_TOP:   return g_settings.edgeTop;
-        case ABE_RIGHT: return g_settings.edgeRight;
+        case ABE_LEFT:  probe = {m.left - 1, (m.top + m.bottom) / 2}; break;
+        case ABE_RIGHT: probe = {m.right, (m.top + m.bottom) / 2};    break;
+        case ABE_TOP:   probe = {(m.left + m.right) / 2, m.top - 1};  break;
+        default:        return false;
+    }
+
+    HMONITOR there = MonitorFromPoint(probe, MONITOR_DEFAULTTONULL);
+    return there && there != own;
+}
+
+// EdgeEnabled sits in the hook path, which runs far too often to query the
+// display layout on every call. A second of staleness is harmless: the answer
+// changes only when monitors are rearranged.
+volatile LONG g_facingEdge = -1;
+volatile LONG g_facingResult = 0;
+volatile LONG g_facingTick = 0;
+
+bool EdgeFacesDisplay(UINT edge) {
+    const LONG now = (LONG)GetTickCount64();
+    if (InterlockedCompareExchange(&g_facingEdge, -1, -1) != (LONG)edge ||
+        now - InterlockedCompareExchange(&g_facingTick, 0, 0) > 1000) {
+        const LONG r = DisplayBeyondEdge(edge) ? 1 : 0;
+        InterlockedExchange(&g_facingResult, r);
+        InterlockedExchange(&g_facingTick, now);
+        InterlockedExchange(&g_facingEdge, (LONG)edge);
+        return r != 0;
+    }
+
+    return InterlockedCompareExchange(&g_facingResult, 0, 0) != 0;
+}
+
+bool EdgeEnabled(UINT edge) {
+    bool on;
+    switch (edge) {
+        case ABE_LEFT:  on = g_settings.edgeLeft;  break;
+        case ABE_TOP:   on = g_settings.edgeTop;   break;
+        case ABE_RIGHT: on = g_settings.edgeRight; break;
         default:        return false;   // bottom works natively
     }
+
+    return on && !(g_settings.skipAdjacentEdges && EdgeFacesDisplay(edge));
 }
 
 PCWSTR EdgeName(UINT edge) {
@@ -690,9 +748,8 @@ void RunHideAnimation() {
 
     InterlockedExchange(&g_animOverride, 1);
 
-    // If the hiding direction runs into another display, clip the taskbar to
-    // its own monitor as it goes, so it shrinks into the edge instead of
-    // sliding onto the neighbouring screen.
+    // Reachable only with "Skip edges facing another display" turned off: the
+    // hiding direction runs into another display, so there is nowhere to slide.
     RECT mon{};
     const bool haveMon = TrayMonitorRect(&mon);
     const bool spills = HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
