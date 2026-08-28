@@ -302,6 +302,16 @@ UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
     return ret;
 }
 
+// 0x3 is not a configuration value, it is the "currently hidden" state:
+// GetDockedRect returns the hidden rect exactly when (flags & 3) == 3. Windows
+// toggles 0x1 (shown) / 0x3 (hidden). Forcing 0x3 unconditionally pins the
+// taskbar hidden, so Unhide and SlideWindow(show=1) run and are immediately
+// overruled by the next rect query.
+//
+// While Windows is unhiding, its SetAutoHideFlags(0x1) means "show" and must
+// be passed through untouched.
+thread_local bool g_inUnhide = false;
+
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
@@ -326,7 +336,7 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     // edge sits at 0x118 there but 0x110 in GetDockedRect. Reusing the getter's
     // offset here read the wrong field entirely.
     UINT effective = flags;
-    if ((flags & 1) && edge < ABE_BOTTOM) {
+    if ((flags & 1) && edge < ABE_BOTTOM && !g_inUnhide) {
         effective = flags | 2;
     }
 
@@ -458,7 +468,12 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     UINT edge = CurrentStuckPlace(pThis);
     DiagLog(L"Unhide(flags=%d request=%d) ENTER [edge=%u %s]", flags, request,
             edge, EdgeName(edge));
+
+    bool prev = g_inUnhide;
+    g_inUnhide = true;
     TrayUI_Unhide_Original(pThis, flags, request);
+    g_inUnhide = prev;
+
     DiagLog(L"Unhide LEAVE");
 }
 
