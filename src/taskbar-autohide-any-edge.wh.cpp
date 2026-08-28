@@ -235,6 +235,13 @@ RECT g_lastDockedRect{};
 thread_local bool g_inUnhide = false;
 thread_local bool g_inWatcherCall = false;
 
+// Set only while the hide sequence toggles the flags to read the hidden rect.
+// That toggling fires Windows' state-change unhide reflex, which would undo the
+// hide, so Unhide is suppressed outright for the duration. It cannot share
+// g_inWatcherCall, which is also set while the reveal deliberately calls
+// Unhide.
+thread_local bool g_inHideSequence = false;
+
 UINT CurrentStuckPlace(void* pThis) {
     if (!TrayUI_GetStuckPlace_Original || !pThis) {
         return 0xFFFFFFFF;
@@ -359,6 +366,10 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
 
 void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     UINT edge = CurrentStuckPlace(pThis);
+
+    if (g_inHideSequence) {
+        return;   // our own flag toggling, not a real request to show
+    }
 
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
         EdgeEnabled(edge) && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
@@ -519,9 +530,11 @@ void WatcherTick() {
     RECT hidden{};
     bool haveRect = false;
     if (TrayUI_GetDockedRect_Original) {
+        g_inHideSequence = true;
         TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
         TrayUI_SetAutoHideFlags_Original(g_trayUI, stored);
+        g_inHideSequence = false;
         haveRect = hidden.right > hidden.left || hidden.bottom > hidden.top;
     }
 
@@ -534,7 +547,9 @@ void WatcherTick() {
     }
 
     // Now record it as hidden, so the reveal path takes over from here.
+    g_inHideSequence = true;
     TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
+    g_inHideSequence = false;
     g_inWatcherCall = false;
 }
 
