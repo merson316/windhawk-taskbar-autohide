@@ -185,19 +185,35 @@ the chance of an anti-cheat incident.
 
 ### Configuration requirement
 
-Every mod on this machine targets only `explorer.exe`, `<other-app>.exe` and
-`StartMenuExperienceHost.exe`, and the new mod adds no fourth target. Windhawk
-is therefore to be reconfigured as an explicit allowlist:
+Windhawk's inclusion and exclusion lists accept fixed names, fixed paths, and
+patterns such as `C:\folder\*`. Entries added here are additive to Windhawk's
+built-in exclusions, which already cover the standard Steam, Epic, Battle.net
+and Riot install locations.
 
-- Process exclusion list: `*`
-- Process inclusion list: `explorer.exe`, `<other-app>.exe`,
-  `StartMenuExperienceHost.exe`
+Game libraries on this machine are to be excluded by path:
 
-This removes the engine from every game process regardless of install path. The
-wiki describes blanket exclusion as a last resort because delayed injection can
-break some mods, so this configuration is to be applied and verified **before**
-the diagnostic mod is enabled, not after, so that any mod breakage is attributed
-correctly.
+    <GameDrive>:\SteamLibrary\*
+    <GameDrive>:\SteamLibrary\*
+    <GameDrive>:\SteamLibrary\*
+    <GameDrive>:\Origin\*
+    <GameDrive>:\BNet\*
+    C:\XboxGames\*
+
+This is applied and verified **before** the diagnostic mod is enabled, so that
+any mod breakage is attributed correctly.
+
+A stricter alternative was considered and rejected: excluding `*` and
+allowlisting only `explorer.exe`, `<other-app>.exe` and
+`StartMenuExperienceHost.exe`. It is more contained, but every future mod
+install would silently do nothing until its targets were added by hand, mods
+targeting multiple processes or `*` become impractical, and the wiki notes that
+blanket exclusion delays injection in a way that "may break some mods". The
+path-based exclusion covers the actual libraries, including games installed into
+them later, at no ongoing maintenance cost and with early injection preserved.
+
+Its known gap is a game installed to a directory not on the list. Adding a new
+library root is a one-line change and should be done whenever a new install
+location is created.
 
 ### Design constraint
 
