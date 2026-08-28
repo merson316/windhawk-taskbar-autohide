@@ -46,6 +46,19 @@ loop that flickered the taskbar between three positions and was reverted. The
 one reusable discovery from it: `SetWindowRgn` clips the taskbar's XAML child
 content, where resizing the window does not.
 
+A second attempt declined the edge instead: leave the taskbar visible on any
+edge with a display beyond it. That failed for a more fundamental reason.
+"Auto-hide is on, but not on this edge" is a state Windows has no concept of, so
+every subsystem keyed off auto-hide needs telling separately -- the hooks, the
+hidden state, the reserved work area, the Settings toggle, and the transition
+between edges. Five fixes produced five new failures and no sign of the last
+one. Reverted.
+
+**Resolution: not a defect to fix.** An edge with a monitor beyond it has
+nowhere to hide into, so the per-edge setting is the answer -- turn that edge
+off and the mod stands down entirely. Anything here should be read as
+background, not a plan.
+
 ## 3. Secondary monitor support
 
 Nothing here is exercised yet: `MMTaskbarEnabled` is `0` on the development

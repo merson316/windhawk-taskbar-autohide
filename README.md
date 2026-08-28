@@ -100,6 +100,12 @@ capped at 600 ms. A low value such as 25 ms makes hiding effectively instant.
   changes that function, the mod goes inert rather than misbehaving.
 - Top and right edges are implemented but have not been tested as thoroughly as
   the left.
+- **An edge with another display beyond it cannot hide.** The hidden position is
+  off that edge of the primary display, which is real screen space on the
+  neighbouring monitor, so the taskbar slides into view there instead of out of
+  sight. Turn that edge off in the settings above: the mod then stands down
+  completely and the taskbar behaves as it does with the mod uninstalled. See
+  `docs/ROADMAP.md` for why a fix was attempted and abandoned.
 
 ## Anti-cheat note
 
