@@ -309,3 +309,18 @@ the foreground, so the window must be minimised first; and Windows 11 Notepad is
 a packaged app whose `MainWindowHandle` goes stale after minimising, so it does
 not work as a target. Use `-Process Discord` or another normal app. Toast
 notifications do not force an auto-hidden taskbar visible at all.
+
+## Notification bursts
+
+A flashing taskbar button produces **one unhide per flash**, not one per
+notification. Three behaviours were tried against a real Discord notification:
+
+| Rule | Result |
+|---|---|
+| Refresh the hold on every unhide | Stays visible for the whole flash sequence |
+| Count the hold from the first unhide | Shows, hides after 1500 ms, reappears on the next flash: a slower strobe |
+| Treat unhides within 5 s as one burst | Correct: shows once, hides after the hold, stays hidden |
+
+The burst rule also has to yield to the pointer: suppression applies only while
+the pointer is away from the edge, so a deliberate reveal during a notification
+still works.

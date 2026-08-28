@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.0.0
+// @version         1.1.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
