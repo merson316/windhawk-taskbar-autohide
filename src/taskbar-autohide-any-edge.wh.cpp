@@ -51,10 +51,11 @@ or the other, not both, since they hook the same function.
   animation that is never triggered off-bottom.
 - Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
   class.
-- If a second display sits beyond the docked edge, the taskbar shrinks into
-  that edge rather than sliding out of view, since there is no off-screen space
-  to slide into. Revealing it there also needs a deliberate pause, so that
-  moving between monitors does not summon it -- see the reveal dwell setting.
+- Auto-hide is not applied on an edge that has another display beyond it. The
+  hidden position would be on that display, and every way of preventing that --
+  sliding, resizing, hiding the window, clipping it -- misbehaves, because
+  Windows owns both the position and the rendering there. The taskbar simply
+  stays visible on such an edge.
 - Requires Windows 11 build 26200 or newer.
 */
 // ==/WindhawkModReadme==
@@ -709,10 +710,9 @@ void RunHideAnimation() {
         // neighbouring display, and the taskbar's content renders past any clip
         // we apply, so animating would just play the slide over there. Hide it
         // outright instead.
-        DbgLog(L"hide anim: no off-screen space, hiding window without a slide");
-        InterlockedExchange(&g_clipHold, 0);
-        InterlockedExchange(&g_windowHidden, 1);
-        ShowWindow(g_trayWnd, SW_HIDE);
+        // Should not be reachable: such an edge is declined before a hide is
+        // ever requested. Bail rather than hide onto the neighbouring display.
+        DbgLog(L"hide anim: unexpected spill, declining");
         InterlockedExchange(&g_animOverride, 0);
         return;
     }
@@ -767,6 +767,25 @@ void WatcherTick() {
     UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
+    }
+
+    // A display beyond the docked edge leaves nowhere to hide into: the hidden
+    // position is on that display, and Windows owns both the position and the
+    // rendering there. Sliding, resizing, hiding the window and clipping it were
+    // all tried and all misbehave. Leave the taskbar alone on such an edge.
+    {
+        RECT probeDocked{};
+        TrayUI_GetDockedRect_Original(g_trayUI, &probeDocked, 0);
+        if (HiddenRectSpillsOntoAnotherDisplay(probeDocked, edge)) {
+            static ULONGLONG lastLog = 0;
+            const ULONGLONG now = GetTickCount64();
+            if (now - lastLog > 10000) {
+                lastLog = now;
+                DbgLog(L"edge %u has a display beyond it; not managing auto-hide",
+                       edge);
+            }
+            return;
+        }
     }
 
     UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
