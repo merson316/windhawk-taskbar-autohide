@@ -761,11 +761,14 @@ const BYTE kSig[] = {
 };
 
 void Wh_ModSettingsChanged() {
-    ExpLogOpen();
     LoadSettings();
+    ExpLog(L"settings changed: hideDurationMs=%d", g_settings.hideDurationMs);
 }
 
 BOOL Wh_ModInit() {
+    ExpLogOpen();
+    ExpLog(L"=== experiment starting ===");
+
     if (!IsSupportedBuild()) {
         Wh_Log(L"unsupported build %u, mod inactive", g_buildNumber);
         return FALSE;
