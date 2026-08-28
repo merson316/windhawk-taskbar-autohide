@@ -846,8 +846,30 @@ void WatcherTick() {
     } else if (!atEdge && !(stored & 2)) {
         DiagLog(L"watcher: cursor left, storing 0x%X", stored | 2);
         LogTrayWindowRect(L"before-hide");
+
         g_inWatcherCall = true;
         TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | 2);
+
+        // Storing the flag sets the state but moves nothing: Unhide performs
+        // the reveal slide itself, and the hide has no counterpart off-bottom
+        // because Windows' own SetAutoHideState flow never runs there.
+        //
+        // Issue the slide. With the flags now 0x3, GetDockedRect returns the
+        // hidden rect, and it takes the same base as this pointer. SlideWindow
+        // does too. _ComputeHiddenRect is deliberately not used: it wants a
+        // base 0x30 lower, which is what crashed V1.
+        if (TrayUI_GetDockedRect_Original && TrayUI_SlideWindow_Original &&
+            g_trayWnd) {
+            RECT hidden{};
+            TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
+            DiagLog(L"watcher: sliding to (%ld,%ld)-(%ld,%ld)", hidden.left,
+                    hidden.top, hidden.right, hidden.bottom);
+            TrayUI_SlideWindow_Original(
+                g_trayUI, g_trayWnd, &hidden,
+                MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
+                true);
+        }
+
         g_inWatcherCall = false;
         LogTrayWindowRect(L"after-hide");
     }
