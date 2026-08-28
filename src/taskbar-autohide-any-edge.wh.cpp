@@ -803,6 +803,20 @@ void WatcherTick() {
                     TrayUI_SetAutoHideFlags_Original(
                         g_trayUI, f & ~(UINT)ABS_ALWAYSONTOP);
                 }
+
+                // The taskbar is permanently visible on this edge, so the work
+                // area has to be reserved for it. Auto-hide being enabled in
+                // Settings released it, and nothing gives it back while the
+                // taskbar never hides -- windows end up underneath.
+                if (g_trayWnd) {
+                    RECT wa{};
+                    SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+                    DbgLog(L"declining edge %u: work area is (%ld,%ld)-(%ld,%ld)"
+                           L", asking for a re-layout",
+                           edge, wa.left, wa.top, wa.right, wa.bottom);
+                    PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA,
+                                 0);
+                }
             }
             if (now - lastLog > 10000) {
                 lastLog = now;
