@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.2.0
+// @version         1.3.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -77,7 +77,7 @@ or the other, not both, since they hook the same function.
     vanish instantly.
 - showDurationMs: 0
   $name: Reveal animation duration (ms)
-  $description: 0 keeps the Windows default of 200 ms. Range 25-600.
+  $description: 0 keeps the Windows default of 200 ms. Range 25-2000.
 - notificationHoldMs: 1500
   $name: Notifications - keep visible for (ms)
   $description: >-
@@ -245,8 +245,10 @@ volatile LONG g_facingTick = 0;
 
 bool EdgeFacesDisplay(UINT edge) {
     const LONG now = (LONG)GetTickCount64();
+    const ULONG since =
+        (ULONG)(now - InterlockedCompareExchange(&g_facingTick, 0, 0));
     if (InterlockedCompareExchange(&g_facingEdge, -1, -1) != (LONG)edge ||
-        now - InterlockedCompareExchange(&g_facingTick, 0, 0) > 1000) {
+        since > 1000) {
         const LONG r = DisplayBeyondEdge(edge) ? 1 : 0;
         InterlockedExchange(&g_facingResult, r);
         InterlockedExchange(&g_facingTick, now);
@@ -265,15 +267,6 @@ bool EdgeEnabled(UINT edge) {
     return !(g_settings.skipAdjacentEdges && EdgeFacesDisplay(edge));
 }
 
-PCWSTR EdgeName(UINT edge) {
-    switch (edge) {
-        case ABE_LEFT:   return L"left";
-        case ABE_TOP:    return L"top";
-        case ABE_RIGHT:  return L"right";
-        case ABE_BOTTOM: return L"bottom";
-        default:         return L"?";
-    }
-}
 
 // ---------------------------------------------------------------- build gate
 
@@ -673,6 +666,13 @@ void RunHideAnimation() {
 
     const ULONGLONG start = GetTickCount64();
     for (;;) {
+        // Abandon the slide if the mod is unloading: this runs on the watch
+        // thread, and a full-length animation would outlast the join in
+        // StopWatchThread, leaving the thread inside a module being unloaded.
+        if (InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+            break;
+        }
+
         const ULONGLONG elapsed = GetTickCount64() - start;
         if (elapsed >= (ULONGLONG)ms) {
             break;
@@ -1031,17 +1031,25 @@ void RestoreTaskbarIfHidden() {
     PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
 }
 
-void Wh_ModBeforeUninit() {
-    RestoreTaskbarIfHidden();
-}
-
-void Wh_ModUninit() {
+void StopWatchThread() {
     InterlockedExchange(&g_watchStop, 1);
     if (g_watchThread) {
         WaitForSingleObject(g_watchThread, 2000);
         CloseHandle(g_watchThread);
         g_watchThread = nullptr;
     }
+}
+
+void Wh_ModBeforeUninit() {
+    // Stop the watcher first: left running, it can hide the taskbar again
+    // between the restore below and the thread being stopped, which strands it
+    // off-screen -- exactly what the restore exists to prevent.
+    StopWatchThread();
+    RestoreTaskbarIfHidden();
+}
+
+void Wh_ModUninit() {
+    StopWatchThread();
     if (g_trayWnd && g_subclassed) {
         WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
                                                          TrayWatchProc);
