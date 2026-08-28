@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32
+// @compilerOptions -lcomctl32 -lgdi32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -740,6 +740,49 @@ void WatcherTick() {
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
             true);
         g_inWatcherCall = false;
+
+        // Parked and invisible: describe the window and its children, since
+        // nothing about the state changed -- only the position.
+        RECT r{};
+        GetWindowRect(g_trayWnd, &r);
+        LONG exStyle = GetWindowLongPtrW(g_trayWnd, GWL_EXSTYLE);
+        LONG style = GetWindowLongPtrW(g_trayWnd, GWL_STYLE);
+
+        HRGN rgn = CreateRectRgn(0, 0, 0, 0);
+        int rgnType = GetWindowRgn(g_trayWnd, rgn);
+        RECT rgnBox{};
+        if (rgnType != ERROR) {
+            GetRgnBox(rgn, &rgnBox);
+        }
+        DeleteObject(rgn);
+
+        BYTE alpha = 255;
+        DWORD lwFlags = 0;
+        COLORREF key = 0;
+        BOOL layered = GetLayeredWindowAttributes(g_trayWnd, &key, &alpha,
+                                                  &lwFlags);
+
+        ExpLog(L"PROBE: tray (%ld,%ld)-(%ld,%ld) visible=%d style=0x%08X "
+               L"exStyle=0x%08X rgn=%d rgnBox=(%ld,%ld)-(%ld,%ld) "
+               L"layered=%d alpha=%u",
+               r.left, r.top, r.right, r.bottom,
+               (int)IsWindowVisible(g_trayWnd), (unsigned)style,
+               (unsigned)exStyle, rgnType, rgnBox.left, rgnBox.top,
+               rgnBox.right, rgnBox.bottom, (int)layered, alpha);
+
+        HWND child = GetWindow(g_trayWnd, GW_CHILD);
+        int n = 0;
+        while (child && n < 8) {
+            WCHAR cls[128] = L"";
+            GetClassNameW(child, cls, ARRAYSIZE(cls));
+            RECT cr{};
+            GetWindowRect(child, &cr);
+            ExpLog(L"    child %d: %s (%ld,%ld)-(%ld,%ld) visible=%d", n, cls,
+                   cr.left, cr.top, cr.right, cr.bottom,
+                   (int)IsWindowVisible(child));
+            child = GetWindow(child, GW_HWNDNEXT);
+            n++;
+        }
         return;
     }
 
