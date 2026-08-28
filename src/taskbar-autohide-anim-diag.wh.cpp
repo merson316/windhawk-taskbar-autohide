@@ -164,9 +164,22 @@ void WINAPI SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
     BOOL sysAnim = TRUE;
     SystemParametersInfoW(0x1002 /* SPI_GETMENUANIMATION */, 0, &sysAnim, 0);
 
-    Log(L"SlideWindow show=%d animate=%d durations hide=%d show=%d "
-        L"sysAnim=%d [workarea edge=%u]",
-        (int)show, (int)animate, hideMs, showMs, (int)sysAnim, CurrentEdge());
+    // The animated path interpolates from the window's current rect to the
+    // target. Equal rects mean zero distance and an instant, invisible
+    // "animation", so log both.
+    RECT cur{};
+    if (hWnd) {
+        GetWindowRect(hWnd, &cur);
+    }
+    bool sameRect = rect && cur.left == rect->left && cur.top == rect->top &&
+                    cur.right == rect->right && cur.bottom == rect->bottom;
+
+    Log(L"SlideWindow show=%d animate=%d dur(h=%d,s=%d) sysAnim=%d "
+        L"from(%ld,%ld)-(%ld,%ld) to(%ld,%ld)-(%ld,%ld) same=%d",
+        (int)show, (int)animate, hideMs, showMs, (int)sysAnim, cur.left,
+        cur.top, cur.right, cur.bottom, rect ? rect->left : 0,
+        rect ? rect->top : 0, rect ? rect->right : 0, rect ? rect->bottom : 0,
+        (int)sameRect);
 
     SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
 }
