@@ -48,18 +48,19 @@ The bottom edge is left untouched.
 - hideDurationMs: 0
   $name: Hide animation duration (ms)
   $description: >-
-    0 keeps the Windows default (400 ms). A vertical taskbar covers far less
-    screen area than a horizontal one, so the same duration reads as much
-    faster; raise this if the slide is hard to follow. Range 25-10000.
+    0 keeps the Windows default (400 ms). Range 25-600: the slide runs
+    synchronously on the taskbar's own thread, so longer values freeze it rather
+    than slowing the animation.
 - showDurationMs: 0
   $name: Reveal animation duration (ms)
   $description: >-
-    0 keeps the Windows default (200 ms). Range 25-10000.
-- revealTolerance: 4
+    0 keeps the Windows default (200 ms). Range 25-600.
+- revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
     How close to the screen edge the pointer must get before the taskbar
-    reappears.
+    reappears. Raise it if the taskbar is hard to summon, lower it if it
+    appears when you did not mean to.
 */
 // ==/WindhawkModSettings==
 
@@ -79,8 +80,15 @@ The bottom edge is left untouched.
 #define GETFLAGS_EDGE_OFFSET  0x118
 #define GETFLAGS_FLAGS_OFFSET 0x44
 
-#define WATCH_TIMER_ID 0x57484148
-#define WATCH_TICK_MS  120
+// WM_TIMER is only delivered when the thread's queue is empty, so hovering the
+// taskbar -- which produces a stream of mouse messages -- starves it exactly
+// when the reveal is needed. A worker thread posts an ordinary message instead,
+// which is not deprioritised; the work still runs on the taskbar's thread.
+#define WATCH_TICK_MS 40
+
+UINT g_watchMsg = 0;
+HANDLE g_watchThread = nullptr;
+volatile LONG g_watchStop = 0;
 #define LEAVE_TICKS    2
 
 // ------------------------------------------------------------------ settings
@@ -89,7 +97,7 @@ struct Settings {
     bool edgeLeft = true;
     bool edgeTop = true;
     bool edgeRight = true;
-    int revealTolerance = 4;
+    int revealTolerance = 8;
     int hideDurationMs = 0;
     int showDurationMs = 0;
 } g_settings;
@@ -101,8 +109,12 @@ int ClampDuration(int ms) {
     if (ms < 25) {
         return 25;
     }
-    if (ms > 10000) {
-        return 10000;
+    // SlideWindow animates with a synchronous loop on the taskbar's UI thread,
+    // so the duration is also how long the shell is blocked. Beyond a few
+    // hundred milliseconds the taskbar stops repainting and ignores input,
+    // which reads as an instant vanish followed by a frozen taskbar.
+    if (ms > 600) {
+        return 600;
     }
     return ms;
 }
@@ -112,8 +124,10 @@ void LoadSettings() {
     g_settings.edgeTop = Wh_GetIntSetting(L"edgeTop") != 0;
     g_settings.edgeRight = Wh_GetIntSetting(L"edgeRight") != 0;
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
-    if (g_settings.revealTolerance < 1 || g_settings.revealTolerance > 64) {
-        g_settings.revealTolerance = 4;
+    if (g_settings.revealTolerance < 1) {
+        g_settings.revealTolerance = 1;
+    } else if (g_settings.revealTolerance > 64) {
+        g_settings.revealTolerance = 64;
     }
 
     // Clamp out-of-range values rather than discarding them: silently turning
@@ -208,7 +222,6 @@ void* g_trayUI = nullptr;
 
 HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
-bool g_timerSet = false;
 int g_leaveTicks = 0;
 RECT g_lastDockedRect{};
 
@@ -273,6 +286,18 @@ bool CursorAtRevealStrip(UINT edge) {
         case ABE_RIGHT: return pt.x >= m.right - tol - 1;
         default:        return false;
     }
+}
+
+// The pointer being over whatever remains of the hidden taskbar should reveal
+// it too, independently of the trigger width.
+bool CursorOverTaskbar(void* pThis) {
+    if (!pThis || !TrayUI_GetDockedRect_Original) {
+        return false;
+    }
+    RECT r{};
+    TrayUI_GetDockedRect_Original(pThis, &r, 0);
+    POINT pt;
+    return GetCursorPos(&pt) && PtInRect(&r, pt);
 }
 
 // ------------------------------------------------------------------- hooks
@@ -429,7 +454,7 @@ void WatcherTick() {
     if (stored & ABS_ALWAYSONTOP) {
         // Hidden. Reveal once the pointer reaches the trigger strip; Unhide
         // performs the slide itself.
-        if (!CursorAtRevealStrip(edge)) {
+        if (!CursorAtRevealStrip(edge) && !CursorOverTaskbar(g_trayUI)) {
             g_leaveTicks = 0;
             return;
         }
@@ -489,18 +514,22 @@ void WatcherTick() {
 
 LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
-    if (!g_timerSet) {
-        // Set from the window's own thread, which is where messages arrive.
-        SetTimer(hWnd, WATCH_TIMER_ID, WATCH_TICK_MS, nullptr);
-        g_timerSet = true;
-    }
-
-    if (uMsg == WM_TIMER && wParam == WATCH_TIMER_ID) {
+    if (g_watchMsg && uMsg == g_watchMsg) {
         WatcherTick();
         return 0;
     }
 
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+DWORD WINAPI WatchThreadProc(LPVOID) {
+    while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+        if (g_trayWnd && g_watchMsg) {
+            PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
+        }
+        Sleep(WATCH_TICK_MS);
+    }
+    return 0;
 }
 
 // ------------------------------------------------------------------ lifecycle
@@ -618,12 +647,17 @@ BOOL Wh_ModInit() {
         Wh_Log(L"could not subclass Shell_TrayWnd, reveal will not work");
     }
 
-    // The watcher needs a TrayUI pointer, which is only captured when
-    // GetDockedRect runs, and that only happens on a layout pass. Without a
-    // nudge the taskbar stays visible after enabling until something else
-    // triggers one.
-    if (g_trayWnd) {
-        PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+    g_watchMsg = RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeTick");
+    if (!g_watchMsg) {
+        Wh_Log(L"could not register the tick message");
+        return FALSE;
+    }
+
+    g_watchThread = CreateThread(nullptr, 0, WatchThreadProc, nullptr, 0,
+                                 nullptr);
+    if (!g_watchThread) {
+        Wh_Log(L"could not start the watch thread");
+        return FALSE;
     }
 
     return TRUE;
@@ -667,8 +701,11 @@ void Wh_ModBeforeUninit() {
 }
 
 void Wh_ModUninit() {
-    if (g_trayWnd && g_timerSet) {
-        KillTimer(g_trayWnd, WATCH_TIMER_ID);
+    InterlockedExchange(&g_watchStop, 1);
+    if (g_watchThread) {
+        WaitForSingleObject(g_watchThread, 2000);
+        CloseHandle(g_watchThread);
+        g_watchThread = nullptr;
     }
     if (g_trayWnd && g_subclassed) {
         WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
