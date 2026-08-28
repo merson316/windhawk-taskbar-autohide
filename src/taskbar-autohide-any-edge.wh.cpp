@@ -239,15 +239,38 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT edge = (UINT)g_currentEdge;
     UINT desired = (UINT)g_desiredFlags;
 
-    if (edge != ABE_BOTTOM && desired != 0 && ret == 0) {
-        DiagLog(L"GetAutoHideFlags -> 0x%X SUBSTITUTED (real 0x0)", desired);
-        return desired;
+    if (edge == ABE_BOTTOM) {
+        return ret;   // works natively; never interfere
     }
 
-    if (ret != 0) {
-        DiagLog(L"GetAutoHideFlags -> 0x%X", ret);
+    UINT eff = ret;
+
+    // The store is refused off-bottom, so report what was asked for.
+    if (eff == 0 && desired != 0) {
+        eff = desired;
     }
-    return ret;
+
+    // GetDockedRect computes the hidden rect only when (flags & 3) == 3, i.e.
+    // ABS_AUTOHIDE | ABS_ALWAYSONTOP:
+    //
+    //     call GetAutoHideFlags
+    //     and  $0x3,%eax
+    //     cmp  $0x3,%al
+    //     jne  <return docked rect>
+    //     call _ComputeHiddenRect
+    //
+    // On the bottom edge Windows stores 0x1 and then follows up with 0x3. Off
+    // bottom the follow-up never happens and the flags stay 0x1, one bit short
+    // of the test. Supply the missing bit.
+    if (eff & 1) {
+        eff |= 2;
+    }
+
+    if (eff != ret) {
+        DiagLog(L"GetAutoHideFlags -> 0x%X (real 0x%X, edge %u %s)", eff, ret,
+                edge, EdgeName(edge));
+    }
+    return eff;
 }
 
 using TrayUI_GetDesktopModeAutoHide_t = UINT(WINAPI*)(void* pThis);
