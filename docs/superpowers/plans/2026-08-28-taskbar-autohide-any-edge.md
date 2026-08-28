@@ -204,7 +204,7 @@ trap 'rm -f "$STAGE_WSL/$BASE"' EXIT
   -D__USE_MINGW_ANSI_STDIO=0 -DWH_MOD -DWH_EDITING \
   -I "$INCLUDE" -include windhawk_api.h \
   -Wno-pragma-pack -Wno-pragma-system-header-outside-header \
-  "$STAGE_WIN\\$BASE" 2>&1 | sed "s|$STAGE_WIN\\\\$BASE|$SRC|g"
+  "$STAGE_WIN\\$BASE" 2>&1 | sed "s|[^ ]*$BASE|$SRC|g"
 
 exit "${PIPESTATUS[0]}"
 ```
