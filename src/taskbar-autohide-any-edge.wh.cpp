@@ -802,19 +802,38 @@ void WatcherTick() {
                    g_dockedBeforeHide.top, g_dockedBeforeHide.right,
                    g_dockedBeforeHide.bottom);
 
+            RECT r{};
+            GetWindowRect(g_trayWnd, &r);
+            DbgLog(L"  reveal step 0 (before restore): (%ld,%ld)-(%ld,%ld)",
+                   r.left, r.top, r.right, r.bottom);
+
             if (haveRect) {
                 SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
                              g_dockedBeforeHide.top,
                              g_dockedBeforeHide.right - g_dockedBeforeHide.left,
                              g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
                              SWP_NOZORDER | SWP_NOACTIVATE);
+                GetWindowRect(g_trayWnd, &r);
+                DbgLog(L"  reveal step 1 (after SetWindowPos): (%ld,%ld)-(%ld,%ld)",
+                       r.left, r.top, r.right, r.bottom);
             }
+
             ShowWindow(g_trayWnd, SW_SHOWNA);
+            GetWindowRect(g_trayWnd, &r);
+            DbgLog(L"  reveal step 2 (after ShowWindow): (%ld,%ld)-(%ld,%ld)",
+                   r.left, r.top, r.right, r.bottom);
         }
 
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
+
+        if (g_settings.debugLog && g_trayWnd) {
+            RECT r{};
+            GetWindowRect(g_trayWnd, &r);
+            DbgLog(L"  reveal step 3 (after Unhide): (%ld,%ld)-(%ld,%ld)",
+                   r.left, r.top, r.right, r.bottom);
+        }
         g_leaveTicks = 0;
         return;
     }
