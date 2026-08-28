@@ -694,6 +694,10 @@ volatile LONG g_windowHidden = 0;
 // The hooks must stand down as well, or Windows still moves the taskbar to its
 // hidden position -- which is on that display.
 volatile LONG g_declinedEdge = -1;
+
+// Set when auto-hide was switched off in order to decline an edge, so it can be
+// switched back on when the taskbar moves somewhere it can hide.
+volatile LONG g_suppressedAutoHide = 0;
 RECT g_dockedBeforeHide{};
 
 void RunHideAnimation() {
@@ -796,12 +800,21 @@ void WatcherTick() {
             // flag once so Windows puts it back where it belongs.
             if (InterlockedExchange(&g_declinedEdge, (LONG)edge) != (LONG)edge) {
                 UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
-                if (f & ABS_ALWAYSONTOP) {
-                    DbgLog(L"declining edge %u: clearing hidden state 0x%X so "
-                           L"the taskbar returns to its docked position",
+
+                // Turning auto-hide off is what actually gives the work area
+                // back: Windows reserves space for a taskbar that never hides,
+                // and releases it for one that does. Reporting differently is
+                // not enough -- windows still end up underneath.
+                if (f & (ABS_AUTOHIDE | ABS_ALWAYSONTOP)) {
+                    DbgLog(L"declining edge %u: turning auto-hide off (0x%X) so "
+                           L"the taskbar stays put and keeps its space",
                            edge, f);
+                    if (f & ABS_AUTOHIDE) {
+                        InterlockedExchange(&g_suppressedAutoHide, 1);
+                    }
                     TrayUI_SetAutoHideFlags_Original(
-                        g_trayUI, f & ~(UINT)ABS_ALWAYSONTOP);
+                        g_trayUI,
+                        f & ~(UINT)(ABS_AUTOHIDE | ABS_ALWAYSONTOP));
                 }
 
                 // The taskbar is permanently visible on this edge, so the work
@@ -829,6 +842,14 @@ void WatcherTick() {
             (LONG)edge) {
             DbgLog(L"edge %u no longer has a display beyond it; managing again",
                    edge);
+
+            // Put auto-hide back if declining the previous edge switched it off.
+            if (InterlockedCompareExchange(&g_suppressedAutoHide, 0, 1) == 1) {
+                UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+                DbgLog(L"restoring auto-hide after leaving a declined edge");
+                TrayUI_SetAutoHideFlags_Original(g_trayUI,
+                                                 f | (UINT)ABS_AUTOHIDE);
+            }
         }
     }
 
@@ -848,7 +869,13 @@ void WatcherTick() {
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
 
-        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
+        if (InterlockedCompareExchange(&g_suppressedAutoHide, 0, 1) == 1 &&
+        g_trayUI && g_offsetsVerified) {
+        UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+        TrayUI_SetAutoHideFlags_Original(g_trayUI, f | (UINT)ABS_AUTOHIDE);
+    }
+
+    if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
             // Was hidden outright rather than moved: put it back before asking
             // Windows to unhide, so it reappears at full size in place.
             DbgLog(L"reveal: restoring hidden window to (%ld,%ld) %ldx%ld",
