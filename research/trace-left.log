@@ -1,0 +1,97 @@
+11:33:39.661 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:39.661 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.338 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.339 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.339 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.446 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.446 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.453 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.453 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.455 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:46.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:48.415 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:48.415 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:48.416 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:48.416 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:48.418 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:48.419 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:51.487 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:51.488 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:51.488 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:51.586 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:33:51.586 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?]
+11:34:01.146 [t 6792] === diag mod uninit ===
+11:34:01.168 [t 6792] === diag mod init, build 26300, pid 13724 ===
+11:34:01.168 [t 6792] taskbar.dll loaded at 00007FFFE3950000
+11:34:01.241 [t 6792]   symbol GetStuckPlace                OK
+11:34:01.241 [t 6792]   symbol GetAutoHideFlags             OK
+11:34:01.241 [t 6792]   symbol GetDesktopModeAutoHide       OK
+11:34:01.241 [t 6792]   symbol SetAutoHideFlags             OK
+11:34:01.241 [t 6792]   symbol SetAutoHideState             OK
+11:34:01.241 [t 6792]   symbol AutoHideChangedOnMonitor     OK
+11:34:01.241 [t 6792]   symbol _ComputeHiddenRect           OK
+11:34:01.241 [t 6792]   symbol GetDockedRect                OK
+11:34:01.241 [t 6792]   symbol ShrinkRectToStuckEdge        OK
+11:34:01.241 [t 6792]   symbol GetStuckInfo                 OK
+11:34:01.241 [t 6792]   symbol SlideWindow                  OK
+11:34:01.241 [t 6792]   symbol Unhide                       OK
+11:34:01.241 [t 6792]   symbol SetUnhideTimer               OK
+11:34:01.241 [t 6792]   symbol _AutoHideCollision           OK
+11:34:01.241 [t 6792] hooks installed: 14/14 resolved
+11:34:13.055 [t15812] SetAutoHideState(1) ENTER [edge=48 ?(bad this)]
+11:34:13.055 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.055 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=0 LEFT]
+11:34:13.055 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.055 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.055 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:34:13.055 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.055 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.055 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.055 [t15812] SetAutoHideState(1) LEAVE -> 0x00010001
+11:34:13.055 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.061 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.061 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.061 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.061 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:13.061 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:34.437 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:34.437 [t15812] GetDockedRect(0) -> 0x0 (0,0)-(48,1440)
+11:34:34.567 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:34.567 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.426 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.429 [t15812] SetUnhideTimer(20, 452)
+11:34:35.429 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.429 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.434 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.434 [t15812] Unhide(flags=2 request=1) ENTER [edge=0 LEFT]
+11:34:35.434 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.434 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.434 [t15812] Unhide LEAVE
+11:34:35.440 [t15812] SetUnhideTimer(20, 452)
+11:34:35.440 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:35.440 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.005 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.005 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.007 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.007 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.008 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.010 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=0 LEFT]
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:34:38.087 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:34:38.087 [t15812] Unhide(flags=0 request=5) ENTER [edge=0 LEFT]
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:34:38.087 [t15812] Unhide LEAVE
+11:34:38.087 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]

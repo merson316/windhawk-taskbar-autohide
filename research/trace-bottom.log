@@ -1,0 +1,910 @@
+11:35:48.445 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.447 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.448 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.448 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.449 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.449 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.449 [t15812] GetDockedRect(1) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.450 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.450 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.451 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.451 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.451 [t15812] Unhide(flags=0 request=7) ENTER [edge=3 BOTTOM]
+11:35:48.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.451 [t15812] Unhide LEAVE
+11:35:48.451 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.452 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.459 [t15812] Unhide(flags=0 request=7) ENTER [edge=3 BOTTOM]
+11:35:48.459 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.459 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.459 [t15812] Unhide LEAVE
+11:35:48.459 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.460 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.460 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.461 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.464 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.465 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.469 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.469 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.470 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.470 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.470 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.470 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.471 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.471 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:35:48.472 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.472 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.473 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.474 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:35:48.475 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.475 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.477 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:35:48.477 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:35:48.477 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.477 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.477 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:35:48.478 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.478 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.479 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.479 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.500 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.500 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.500 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.500 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.501 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.501 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.501 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.502 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.535 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.535 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.536 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.536 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.536 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.536 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.536 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.576 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.603 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.613 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.613 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.613 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.613 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.615 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:35:48.621 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.621 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.623 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.626 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.627 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.630 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.634 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.634 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.634 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.634 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.634 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.636 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.636 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.636 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.636 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.637 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.637 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.637 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.637 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.637 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.639 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.639 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.639 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.639 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.639 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.639 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.640 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.641 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.641 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.641 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.641 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.641 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.641 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.643 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.643 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.643 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.643 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.644 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.644 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.644 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:48.644 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.645 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.645 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.645 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.645 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.645 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.645 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.646 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.654 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.655 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.823 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.823 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:48.823 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:50.709 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:50.709 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:50.709 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] SetAutoHideState(1) ENTER [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.595 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.595 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.595 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:35:53.595 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.595 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.595 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.595 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.612 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.612 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.612 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.612 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.628 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.628 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.628 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.628 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.645 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.645 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.645 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.645 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.659 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.659 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.659 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.659 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.675 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.675 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.675 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.675 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.690 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.690 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.690 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.690 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.706 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.706 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.706 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.706 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.722 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.722 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.722 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.722 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.738 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.738 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.738 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.754 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.754 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.754 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.754 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.770 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.770 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.770 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.770 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.771 [t15812] AutoHideChangedOnMonitor(0000000000010083) ENTER [edge=0 LEFT]
+11:35:53.772 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.772 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.772 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.772 [t15812] AutoHideChangedOnMonitor(0000000000010083) LEAVE
+11:35:53.772 [t15812] *** SlideWindow LEAVE show=0
+11:35:53.772 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.773 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] SetAutoHideState(1) LEAVE -> 0x00010001
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] Unhide(flags=1 request=9) ENTER [edge=3 BOTTOM]
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.773 [t15812] *** SlideWindow show=1 animate=0 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:35:53.773 [t15812] *** SlideWindow LEAVE show=1
+11:35:53.773 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] Unhide LEAVE
+11:35:53.774 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.774 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.774 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.774 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:35:53.774 [t15812] *** SlideWindow LEAVE show=0
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.774 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.774 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.774 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.775 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.779 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.779 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.779 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.779 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.779 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.782 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.786 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.786 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.786 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.786 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.807 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.807 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.807 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.807 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.807 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.813 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.834 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.838 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.853 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.854 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.854 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.854 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.854 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.855 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.855 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.856 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.866 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.866 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.866 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.866 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.866 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.866 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.866 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.866 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.866 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.867 [t15812] Unhide(flags=1 request=9) ENTER [edge=3 BOTTOM]
+11:35:53.867 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.867 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:35:53.867 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.867 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:35:53.868 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] *** SlideWindow show=1 animate=0 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:35:53.868 [t15812] *** SlideWindow LEAVE show=1
+11:35:53.868 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.868 [t15812] Unhide LEAVE
+11:35:53.869 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:35:53.869 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.869 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.869 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.869 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.869 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:35:53.869 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.869 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.869 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.869 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.869 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:35:53.869 [t15812] *** SlideWindow LEAVE show=0
+11:35:53.869 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.948 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.948 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.948 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.948 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.948 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.950 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] Unhide(flags=1 request=9) ENTER [edge=3 BOTTOM]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] *** SlideWindow show=1 animate=0 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:35:53.951 [t15812] *** SlideWindow LEAVE show=1
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] Unhide LEAVE
+11:35:53.951 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.951 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.951 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.951 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.951 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:35:53.951 [t15812] *** SlideWindow LEAVE show=0
+11:35:53.951 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.952 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.952 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.952 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.952 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.952 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.955 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.955 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.955 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.955 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.956 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] SetAutoHideState(1) ENTER [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:35:53.962 [t15812] SetAutoHideState(1) LEAVE -> 0x00010000
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.962 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.964 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.964 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.966 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] Unhide(flags=1 request=9) ENTER [edge=3 BOTTOM]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] *** SlideWindow show=1 animate=0 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:35:53.968 [t15812] *** SlideWindow LEAVE show=1
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.968 [t15812] Unhide LEAVE
+11:35:53.969 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.969 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.969 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:53.969 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.969 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.970 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.971 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.971 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.971 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.971 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:35:53.971 [t15812] *** SlideWindow LEAVE show=0
+11:35:53.971 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.972 [t12108] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.972 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.972 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:35:53.972 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:35:53.972 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:53.974 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:54.164 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:54.164 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:54.164 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:54.782 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:54.782 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:35:54.782 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.625 [t15812] SetUnhideTimer(930, 1438)
+11:36:08.625 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.625 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.625 [t15812] SetUnhideTimer(930, 1438)
+11:36:08.625 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.625 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.626 [t15812] SetUnhideTimer(930, 1439)
+11:36:08.626 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.626 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.626 [t15812] SetUnhideTimer(930, 1439)
+11:36:08.626 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.626 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.635 [t15812] SetUnhideTimer(929, 1439)
+11:36:08.635 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.635 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.635 [t15812] SetUnhideTimer(929, 1439)
+11:36:08.635 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.635 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.662 [t15812] SetUnhideTimer(928, 1439)
+11:36:08.662 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.662 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.662 [t15812] SetUnhideTimer(928, 1439)
+11:36:08.662 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.662 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.678 [t15812] SetUnhideTimer(927, 1439)
+11:36:08.678 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.678 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.678 [t15812] SetUnhideTimer(927, 1439)
+11:36:08.678 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.678 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] Unhide(flags=0 request=15) ENTER [edge=3 BOTTOM]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.682 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:36:08.682 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.683 [t15812] *** SlideWindow show=1 animate=1 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:36:08.683 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.683 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:08.683 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.683 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:08.779 [t15812] AutoHideChangedOnMonitor(0000000000010083) ENTER [edge=0 LEFT]
+11:36:08.779 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.779 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.779 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.779 [t15812] AutoHideChangedOnMonitor(0000000000010083) LEAVE
+11:36:08.779 [t15812] *** SlideWindow LEAVE show=1
+11:36:08.779 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.779 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.779 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:08.779 [t15812] Unhide LEAVE
+11:36:08.780 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.277 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.277 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.408 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.778 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.778 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.778 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:36:09.778 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.778 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.778 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.778 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.793 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.793 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.793 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.793 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.809 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.809 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.809 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.809 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.825 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.825 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.825 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.825 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.840 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.840 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.840 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.840 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.855 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.855 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.855 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.855 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.870 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.870 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.870 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.870 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.886 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.886 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.886 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.886 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.901 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.901 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.901 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.901 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.917 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.917 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.917 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.917 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.932 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.932 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.932 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.932 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.948 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.948 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:09.948 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:09.948 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:09.951 [t15812] AutoHideChangedOnMonitor(0000000000010083) ENTER [edge=0 LEFT]
+11:36:09.953 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.953 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.953 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:09.953 [t15812] AutoHideChangedOnMonitor(0000000000010083) LEAVE
+11:36:09.953 [t15812] *** SlideWindow LEAVE show=0
+11:36:09.953 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.735 [t15812] SetUnhideTimer(937, 1439)
+11:36:10.735 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.735 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.735 [t15812] SetUnhideTimer(937, 1439)
+11:36:10.735 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.735 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.738 [t15812] SetUnhideTimer(938, 1439)
+11:36:10.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.738 [t15812] SetUnhideTimer(938, 1439)
+11:36:10.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.742 [t15812] SetUnhideTimer(939, 1439)
+11:36:10.742 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.742 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.742 [t15812] SetUnhideTimer(939, 1439)
+11:36:10.742 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.742 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.748 [t15812] SetUnhideTimer(940, 1439)
+11:36:10.748 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.748 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.748 [t15812] SetUnhideTimer(940, 1439)
+11:36:10.748 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.748 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.775 [t15812] SetUnhideTimer(939, 1439)
+11:36:10.775 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.775 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.775 [t15812] SetUnhideTimer(939, 1439)
+11:36:10.775 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.775 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.780 [t15812] SetUnhideTimer(938, 1439)
+11:36:10.780 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.780 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.780 [t15812] SetUnhideTimer(938, 1439)
+11:36:10.780 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.780 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] Unhide(flags=0 request=15) ENTER [edge=3 BOTTOM]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] SetAutoHideFlags(0x1)  ENTER [edge=3 BOTTOM]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.792 [t15812] SetAutoHideFlags(0x1)  LEAVE
+11:36:10.792 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.793 [t15812] *** SlideWindow show=1 animate=1 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:36:10.793 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.793 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:10.793 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.793 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:10.887 [t15812] AutoHideChangedOnMonitor(0000000000010083) ENTER [edge=0 LEFT]
+11:36:10.887 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.887 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.887 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.887 [t15812] AutoHideChangedOnMonitor(0000000000010083) LEAVE
+11:36:10.887 [t15812] *** SlideWindow LEAVE show=1
+11:36:10.887 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.887 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.887 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:10.887 [t15812] Unhide LEAVE
+11:36:10.888 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.386 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.386 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.642 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] SetAutoHideFlags(0x3)  ENTER [edge=3 BOTTOM]
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x1   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] SetAutoHideFlags(0x3)  LEAVE
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.886 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.886 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.886 [t15812] *** SlideWindow show=0 animate=1 [edge=3 BOTTOM] rect=(0,1438)-(3440,1486)
+11:36:11.886 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.886 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.886 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.886 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.901 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.901 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.901 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.901 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.916 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.916 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.916 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.916 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.933 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.933 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.933 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.933 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.947 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.947 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.947 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.947 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.963 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.963 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.963 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.963 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.978 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.978 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.978 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.978 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:11.994 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:11.994 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:11.994 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:11.994 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:12.009 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.009 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:12.009 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:12.009 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:12.025 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.025 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:12.025 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:12.025 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:12.041 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.041 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:12.041 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:12.041 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:12.056 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.056 [t15812] _ComputeHiddenRect(edge=3 BOTTOM) ENTER this=00000000038D9F50
+11:36:12.056 [t15812] _ComputeHiddenRect LEAVE -> (0,1438)-(3440,1486)
+11:36:12.056 [t15812] GetDockedRect(0) -> 0x3 (0,1438)-(3440,1486)
+11:36:12.058 [t15812] AutoHideChangedOnMonitor(0000000000010083) ENTER [edge=0 LEFT]
+11:36:12.058 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.058 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.058 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:12.058 [t15812] AutoHideChangedOnMonitor(0000000000010083) LEAVE
+11:36:12.058 [t15812] *** SlideWindow LEAVE show=0
+11:36:12.058 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x3   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.738 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:36:15.738 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.739 [t15812] *** SlideWindow show=1 animate=1 [edge=3 BOTTOM] rect=(0,1392)-(3440,1440)
+11:36:15.739 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.739 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.739 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.739 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.832 [t15812] AutoHideChangedOnMonitor(0000000000010083) ENTER [edge=0 LEFT]
+11:36:15.832 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.832 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.832 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.832 [t15812] AutoHideChangedOnMonitor(0000000000010083) LEAVE
+11:36:15.832 [t15812] *** SlideWindow LEAVE show=1
+11:36:15.832 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.834 [t15812] SetAutoHideState(0) LEAVE -> 0x00010001
+11:36:15.834 [t15812] Unhide(flags=0 request=5) ENTER [edge=3 BOTTOM]
+11:36:15.834 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.834 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.834 [t15812] Unhide LEAVE
+11:36:15.834 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.835 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.840 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.844 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.847 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.847 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.872 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.872 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.872 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.872 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.872 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.875 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.891 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.891 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.891 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.891 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.894 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.894 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.894 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.894 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.903 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.903 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.903 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.903 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.903 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.903 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.905 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.916 [t12108] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.918 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.921 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.921 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.921 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.922 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] SetAutoHideState(0) ENTER [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] SetAutoHideFlags(0x0)  ENTER [edge=3 BOTTOM]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] SetAutoHideFlags(0x0)  LEAVE
+11:36:15.930 [t15812] SetAutoHideState(0) LEAVE -> 0x00010000
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.930 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.931 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.931 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.931 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.931 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.933 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.933 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.934 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.934 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.935 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:15.937 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.938 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.938 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.938 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.938 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.938 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:15.938 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:16.137 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:16.137 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:16.137 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:17.224 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:17.224 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:17.224 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.547 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.786 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.786 [t15812] GetDockedRect(0) -> 0x3 (0,1392)-(3440,1440)
+11:36:20.787 [t15812] Unhide(flags=0 request=8) ENTER [edge=3 BOTTOM]
+11:36:20.787 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.787 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.787 [t15812] Unhide LEAVE
+11:36:20.787 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.837 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.837 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:20.837 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:21.045 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:21.045 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:21.045 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
+11:36:21.048 [t15812] GetAutoHideFlags -> 0x0   [edge=48 ?(bad this)]
