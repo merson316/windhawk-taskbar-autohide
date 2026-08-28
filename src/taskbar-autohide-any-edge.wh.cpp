@@ -314,6 +314,42 @@ thread_local bool g_inUnhide = false;
 
 const int kUnhideRequestStateChanged = 9;
 
+// Request 9 is used both for Windows' "state changed, ensure shown" reflex and
+// for a genuine hover reveal, so the code alone cannot tell them apart. The
+// cursor can: a real reveal has it against the docked edge. Checked in-process
+// with GetCursorPos -- no global input hooks.
+bool CursorAtDockedEdge(UINT edge) {
+    POINT pt;
+    if (!GetCursorPos(&pt)) {
+        return false;
+    }
+
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) {
+        return false;
+    }
+
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(tray, MONITOR_DEFAULTTOPRIMARY),
+                         &mi)) {
+        return false;
+    }
+
+    const RECT m = mi.rcMonitor;
+    if (pt.x < m.left || pt.x > m.right || pt.y < m.top || pt.y > m.bottom) {
+        return false;   // not on the taskbar's monitor
+    }
+
+    const LONG tol = 4;
+    switch (edge) {
+        case ABE_LEFT:  return pt.x <= m.left + tol;
+        case ABE_TOP:   return pt.y <= m.top + tol;
+        case ABE_RIGHT: return pt.x >= m.right - tol;
+        default:        return false;
+    }
+}
+
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
@@ -481,10 +517,15 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     // request 1 in the pre-fix traces, and disabling produced request 5 -- so
     // suppressing 9 off-bottom leaves real unhides untouched.
     if (request == kUnhideRequestStateChanged && edge < ABE_BOTTOM &&
-        (UINT)g_desiredFlags & 1) {
-        DiagLog(L"Unhide: suppressing request=9 reflex [edge=%u %s]", edge,
-                EdgeName(edge));
-        return;
+        ((UINT)g_desiredFlags & 1)) {
+        if (CursorAtDockedEdge(edge)) {
+            DiagLog(L"Unhide: request=9 with cursor at edge, allowing reveal");
+        } else {
+            DiagLog(L"Unhide: suppressing request=9 reflex, cursor away "
+                    L"[edge=%u %s]",
+                    edge, EdgeName(edge));
+            return;
+        }
     }
 
     bool prev = g_inUnhide;
