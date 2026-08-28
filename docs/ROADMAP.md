@@ -30,6 +30,22 @@ Reopening means driving the composition visual directly, alongside
 `SharedAnimations::TaskbarCollapseAnimation`. That is a different project, not a
 continuation of this one. `ViewCoordinator` is ruled out as an entry point.
 
+## 2b. Known issue: reveal appears to come from the neighbouring display
+
+With a display beyond the docked edge, the hidden position is mostly on that
+display -- right-docked on a 3440-wide primary hides to `3438-3486`, and
+everything past 3440 is the next monitor. The reveal therefore animates *from*
+the neighbour, which reads as the taskbar flying in from the wrong screen.
+
+Mitigation: set the reveal duration to 25 ms so the movement is imperceptible.
+
+A proper fix means the taskbar not occupying the neighbouring display while
+hidden, which is the same problem as the hide spilling over there. An attempt at
+this is preserved in `research/broken-multimonitor-attempt.wh.cpp`; it ended in a
+loop that flickered the taskbar between three positions and was reverted. The
+one reusable discovery from it: `SetWindowRgn` clips the taskbar's XAML child
+content, where resizing the window does not.
+
 ## 3. Secondary monitor support
 
 Nothing here is exercised yet: `MMTaskbarEnabled` is `0` on the development
