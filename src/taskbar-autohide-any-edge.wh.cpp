@@ -1,9 +1,10 @@
 // ==WindhawkMod==
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
-// @description     Read-only diagnostic. Logs the taskbar auto-hide call chain to a file. Changes no behaviour.
-// @version         0.1.0
+// @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
+// @version         1.0.0
 // @author          merson316
+// @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
 // @compilerOptions -lcomctl32
@@ -117,82 +118,11 @@ bool IsSupportedBuild() {
 
 // ------------------------------------------------------------------- logging
 
-HANDLE g_logFile = INVALID_HANDLE_VALUE;
-CRITICAL_SECTION g_logLock;
-bool g_logLockReady = false;
+// Forward to Windhawk's logging, which is gated on the user enabling it. The
+// investigation build wrote its own file to %LOCALAPPDATA%; a shipped mod
+// should not.
+#define DiagLog(fmt, ...) Wh_Log(fmt, ##__VA_ARGS__)
 
-void DiagLogOpen() {
-    WCHAR base[MAX_PATH];
-    DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) {
-        return;
-    }
-
-    std::wstring path(base);
-    path += L"\\windhawk-autohide-fix.log";
-
-    // FILE_APPEND_DATA plus permissive sharing so the log stays readable from
-    // another process while Explorer holds it open.
-    g_logFile = CreateFileW(
-        path.c_str(), FILE_APPEND_DATA,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-}
-
-void DiagLogClose() {
-    if (g_logFile != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_logFile);
-        g_logFile = INVALID_HANDLE_VALUE;
-    }
-}
-
-void DiagLog(PCWSTR fmt, ...) {
-    if (g_logFile == INVALID_HANDLE_VALUE || !g_logLockReady) {
-        return;
-    }
-
-    WCHAR line[1024];
-
-    SYSTEMTIME st;
-    GetLocalTime(&st);
-
-    int off = swprintf(line, ARRAYSIZE(line), L"%02u:%02u:%02u.%03u [t%5lu] ",
-                       st.wHour, st.wMinute, st.wSecond, st.wMilliseconds,
-                       GetCurrentThreadId());
-    if (off < 0) {
-        return;
-    }
-
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vswprintf(line + off, ARRAYSIZE(line) - off - 3, fmt, ap);
-    va_end(ap);
-    if (n < 0) {
-        return;
-    }
-
-    size_t len = wcslen(line);
-    line[len] = L'\r';
-    line[len + 1] = L'\n';
-    line[len + 2] = L'\0';
-
-    char utf8[2048];
-    int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
-                                    nullptr, nullptr);
-    if (bytes <= 1) {
-        return;
-    }
-
-    EnterCriticalSection(&g_logLock);
-    DWORD written = 0;
-    // bytes includes the NUL terminator; do not write it.
-    WriteFile(g_logFile, utf8, (DWORD)(bytes - 1), &written, nullptr);
-    LeaveCriticalSection(&g_logLock);
-}
-
-// ------------------------------------------------------------- edge accessor
-
-// ABE_LEFT=0, ABE_TOP=1, ABE_RIGHT=2, ABE_BOTTOM=3.
 PCWSTR EdgeName(UINT edge) {
     switch (edge) {
         case 0: return L"LEFT";
@@ -399,15 +329,6 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     return stored;
 }
 
-using TrayUI_GetDesktopModeAutoHide_t = UINT(WINAPI*)(void* pThis);
-TrayUI_GetDesktopModeAutoHide_t TrayUI_GetDesktopModeAutoHide_Original;
-UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
-    UINT ret = TrayUI_GetDesktopModeAutoHide_Original(pThis);
-    UINT edge = CurrentStuckPlace(pThis);
-    DiagLog(L"GetDesktopModeAutoHide -> 0x%X   [edge=%u %s]", ret, edge,
-            EdgeName(edge));
-    return ret;
-}
 
 // 0x3 is not a configuration value, it is the "currently hidden" state:
 // GetDockedRect returns the hidden rect exactly when (flags & 3) == 3. Windows
@@ -569,30 +490,6 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
 
 }
 
-using TrayUI_SetAutoHideState_t = LONG(WINAPI*)(void* pThis, int state);
-TrayUI_SetAutoHideState_t TrayUI_SetAutoHideState_Original;
-LONG WINAPI TrayUI_SetAutoHideState_Hook(void* pThis, int state) {
-    // `this` is adjusted here, so use the tracked edge rather than pThis.
-    if (!g_pretendBottom) {
-        UINT detected = DetectEdgeFromWorkArea();
-        if (detected != 0xFFFFFFFF) {
-            InterlockedExchange(&g_currentEdge, (LONG)detected);
-        }
-    }
-
-    UINT realEdge = (UINT)g_currentEdge;
-
-    // Spoofing GetStuckPlace here was tried and disproved: the gate inside
-    // SetAutoHideState does not read the edge that way. It calls a predicate
-    // which is hooked directly instead -- see AutoHideSuppressed_Hook.
-    DiagLog(L"SetAutoHideState(%d) ENTER [realEdge=%u %s]", state, realEdge,
-            EdgeName(realEdge));
-
-    LONG ret = TrayUI_SetAutoHideState_Original(pThis, state);
-
-    DiagLog(L"SetAutoHideState(%d) LEAVE -> 0x%08X", state, ret);
-    return ret;
-}
 
 using TrayUI_AutoHideChangedOnMonitor_t = void(WINAPI*)(void* pThis,
                                                         HMONITOR monitor);
@@ -610,27 +507,6 @@ void WINAPI TrayUI_AutoHideChangedOnMonitor_Hook(void* pThis,
 
 using TrayUI_ComputeHiddenRect_t = void(WINAPI*)(void* pThis, RECT* rect,
                                                  UINT edge);
-TrayUI_ComputeHiddenRect_t TrayUI_ComputeHiddenRect_Original;
-void WINAPI TrayUI_ComputeHiddenRect_Hook(void* pThis, RECT* rect, UINT edge) {
-    // While spoofing, the caller passes BOTTOM. Restore the true edge so the
-    // taskbar hides towards the edge it is actually docked to.
-    UINT realEdge = (UINT)g_currentEdge;
-    if (g_pretendBottom && edge == ABE_BOTTOM && realEdge != ABE_BOTTOM) {
-        DiagLog(L"_ComputeHiddenRect edge override %u -> %u %s", edge, realEdge,
-                EdgeName(realEdge));
-        edge = realEdge;
-    }
-
-    DiagLog(L"_ComputeHiddenRect(edge=%u %s) ENTER this=%p", edge,
-            EdgeName(edge), pThis);
-    TrayUI_ComputeHiddenRect_Original(pThis, rect, edge);
-    if (rect) {
-        DiagLog(L"_ComputeHiddenRect LEAVE -> (%ld,%ld)-(%ld,%ld)", rect->left,
-                rect->top, rect->right, rect->bottom);
-    } else {
-        DiagLog(L"_ComputeHiddenRect LEAVE -> null rect");
-    }
-}
 
 using TrayUI_GetDockedRect_t = UINT(WINAPI*)(void* pThis, RECT* rect,
                                              int param);
@@ -708,14 +584,6 @@ void WINAPI TrayUI_ShrinkRectToStuckEdge_Hook(void* pThis, RECT* rect,
 
 using TrayUI_GetStuckInfo_t = void(WINAPI*)(void* pThis, RECT* rect,
                                             UINT* edge);
-TrayUI_GetStuckInfo_t TrayUI_GetStuckInfo_Original;
-void WINAPI TrayUI_GetStuckInfo_Hook(void* pThis, RECT* rect, UINT* edge) {
-    TrayUI_GetStuckInfo_Original(pThis, rect, edge);
-    DiagLog(L"GetStuckInfo -> edge=%u %s rect=(%ld,%ld)-(%ld,%ld)",
-            edge ? *edge : 0xFFFFFFFF, EdgeName(edge ? *edge : 0xFFFFFFFF),
-            rect ? rect->left : 0, rect ? rect->top : 0,
-            rect ? rect->right : 0, rect ? rect->bottom : 0);
-}
 
 using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
                                            const RECT* rect, HMONITOR monitor,
@@ -769,21 +637,7 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     DiagLog(L"Unhide LEAVE");
 }
 
-using TrayUI_SetUnhideTimer_t = void(WINAPI*)(void* pThis, LONG a, LONG b);
-TrayUI_SetUnhideTimer_t TrayUI_SetUnhideTimer_Original;
-void WINAPI TrayUI_SetUnhideTimer_Hook(void* pThis, LONG a, LONG b) {
-    DiagLog(L"SetUnhideTimer(%ld, %ld)", a, b);
-    TrayUI_SetUnhideTimer_Original(pThis, a, b);
-}
 
-using TrayUI_AutoHideCollision_t = void(WINAPI*)(void* pThis);
-TrayUI_AutoHideCollision_t TrayUI_AutoHideCollision_Original;
-void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
-    UINT edge = CurrentStuckPlace(pThis);
-    DiagLog(L"_AutoHideCollision ENTER [edge=%u %s]", edge, EdgeName(edge));
-    TrayUI_AutoHideCollision_Original(pThis);
-    DiagLog(L"_AutoHideCollision LEAVE");
-}
 
 // -------------------------------------------------------------- edge watcher
 
@@ -918,16 +772,11 @@ void Wh_ModSettingsChanged() {
 }
 
 BOOL Wh_ModInit() {
-    InitializeCriticalSection(&g_logLock);
-    g_logLockReady = true;
 
-    DiagLogOpen();
 
     if (!IsSupportedBuild()) {
         DiagLog(L"=== UNSUPPORTED BUILD %lu, mod inactive ===", g_buildNumber);
-        g_logLockReady = false;
-        DiagLogClose();
-        return FALSE;
+                return FALSE;
     }
 
     DiagLog(L"=== diag mod init, build %lu, pid %lu ===", g_buildNumber,
@@ -950,9 +799,6 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))", LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
          &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
 
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const)", LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const )"},
-         &TrayUI_GetDesktopModeAutoHide_Original,
-         TrayUI_GetDesktopModeAutoHide_Hook, true},
 
         {{LR"(public: virtual void __cdecl TrayUI::SetStuckPlace(unsigned int))", LR"(public: virtual void __cdecl TrayUI::SetStuckPlace(unsigned int) )"},
          &TrayUI_SetStuckPlace_Original, TrayUI_SetStuckPlace_Hook, true},
@@ -960,23 +806,12 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))", LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int) )"},
          &TrayUI_SetAutoHideFlags_Original, TrayUI_SetAutoHideFlags_Hook, true},
 
-        {{LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int))", LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int) )"},
-         &TrayUI_SetAutoHideState_Original, TrayUI_SetAutoHideState_Hook, true},
 
-        {{LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *))", LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *) )"},
-         &TrayUI_AutoHideChangedOnMonitor_Original,
-         TrayUI_AutoHideChangedOnMonitor_Hook, true},
-        {{LR"(public: void __cdecl TrayUI::_ComputeHiddenRect(struct tagRECT *,unsigned int))", LR"(public: void __cdecl TrayUI::_ComputeHiddenRect(struct tagRECT *,unsigned int) )"},
-         &TrayUI_ComputeHiddenRect_Original, TrayUI_ComputeHiddenRect_Hook, true},
 
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int))", LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int) )"},
          &TrayUI_GetDockedRect_Original, TrayUI_GetDockedRect_Hook, true},
 
-        {{LR"(private: void __cdecl TrayUI::ShrinkRectToStuckEdge(struct tagRECT &,int)const)", LR"(private: void __cdecl TrayUI::ShrinkRectToStuckEdge(struct tagRECT &,int)const )"},
-         &TrayUI_ShrinkRectToStuckEdge_Original, TrayUI_ShrinkRectToStuckEdge_Hook, true},
 
-        {{LR"(public: virtual void __cdecl TrayUI::GetStuckInfo(struct tagRECT *,unsigned int *))", LR"(public: virtual void __cdecl TrayUI::GetStuckInfo(struct tagRECT *,unsigned int *) )"},
-         &TrayUI_GetStuckInfo_Original, TrayUI_GetStuckInfo_Hook, true},
 
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))", LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
          &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
@@ -984,11 +819,7 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))", LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
          &TrayUI_Unhide_Original, TrayUI_Unhide_Hook, true},
 
-        {{LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long))", LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long) )"},
-         &TrayUI_SetUnhideTimer_Original, TrayUI_SetUnhideTimer_Hook, true},
 
-        {{LR"(public: void __cdecl TrayUI::_AutoHideCollision(void))", LR"(public: void __cdecl TrayUI::_AutoHideCollision(void) )"},
-         &TrayUI_AutoHideCollision_Original, TrayUI_AutoHideCollision_Hook, true},
     };
 
     if (!WindhawkUtils::HookSymbols(g_taskbarModule, hooks, ARRAYSIZE(hooks))) {
@@ -1006,18 +837,10 @@ BOOL Wh_ModInit() {
     } checks[] = {
         {L"GetStuckPlace", (void*)TrayUI_GetStuckPlace_Original},
         {L"GetAutoHideFlags", (void*)TrayUI_GetAutoHideFlags_Original},
-        {L"GetDesktopModeAutoHide", (void*)TrayUI_GetDesktopModeAutoHide_Original},
         {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
-        {L"SetAutoHideState", (void*)TrayUI_SetAutoHideState_Original},
-        {L"AutoHideChangedOnMonitor", (void*)TrayUI_AutoHideChangedOnMonitor_Original},
-        {L"_ComputeHiddenRect", (void*)TrayUI_ComputeHiddenRect_Original},
         {L"GetDockedRect", (void*)TrayUI_GetDockedRect_Original},
-        {L"ShrinkRectToStuckEdge", (void*)TrayUI_ShrinkRectToStuckEdge_Original},
-        {L"GetStuckInfo", (void*)TrayUI_GetStuckInfo_Original},
         {L"SlideWindow", (void*)TrayUI_SlideWindow_Original},
         {L"Unhide", (void*)TrayUI_Unhide_Original},
-        {L"SetUnhideTimer", (void*)TrayUI_SetUnhideTimer_Original},
-        {L"_AutoHideCollision", (void*)TrayUI_AutoHideCollision_Original},
     };
 
     int resolvedCount = 0;
@@ -1062,10 +885,33 @@ BOOL Wh_ModInit() {
     DiagLog(L"hooks installed: %d/%d resolved", resolvedCount,
             (int)ARRAYSIZE(checks));
 
-    if (!TrayUI_SetAutoHideState_Original) {
-        DiagLog(L"FATAL: SetAutoHideState unresolved, cannot diagnose");
+    // All-or-nothing: every one of these is load-bearing, and running with any
+    // of them missing would change nothing while appearing to work.
+    struct {
+        PCWSTR name;
+        void* ptr;
+    } required[] = {
+        {L"GetAutoHideFlags", (void*)TrayUI_GetAutoHideFlags_Original},
+        {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
+        {L"GetDockedRect", (void*)TrayUI_GetDockedRect_Original},
+        {L"GetStuckPlace", (void*)TrayUI_GetStuckPlace_Original},
+        {L"SlideWindow", (void*)TrayUI_SlideWindow_Original},
+        {L"Unhide", (void*)TrayUI_Unhide_Original},
+    };
+
+    for (const auto& r : required) {
+        if (!r.ptr) {
+            DiagLog(L"required symbol %s unresolved, mod inactive", r.name);
+            return FALSE;
+        }
+    }
+
+    if (!g_flagsOffsetsVerified) {
+        DiagLog(L"GetAutoHideFlags does not match the decoded form, "
+                L"mod inactive");
         return FALSE;
     }
+
     return TRUE;
 }
 
@@ -1083,12 +929,10 @@ void Wh_ModUninit() {
     // Clear the guard before closing so any hook still in flight on another
     // thread bails out at the top of DiagLog instead of writing to a closed
     // handle.
-    g_logLockReady = false;
 
     // Deliberately NOT DeleteCriticalSection: a hook thread can already be
     // past the guard check and blocked on EnterCriticalSection, and deleting
     // it underneath that thread is undefined behaviour. The section lives for
     // the lifetime of the process; leaking it costs nothing and removes the
     // race entirely.
-    DiagLogClose();
 }

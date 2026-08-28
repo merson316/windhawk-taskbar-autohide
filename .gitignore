@@ -1,3 +1,13 @@
 build/
 *.o
 *.exe
+*.dll
+
+# Symbol dumps derived from Microsoft PDBs. Useful locally, not ours to
+# redistribute, and 40MB+. Regenerate with:
+#   strings -n 8 <Taskbar.pdb> > research/taskbar-pdb-strings.txt
+research/*-pdb-strings.txt
+
+# Verbatim copies of other authors' mods, kept locally for reference only.
+# Fetch from https://github.com/ramensoftware/windhawk-mods instead.
+research/reference-*.wh.cpp
