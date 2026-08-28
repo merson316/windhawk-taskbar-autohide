@@ -50,11 +50,11 @@ The bottom edge is left untouched.
   $description: >-
     0 keeps the Windows default (400 ms). A vertical taskbar covers far less
     screen area than a horizontal one, so the same duration reads as much
-    faster; raise this if the slide is hard to follow.
+    faster; raise this if the slide is hard to follow. Range 25-10000.
 - showDurationMs: 0
   $name: Reveal animation duration (ms)
   $description: >-
-    0 keeps the Windows default (200 ms).
+    0 keeps the Windows default (200 ms). Range 25-10000.
 - revealTolerance: 4
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -94,6 +94,19 @@ struct Settings {
     int showDurationMs = 0;
 } g_settings;
 
+int ClampDuration(int ms) {
+    if (ms <= 0) {
+        return 0;   // 0 means "use the Windows default"
+    }
+    if (ms < 25) {
+        return 25;
+    }
+    if (ms > 10000) {
+        return 10000;
+    }
+    return ms;
+}
+
 void LoadSettings() {
     g_settings.edgeLeft = Wh_GetIntSetting(L"edgeLeft") != 0;
     g_settings.edgeTop = Wh_GetIntSetting(L"edgeTop") != 0;
@@ -103,14 +116,11 @@ void LoadSettings() {
         g_settings.revealTolerance = 4;
     }
 
-    g_settings.hideDurationMs = Wh_GetIntSetting(L"hideDurationMs");
-    g_settings.showDurationMs = Wh_GetIntSetting(L"showDurationMs");
-    if (g_settings.hideDurationMs < 0 || g_settings.hideDurationMs > 5000) {
-        g_settings.hideDurationMs = 0;
-    }
-    if (g_settings.showDurationMs < 0 || g_settings.showDurationMs > 5000) {
-        g_settings.showDurationMs = 0;
-    }
+    // Clamp out-of-range values rather than discarding them: silently turning
+    // an over-large value into "no override" looks identical to the setting
+    // being ignored.
+    g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
+    g_settings.showDurationMs = ClampDuration(Wh_GetIntSetting(L"showDurationMs"));
 }
 
 bool EdgeEnabled(UINT edge) {
@@ -345,18 +355,33 @@ const BYTE kHideDurSig[] = {0x44, 0x8B, 0xB3, 0x68, 0x01, 0x00, 0x00};
 
 bool g_durationOffsetsVerified = false;
 
+// Captured before the first override so the Windows defaults can be put back
+// when a setting returns to 0. Without this the member keeps the last value
+// written and no setting can clear it.
+bool g_defaultDurationsCaptured = false;
+int g_defaultHideDuration = 0;
+int g_defaultShowDuration = 0;
+
 void ApplyDurationOverrides(void* pThis) {
     if (!g_durationOffsetsVerified || !pThis) {
         return;
     }
-    if (g_settings.hideDurationMs > 0) {
-        *(int*)((BYTE*)pThis + SLIDE_HIDE_DURATION_OFFSET) =
-            g_settings.hideDurationMs;
+
+    int* hide = (int*)((BYTE*)pThis + SLIDE_HIDE_DURATION_OFFSET);
+    int* show = (int*)((BYTE*)pThis + SLIDE_SHOW_DURATION_OFFSET);
+
+    if (!g_defaultDurationsCaptured) {
+        g_defaultHideDuration = *hide;
+        g_defaultShowDuration = *show;
+        g_defaultDurationsCaptured = true;
+        Wh_Log(L"captured default slide durations hide=%d show=%d",
+               g_defaultHideDuration, g_defaultShowDuration);
     }
-    if (g_settings.showDurationMs > 0) {
-        *(int*)((BYTE*)pThis + SLIDE_SHOW_DURATION_OFFSET) =
-            g_settings.showDurationMs;
-    }
+
+    *hide = g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs
+                                          : g_defaultHideDuration;
+    *show = g_settings.showDurationMs > 0 ? g_settings.showDurationMs
+                                          : g_defaultShowDuration;
 }
 
 // ------------------------------------------------------------ pointer watcher
