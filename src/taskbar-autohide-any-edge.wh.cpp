@@ -254,6 +254,13 @@ int g_leaveTicks = 0;
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
 // unhide the mod did not issue.
 volatile LONG64 g_holdVisibleUntil = 0;
+volatile LONG64 g_lastNotifyUnhide = 0;
+
+// A flashing taskbar button produces one unhide per flash. Unhides closer
+// together than this belong to the same burst and are treated as one
+// notification, so the taskbar shows once, hides after the hold, and stays
+// hidden while the flashing continues.
+#define NOTIFY_BURST_GAP_MS 5000
 RECT g_lastDockedRect{};
 
 // Set while Windows is unhiding, and while the watcher is calling in.
@@ -390,16 +397,21 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         return;
     }
 
-    if (!g_inWatcherCall) {
-        // Count from the first unhide of a burst, not the last. An app flashing
-        // its taskbar button produces one unhide per flash, and refreshing the
-        // deadline each time keeps the taskbar up for the whole sequence rather
-        // than for the configured hold.
+    if (!g_inWatcherCall && g_settings.notificationHoldMs > 0) {
         LONG64 now = (LONG64)GetTickCount64();
-        LONG64 current = InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0);
-        if (now >= current) {
+        LONG64 last = InterlockedExchange64(&g_lastNotifyUnhide, now);
+
+        if (now - last > NOTIFY_BURST_GAP_MS) {
+            // A new notification: show it for the configured hold.
             InterlockedExchange64(&g_holdVisibleUntil,
                                   now + g_settings.notificationHoldMs);
+        } else if (now >= InterlockedCompareExchange64(&g_holdVisibleUntil, 0,
+                                                       0) &&
+                   edge < ABE_BOTTOM && EdgeEnabled(edge) &&
+                   !CursorAtRevealStrip(edge)) {
+            // Same burst, already shown for its hold, and the pointer is not
+            // at the edge: keep it hidden rather than flashing it back up.
+            return;
         }
     }
 
