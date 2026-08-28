@@ -383,6 +383,11 @@ bool g_subclassed = false;
 int g_leaveTicks = 0;
 ULONGLONG g_dwellStart = 0;
 
+// The docked edge can change under us. Every cached rect and hidden-state flag
+// describes the edge it was captured on, so they must all be discarded when it
+// moves, or a reveal restores the taskbar to the previous edge's geometry.
+UINT g_lastKnownEdge = 0xFFFFFFFF;
+
 // Windows unhides the taskbar itself for notifications and flashing buttons.
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
 // unhide the mod did not issue.
@@ -767,6 +772,28 @@ void WatcherTick() {
     UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
+    }
+
+    if (edge != g_lastKnownEdge) {
+        DbgLog(L"edge changed %u -> %u: discarding cached state",
+               g_lastKnownEdge, edge);
+        g_lastKnownEdge = edge;
+
+        // If the taskbar was hidden outright on the old edge, make it visible
+        // again: the position it was hidden at means nothing now.
+        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1 &&
+            g_trayWnd) {
+            ShowWindow(g_trayWnd, SW_SHOWNA);
+        }
+        InterlockedExchange(&g_clipHold, 0);
+        InterlockedExchange(&g_animOverride, 0);
+        InterlockedExchange(&g_animRequested, 0);
+        g_dockedBeforeHide = RECT{};
+        g_lastDockedRect = RECT{};
+        g_clipRect = RECT{};
+        g_leaveTicks = 0;
+        g_dwellStart = 0;
+        return;   // resume next tick with clean state
     }
 
     UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
