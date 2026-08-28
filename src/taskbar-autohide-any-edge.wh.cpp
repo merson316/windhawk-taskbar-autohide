@@ -186,6 +186,9 @@ TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
 TrayUI_Unhide_t TrayUI_Unhide_Original;
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
+// Resolved without hooking, so it points at the real function body. Reading the
+// signature from _Original would read Windhawk's trampoline instead.
+TrayUI_SlideWindow_t TrayUI_SlideWindow_Address;
 
 bool g_offsetsVerified = false;
 
@@ -197,6 +200,7 @@ HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
 bool g_timerSet = false;
 int g_leaveTicks = 0;
+RECT g_lastDockedRect{};
 
 // Set while Windows is unhiding, and while the watcher is calling in.
 thread_local bool g_inUnhide = false;
@@ -412,6 +416,8 @@ void WatcherTick() {
         return;
     }
 
+    g_lastDockedRect = docked;   // remembered so unload can restore it
+
     if (PtInRect(&docked, pt) || GetForegroundWindow() == g_trayWnd) {
         g_leaveTicks = 0;
         return;
@@ -512,6 +518,10 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
          &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
+          LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
+         &TrayUI_SlideWindow_Address, nullptr, true},
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
@@ -540,13 +550,15 @@ BOOL Wh_ModInit() {
         }
     }
 
-    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Original;
+    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Address;
     g_durationOffsetsVerified =
         memcmp(slide + kShowDurSigOffset, kShowDurSig, sizeof(kShowDurSig)) ==
             0 &&
         memcmp(slide + kHideDurSigOffset, kHideDurSig, sizeof(kHideDurSig)) == 0;
     if (!g_durationOffsetsVerified) {
         Wh_Log(L"slide duration offsets unverified, durations left alone");
+    } else {
+        Wh_Log(L"slide duration offsets verified");
     }
 
     const BYTE* sig = (const BYTE*)TrayUI_GetAutoHideFlags_Original + kSigOffset;
@@ -569,6 +581,43 @@ BOOL Wh_ModInit() {
     }
 
     return TRUE;
+}
+
+// Unloading while the taskbar is hidden would strand it off-screen: Windows
+// stops believing auto-hide is active, so nothing brings it back. Restore it
+// before the hooks go away, using only plain Win32 from whichever thread this
+// runs on -- calling TrayUI methods cross-thread is what crashed an earlier
+// build.
+void RestoreTaskbarIfHidden() {
+    if (!g_trayUI || !g_offsetsVerified || !g_trayWnd) {
+        return;
+    }
+
+    UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
+    if (edge >= ABE_BOTTOM) {
+        return;
+    }
+
+    UINT* flags = (UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+    if (!(*flags & ABS_AUTOHIDE) || !(*flags & ABS_ALWAYSONTOP)) {
+        return;   // not hidden
+    }
+
+    *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
+
+    if (g_lastDockedRect.right > g_lastDockedRect.left) {
+        SetWindowPos(g_trayWnd, nullptr, g_lastDockedRect.left,
+                     g_lastDockedRect.top,
+                     g_lastDockedRect.right - g_lastDockedRect.left,
+                     g_lastDockedRect.bottom - g_lastDockedRect.top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+
+    PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
+}
+
+void Wh_ModBeforeUninit() {
+    RestoreTaskbarIfHidden();
 }
 
 void Wh_ModUninit() {
