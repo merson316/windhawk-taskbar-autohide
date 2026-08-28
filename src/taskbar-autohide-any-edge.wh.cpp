@@ -6,6 +6,7 @@
 // @author          merson316
 // @include         explorer.exe
 // @architecture    x86-64
+// @compilerOptions -lcomctl32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -260,6 +261,11 @@ UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
     return ret;
 }
 
+// Defined below in the hide driver section.
+extern void* g_trayUI;
+void EngageDriver();
+void DisengageDriver();
+
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
@@ -269,10 +275,19 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     }
     InterlockedExchange(&g_desiredFlags, (LONG)flags);
 
+    // `this` is unadjusted here; the driver needs a real TrayUI instance.
+    g_trayUI = pThis;
+
     DiagLog(L"SetAutoHideFlags(0x%X)  ENTER [edge=%u %s]", flags, edge,
             EdgeName(edge));
     TrayUI_SetAutoHideFlags_Original(pThis, flags);
     DiagLog(L"SetAutoHideFlags(0x%X)  LEAVE", flags);
+
+    if ((flags & 1) && edge <= 3 && edge != ABE_BOTTOM) {
+        EngageDriver();
+    } else if (!(flags & 1)) {
+        DisengageDriver();
+    }
 }
 
 using TrayUI_SetAutoHideState_t = LONG(WINAPI*)(void* pThis, int state);
@@ -485,6 +500,185 @@ bool HookAutoHideGate(HMODULE module) {
     return true;
 }
 
+// ------------------------------------------------------------- hide driver
+
+// Windows engages the auto-hide state correctly off-bottom (the reserved work
+// area is released) and its unhide machinery works, but nothing ever issues
+// the hide slide. The decision that stops it lives several levels down in the
+// XAML/TaskbarHost layer and has not been located yet. Until it is, the mod
+// supplies the missing slide itself using the shell's own primitives, so
+// Windows keeps doing everything it already does correctly.
+
+#define AUTOHIDE_TIMER_ID   0x57484148   // 'WHAH'
+#define AUTOHIDE_TICK_MS    100
+#define AUTOHIDE_IDLE_TICKS 5            // ~500 ms outside before hiding
+#define AUTOHIDE_REVEAL_PX  2            // cursor within N px of the edge
+
+void* g_trayUI = nullptr;                // real (unadjusted) TrayUI instance
+HWND g_trayWnd = nullptr;
+bool g_driverEngaged = false;
+bool g_isHidden = false;
+int g_idleTicks = 0;
+
+bool GetTrayMonitorRect(RECT* out) {
+    if (!g_trayWnd) {
+        return false;
+    }
+    HMONITOR mon = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi)) {
+        return false;
+    }
+    *out = mi.rcMonitor;
+    return true;
+}
+
+bool CursorAtEdge(POINT pt, UINT edge) {
+    RECT m;
+    if (!GetTrayMonitorRect(&m)) {
+        return false;
+    }
+    if (pt.x < m.left || pt.x > m.right || pt.y < m.top || pt.y > m.bottom) {
+        return false;   // not on the taskbar's monitor
+    }
+    switch (edge) {
+        case ABE_LEFT:   return pt.x <= m.left + AUTOHIDE_REVEAL_PX;
+        case ABE_TOP:    return pt.y <= m.top + AUTOHIDE_REVEAL_PX;
+        case ABE_RIGHT:  return pt.x >= m.right - AUTOHIDE_REVEAL_PX - 1;
+        case ABE_BOTTOM: return pt.y >= m.bottom - AUTOHIDE_REVEAL_PX - 1;
+        default:         return false;
+    }
+}
+
+void DriveHide() {
+    if (!g_trayUI || !g_trayWnd || !TrayUI_ComputeHiddenRect_Original ||
+        !TrayUI_SlideWindow_Original) {
+        return;
+    }
+
+    UINT edge = (UINT)g_currentEdge;
+    RECT hidden{};
+    TrayUI_ComputeHiddenRect_Original(g_trayUI, &hidden, edge);
+
+    HMONITOR mon = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
+    DiagLog(L"DRIVER: hiding to (%ld,%ld)-(%ld,%ld) edge=%u %s", hidden.left,
+            hidden.top, hidden.right, hidden.bottom, edge, EdgeName(edge));
+
+    TrayUI_SlideWindow_Original(g_trayUI, g_trayWnd, &hidden, mon, false, true);
+    g_isHidden = true;
+}
+
+void DriveShow() {
+    if (!g_trayUI || !g_trayWnd || !TrayUI_GetDockedRect_Original ||
+        !TrayUI_SlideWindow_Original) {
+        return;
+    }
+
+    RECT docked{};
+    TrayUI_GetDockedRect_Original(g_trayUI, &docked, 0);
+
+    HMONITOR mon = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
+    DiagLog(L"DRIVER: showing to (%ld,%ld)-(%ld,%ld)", docked.left, docked.top,
+            docked.right, docked.bottom);
+
+    TrayUI_SlideWindow_Original(g_trayUI, g_trayWnd, &docked, mon, true, true);
+    g_isHidden = false;
+    g_idleTicks = 0;
+}
+
+void DriverTick() {
+    if (!g_driverEngaged || !g_trayUI) {
+        return;
+    }
+
+    UINT edge = (UINT)g_currentEdge;
+    if (edge == ABE_BOTTOM) {
+        return;   // bottom works natively; never drive it
+    }
+
+    POINT pt{};
+    if (!GetCursorPos(&pt)) {
+        return;
+    }
+
+    if (g_isHidden) {
+        if (CursorAtEdge(pt, edge)) {
+            DriveShow();
+        }
+        return;
+    }
+
+    // Do not hide while the taskbar itself is the active window, which covers
+    // Start being open and the taskbar having focus.
+    HWND fg = GetForegroundWindow();
+    if (fg == g_trayWnd) {
+        g_idleTicks = 0;
+        return;
+    }
+
+    RECT docked{};
+    if (TrayUI_GetDockedRect_Original) {
+        TrayUI_GetDockedRect_Original(g_trayUI, &docked, 0);
+    }
+
+    if (PtInRect(&docked, pt)) {
+        g_idleTicks = 0;
+        return;
+    }
+
+    if (++g_idleTicks >= AUTOHIDE_IDLE_TICKS) {
+        g_idleTicks = 0;
+        DriveHide();
+    }
+}
+
+LRESULT CALLBACK TraySubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam,
+                                  LPARAM lParam, DWORD_PTR dwRefData) {
+    if (uMsg == WM_TIMER && wParam == AUTOHIDE_TIMER_ID) {
+        DriverTick();
+        return 0;
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+void EngageDriver() {
+    if (g_driverEngaged) {
+        return;
+    }
+    if (!g_trayWnd) {
+        g_trayWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    }
+    if (!g_trayWnd) {
+        DiagLog(L"DRIVER: no Shell_TrayWnd, cannot engage");
+        return;
+    }
+
+    WindhawkUtils::SetWindowSubclassFromAnyThread(g_trayWnd, TraySubclassProc,
+                                                  0);
+    SetTimer(g_trayWnd, AUTOHIDE_TIMER_ID, AUTOHIDE_TICK_MS, nullptr);
+    g_driverEngaged = true;
+    g_idleTicks = 0;
+    g_isHidden = false;
+    DiagLog(L"DRIVER: engaged on hwnd %p", (void*)g_trayWnd);
+}
+
+void DisengageDriver() {
+    if (!g_driverEngaged) {
+        return;
+    }
+    if (g_isHidden) {
+        DriveShow();
+    }
+    if (g_trayWnd) {
+        KillTimer(g_trayWnd, AUTOHIDE_TIMER_ID);
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
+                                                         TraySubclassProc);
+    }
+    g_driverEngaged = false;
+    DiagLog(L"DRIVER: disengaged");
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
@@ -621,6 +815,8 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModUninit() {
+    DisengageDriver();
+
     DiagLog(L"=== diag mod uninit ===");
 
     // Clear the guard before closing so any hook still in flight on another
