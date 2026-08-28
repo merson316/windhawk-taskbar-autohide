@@ -100,6 +100,15 @@ or the other, not both, since they hook the same function.
 
     Raise it if the taskbar keeps reappearing during a single notification.
     Lower it if two genuinely separate notifications get merged into one.
+- selfAnimate: true
+  $name: EXPERIMENT - animate from our own thread
+  $description: >-
+    SlideWindow runs its animation loop on the taskbar's own UI thread, which
+    blocks the thread that would repaint it. This steps the window from a
+    separate thread instead, leaving the taskbar free to render while it moves.
+
+    If the slide becomes visible with this on, the blocked UI thread was the
+    reason it never was.
 - halfHideProbe: false
   $name: PROBE - park the taskbar half off-screen
   $description: >-
@@ -201,6 +210,7 @@ struct Settings {
     int revealTolerance = 8;
     int notificationHoldMs = 1500;
     bool halfHideProbe = false;
+    bool selfAnimate = true;
     int notificationBurstGapMs = 5000;
     int hideDurationMs = 0;
     int showDurationMs = 0;
@@ -245,13 +255,16 @@ void LoadSettings() {
     }
 
     g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
+    g_settings.selfAnimate = Wh_GetIntSetting(L"selfAnimate") != 0;
     g_settings.notificationBurstGapMs =
         Wh_GetIntSetting(L"notificationBurstGapMs");
     if (g_settings.notificationBurstGapMs < 0) {
         g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
+    g_settings.selfAnimate = Wh_GetIntSetting(L"selfAnimate") != 0;
     g_settings.notificationBurstGapMs = 0;
     } else if (g_settings.notificationBurstGapMs > 60000) {
         g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
+    g_settings.selfAnimate = Wh_GetIntSetting(L"selfAnimate") != 0;
     g_settings.notificationBurstGapMs = 60000;
     }
 
@@ -568,6 +581,43 @@ void ApplyDurationOverrides(void* pThis) {
                                           : g_defaultHideDuration;
     *show = g_settings.showDurationMs > 0 ? g_settings.showDurationMs
                                           : g_defaultShowDuration;
+}
+
+// --------------------------------------------------------- self-driven slide
+
+// SlideWindow animates on the taskbar's own UI thread, so the thread that would
+// repaint the taskbar is blocked for the whole animation -- measured directly:
+// a 3000 ms duration freezes the shell for 3 seconds. The window moves in
+// smooth steps but nothing draws it at the intermediate positions.
+//
+// Step it from the watch thread instead and leave the UI thread free.
+
+volatile LONG g_animRequested = 0;
+RECT g_animFrom{}, g_animTo{};
+int g_animDurationMs = 400;
+
+void RunSelfAnimation() {
+    RECT from = g_animFrom, to = g_animTo;
+    int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
+
+    ULONGLONG start = GetTickCount64();
+    for (;;) {
+        ULONGLONG elapsed = GetTickCount64() - start;
+        if (elapsed >= (ULONGLONG)ms) {
+            break;
+        }
+        double t = (double)elapsed / ms;
+        LONG x = from.left + (LONG)((to.left - from.left) * t);
+        LONG y = from.top + (LONG)((to.top - from.top) * t);
+        SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        Sleep(16);
+    }
+
+    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    ExpLog(L"self-animation done: (%ld,%ld) -> (%ld,%ld) over %d ms",
+           from.left, from.top, to.left, to.top, ms);
 }
 
 // ------------------------------------------------------ position enforcement
@@ -887,6 +937,10 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 
 DWORD WINAPI WatchThreadProc(LPVOID) {
     while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+        if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
+            RunSelfAnimation();
+        }
+
         if (g_trayWnd && g_watchMsg) {
             PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
         }
