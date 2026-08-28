@@ -299,12 +299,16 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     // unless a layout pass happens, which is why the taskbar stayed parked at
     // the hidden rect while remaining clickable through its 2px sliver. Nudge
     // one on each transition.
+    // Do NOT clear the hidden bit on hover. Unhide inspects this value to
+    // decide whether there is anything to reveal: reporting "already shown"
+    // made it a no-op, which is why hovering produced Unhide(request=8) and
+    // (request=18) that slid nothing, while the one successful reveal happened
+    // when the cursor had left and the true hidden state was reported.
+    //
+    // Report the truth and let Unhide clear the bit itself via
+    // SetAutoHideFlags(0x1), which the in-unhide passthrough leaves untouched.
     bool atEdge = CursorAtDockedEdge(edge);
     NudgeTaskbarRelayout(atEdge);
-
-    if ((stored & 3) == 3 && atEdge) {
-        return stored & ~2u;
-    }
 
     if (stored != ret) {
         DiagLog(L"GetAutoHideFlags: stored 0x%X, masked to 0x%X [edge=%u %s]",
