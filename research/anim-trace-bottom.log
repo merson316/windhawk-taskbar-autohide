@@ -1,0 +1,10 @@
+13:45:35.435 === anim diag uninit ===
+13:45:35.457 === anim diag init, view module at 00007FFFCF630000 ===
+13:45:35.457 anim hooks: collapse=00007FFFCF6B6DC4 collapseDelayed=00007FFFCFD56DB4 expand=00007FFFCF6B6E80
+13:45:35.503 slide hook: 00007FFFE39AF060
+13:45:45.541 SlideWindow show=1 animate=1 durations hide=400 show=200 sysAnim=1 [workarea edge=4294967295]
+13:45:46.252 SlideWindow show=0 animate=1 durations hide=400 show=200 sysAnim=1 [workarea edge=4294967295]
+13:45:47.250 SlideWindow show=1 animate=1 durations hide=400 show=200 sysAnim=1 [workarea edge=4294967295]
+13:45:47.954 SlideWindow show=0 animate=1 durations hide=400 show=200 sysAnim=1 [workarea edge=4294967295]
+13:45:49.090 SlideWindow show=1 animate=1 durations hide=400 show=200 sysAnim=1 [workarea edge=4294967295]
+13:45:49.808 SlideWindow show=0 animate=1 durations hide=400 show=200 sysAnim=1 [workarea edge=4294967295]
