@@ -383,6 +383,11 @@ bool g_subclassed = false;
 int g_leaveTicks = 0;
 ULONGLONG g_dwellStart = 0;
 
+// The monitor the taskbar belongs to, remembered while it is docked. Once
+// hidden the window can sit mostly over a neighbouring display, so asking which
+// monitor it currently overlaps gives the wrong answer.
+RECT g_ownMonitor{};
+
 // The docked edge can change under us. Every cached rect and hidden-state flag
 // describes the edge it was captured on, so they must all be discarded when it
 // moves, or a reveal restores the taskbar to the previous edge's geometry.
@@ -751,6 +756,12 @@ void RunHideAnimation() {
     }
 
 
+    if (from.left == to.left && from.top == to.top) {
+        DbgLog(L"hide anim: already at the target, nothing to animate");
+        InterlockedExchange(&g_animOverride, 0);
+        return;
+    }
+
     const ULONGLONG start = GetTickCount64();
     for (;;) {
         const ULONGLONG elapsed = GetTickCount64() - start;
@@ -890,9 +901,10 @@ void WatcherTick() {
         // Believed hidden. Check that against the window before trusting it:
         // if most of the window is on screen it is plainly visible and the flag
         // is stale, which otherwise deadlocks here forever, silently.
-        RECT actual{}, mon{};
-        if (g_trayWnd && GetWindowRect(g_trayWnd, &actual) &&
-            TrayMonitorRect(&mon)) {
+        RECT actual{};
+        RECT mon = g_ownMonitor;
+        const bool haveOwn = mon.right > mon.left;
+        if (g_trayWnd && haveOwn && GetWindowRect(g_trayWnd, &actual)) {
             RECT overlap{};
             const LONG w = actual.right - actual.left;
             const LONG h = actual.bottom - actual.top;
@@ -977,6 +989,16 @@ void WatcherTick() {
     }
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
+
+    // Docked, so this is genuinely the taskbar's own monitor.
+    {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        HMONITOR own = MonitorFromRect(&docked, MONITOR_DEFAULTTONEAREST);
+        if (own && GetMonitorInfoW(own, &mi)) {
+            g_ownMonitor = mi.rcMonitor;
+        }
+    }
 
     const bool overBar = PtInRect(&docked, pt) != FALSE;
     const HWND fg = GetForegroundWindow();
