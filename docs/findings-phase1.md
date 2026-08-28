@@ -225,3 +225,34 @@ control to compare against. That is the practice worth keeping.
 `GetCurrentThread` / `GetThreadPriority` / `SetThreadPriority` to raise
 priority, then `GetTickCount` with `SetWindowPos` steps. It is not a compositor
 animation, so DWM-level approaches do not apply.
+
+## The slide blocks the shell
+
+`SlideWindow`'s animation is a synchronous loop on the taskbar's UI thread:
+raise thread priority, then step the window with `SetWindowPos` against
+`GetTickCount` until the duration elapses. The mod calls it from the watcher, so
+**the animation duration is also how long the taskbar is frozen**.
+
+Observed directly by varying `hideDurationMs`:
+
+| Setting | Behaviour |
+|---|---|
+| 3000 ms | Taskbar vanishes without repainting, then ignores the pointer for 3 s |
+| 25 ms | Reveal is instant |
+
+The "vanish" is the absence of repaints while the thread is blocked, and the
+unresponsive period is the block itself. This makes the duration knob
+self-limiting, so it is capped at 600 ms. A longer, genuinely smooth animation
+would require driving the movement asynchronously rather than calling
+`SlideWindow`, which is a much larger change and is not worth it: the animation
+already matches the bottom edge exactly at default settings.
+
+## WM_TIMER starvation
+
+The watcher originally ran on `WM_TIMER`, which Windows only delivers when the
+thread's message queue is empty. Hovering the taskbar generates a continuous
+stream of mouse messages, so the timer was starved precisely when the reveal
+needed to fire -- the reveal felt sticky while the hide, with the pointer away
+and the queue quiet, always felt responsive. Replaced with a worker thread
+posting an ordinary registered message, which is not deprioritised, while the
+work still runs on the taskbar's thread.
