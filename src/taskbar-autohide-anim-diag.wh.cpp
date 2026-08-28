@@ -174,6 +174,19 @@ void WINAPI SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
     bool sameRect = rect && cur.left == rect->left && cur.top == rect->top &&
                     cur.right == rect->right && cur.bottom == rect->bottom;
 
+    // The remaining animation gate is a virtual call at vtable+0x360 whose zero
+    // return skips the animation. Report its address as an RVA so it can be
+    // identified in the binary.
+    static bool loggedSlot = false;
+    if (!loggedSlot && pThis) {
+        loggedSlot = true;
+        void** vtable = *(void***)pThis;
+        void* fn = vtable[0x360 / sizeof(void*)];
+        HMODULE tb = GetModuleHandleW(L"taskbar.dll");
+        Log(L"animation gate: vtable+0x360 -> %p  (taskbar.dll+0x%X)", fn,
+            tb ? (unsigned)((BYTE*)fn - (BYTE*)tb) : 0u);
+    }
+
     Log(L"SlideWindow show=%d animate=%d dur(h=%d,s=%d) sysAnim=%d "
         L"from(%ld,%ld)-(%ld,%ld) to(%ld,%ld)-(%ld,%ld) same=%d",
         (int)show, (int)animate, hideMs, showMs, (int)sysAnim, cur.left,
