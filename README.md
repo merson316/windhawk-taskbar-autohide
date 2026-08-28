@@ -58,7 +58,7 @@ Compile → Enable.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Enable on the left / top / right edge | on | Which edges the mod drives auto-hide on. The bottom edge is never touched, since Windows already handles it. |
+| Skip edges facing another display | on | Leaves an edge alone when a monitor sits beyond it, since there is nowhere off-screen to hide into. The bottom edge is never touched, as Windows already handles it. |
 | Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
 | Notifications - treat as one within | 5000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
@@ -74,9 +74,7 @@ With `Notifications - keep visible for` set above 0, the taskbar appears once,
 stays for that long, then hides again and stays hidden for the rest of the
 flashing. Moving the pointer to the edge still reveals it at any time.
 
-This works on **every** edge including the bottom, and is independent of the
-per-edge switches -- those decide where the mod drives auto-hide, not how
-notifications are handled. It replaces [Better Taskbar
+This works on **every** edge including the bottom. It replaces [Better Taskbar
 Autohide](https://windhawk.net/mods/taskbar-autohide-better); run one or the
 other, never both, as they hook the same function.
 

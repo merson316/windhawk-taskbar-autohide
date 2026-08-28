@@ -38,8 +38,7 @@ it for `notificationHoldMs` (1500 ms by default), then lets it hide and stay
 hidden for the rest of the flashing.
 
 This works on every edge, including the bottom, and is independent of the
-per-edge toggles above -- those govern which edges the mod drives auto-hide on,
-not notification handling.
+edge the taskbar is docked to, including the bottom.
 
 That makes Cirn09's [Better Taskbar
 Autohide](https://windhawk.net/mods/taskbar-autohide-better) redundant; run one
@@ -60,21 +59,6 @@ or the other, not both, since they hook the same function.
 
 // ==WindhawkModSettings==
 /*
-- edgeLeft: true
-  $name: Enable on the left edge
-  $description: >-
-    Automatically skipped while another display sits beyond this edge, since
-    there is nowhere off-screen to hide into.
-- edgeTop: true
-  $name: Enable on the top edge
-  $description: >-
-    Automatically skipped while another display sits beyond this edge, since
-    there is nowhere off-screen to hide into.
-- edgeRight: true
-  $name: Enable on the right edge
-  $description: >-
-    Automatically skipped while another display sits beyond this edge, since
-    there is nowhere off-screen to hide into.
 - skipAdjacentEdges: true
   $name: Skip edges facing another display
   $description: >-
@@ -102,7 +86,7 @@ or the other, not both, since they hook the same function.
     shows once, stays for this long, then hides for the rest of the flashing.
 
     Set to 0 to turn notification handling off. Applies on every edge,
-    including the bottom, whatever the per-edge switches say.
+    including the bottom.
 - notificationBurstGapMs: 5000
   $name: Notifications - treat as one within (ms)
   $description: >-
@@ -161,9 +145,6 @@ volatile LONG g_watchStop = 0;
 // ------------------------------------------------------------------ settings
 
 struct Settings {
-    bool edgeLeft = true;
-    bool edgeTop = true;
-    bool edgeRight = true;
     bool skipAdjacentEdges = true;
     int revealTolerance = 8;
     int revealDwellMs = 120;
@@ -187,9 +168,6 @@ int ClampDuration(int ms) {
 }
 
 void LoadSettings() {
-    g_settings.edgeLeft = Wh_GetIntSetting(L"edgeLeft") != 0;
-    g_settings.edgeTop = Wh_GetIntSetting(L"edgeTop") != 0;
-    g_settings.edgeRight = Wh_GetIntSetting(L"edgeRight") != 0;
     g_settings.skipAdjacentEdges =
         Wh_GetIntSetting(L"skipAdjacentEdges") != 0;
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
@@ -280,15 +258,11 @@ bool EdgeFacesDisplay(UINT edge) {
 }
 
 bool EdgeEnabled(UINT edge) {
-    bool on;
-    switch (edge) {
-        case ABE_LEFT:  on = g_settings.edgeLeft;  break;
-        case ABE_TOP:   on = g_settings.edgeTop;   break;
-        case ABE_RIGHT: on = g_settings.edgeRight; break;
-        default:        return false;   // bottom works natively
+    if (edge >= ABE_BOTTOM) {
+        return false;   // bottom works natively
     }
 
-    return on && !(g_settings.skipAdjacentEdges && EdgeFacesDisplay(edge));
+    return !(g_settings.skipAdjacentEdges && EdgeFacesDisplay(edge));
 }
 
 PCWSTR EdgeName(UINT edge) {
@@ -531,8 +505,7 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
             // Same burst, already shown for its hold, and the pointer is not at
             // the edge: keep it hidden rather than flashing it back up. Applies
             // on every edge including the bottom, where Windows drives the
-            // hiding itself -- the per-edge toggles govern auto-hide driving,
-            // not notification handling.
+            // hiding itself.
             return;
         }
     }
