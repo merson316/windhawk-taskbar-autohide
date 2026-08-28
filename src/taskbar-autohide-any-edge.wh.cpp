@@ -704,8 +704,19 @@ void RunHideAnimation() {
            to.top, to.right, to.bottom, mon.left, mon.top, mon.right,
            mon.bottom, (int)haveMon, (int)spills, (int)clip);
 
-    const LONG w = from.right - from.left;
-    const LONG h = from.bottom - from.top;
+    if (clip) {
+        // Nowhere to slide to: every position beyond this edge is on the
+        // neighbouring display, and the taskbar's content renders past any clip
+        // we apply, so animating would just play the slide over there. Hide it
+        // outright instead.
+        DbgLog(L"hide anim: no off-screen space, hiding window without a slide");
+        InterlockedExchange(&g_clipHold, 0);
+        InterlockedExchange(&g_windowHidden, 1);
+        ShowWindow(g_trayWnd, SW_HIDE);
+        InterlockedExchange(&g_animOverride, 0);
+        return;
+    }
+
 
     const ULONGLONG start = GetTickCount64();
     for (;;) {
@@ -717,44 +728,14 @@ void RunHideAnimation() {
         LONG x = from.left + (LONG)((to.left - from.left) * t);
         LONG y = from.top + (LONG)((to.top - from.top) * t);
 
-        if (clip) {
-            LONG cw = w, ch = h;
-            if (x + w > mon.right) { cw = mon.right - x; }
-            if (y + h > mon.bottom) { ch = mon.bottom - y; }
-            if (x < mon.left) { cw = w - (mon.left - x); x = mon.left; }
-            if (y < mon.top) { ch = h - (mon.top - y); y = mon.top; }
-            if (cw < 1) { cw = 1; }
-            if (ch < 1) { ch = 1; }
-            SetWindowPos(g_trayWnd, nullptr, x, y, cw, ch,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
-        } else {
-            SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
-                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        }
+        SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         Sleep(16);
     }
 
-    if (clip) {
-        // Finish as a sliver at the edge, still on its own monitor.
-        const LONG sliver = 2;
-        LONG fx = to.left, fy = to.top, fw = w, fh = h;
-        if (to.left + w > mon.right) { fx = mon.right - sliver; fw = sliver; }
-        if (to.top + h > mon.bottom) { fy = mon.bottom - sliver; fh = sliver; }
-        // A 2 px sliver is not enough: the XAML content lives in a child
-        // window that keeps its own size and renders past the shrunken parent,
-        // so it still appears on the neighbouring display. With nowhere to hide
-        // into, hide the window outright. The watcher polls the pointer, so it
-        // does not need a visible sliver to detect the reveal.
-        DbgLog(L"hide anim: no off-screen space, hiding window outright");
-        g_clipRect = RECT{fx, fy, fx + fw, fy + fh};
-        InterlockedExchange(&g_clipHold, 0);
-        InterlockedExchange(&g_windowHidden, 1);
-        ShowWindow(g_trayWnd, SW_HIDE);
-    } else {
-        InterlockedExchange(&g_clipHold, 0);
-        SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
-                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    }
+    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
     InterlockedExchange(&g_animOverride, 0);
 }
 
