@@ -14,31 +14,24 @@ The reveal trigger and stay-visible test are already written generically against
 rect for the left edge is `(-46,0)-(2,1440)` on a the primary display display -- a 2px
 sliver. Confirm the equivalent on the other edges rather than assuming symmetry.
 
-## 2. Show and hide animation - IN PROGRESS
+## 2. Show and hide animation - CLOSED, blocked by design
 
-Investigated and closed. The slide animation already runs correctly off-bottom:
-identical duration, step count, spacing, flags and interpolation to the bottom
-edge. The perceived difference is geometric -- a vertical taskbar sweeps 48 px
-of screen area where a horizontal one sweeps 3440 px, so the same motion reads
-as much faster.
+The window slide itself works off-bottom and is configurable. What cannot be
+done through this path is making it *visible*, and that is now demonstrated
+rather than assumed:
 
-`hideDurationMs` / `showDurationMs` settings were added and verified to work --
-600 ms produces a measured 625 ms slide in 20 steps -- but they make no visible
-difference, because the taskbar's rendered content disappears at the state
-change before the slide starts. The window animates while already empty.
+- Setting the hidden flag before the slide drops the rendered content, so an
+  empty window animates.
+- Setting it after the slide leaves the window unable to stay off-screen --
+  measured, it completes 13 steps toward the hidden rect and finishes back at
+  the docked rect, because Windows enforces the position the flags imply.
 
-Their practical use is the opposite of the original intent: a low value such as
-25 ms makes the hide effectively instant, which avoids freezing the shell, since
-the slide runs synchronously on the taskbar's UI thread.
+The flag is both required for the move and fatal to the visuals. Reopening this
+means keeping the content drawn while the flag says hidden, which is the XAML
+layer in `Taskbar.View.dll`, not `SlideWindow`. `ViewCoordinator` is ruled out.
 
-The content disappearing is caused by the mod's own ordering, not by a Windows
-limitation: setting the hidden flag drops the rendered content, and the slide
-then animates an empty window. The current build sets the flag only long enough
-to read the hidden rect, restores it so the content keeps drawing, slides, and
-marks it hidden afterwards. Whether the content survives that is being tested.
-
-See `docs/findings-phase1.md` for the measurements and the hypotheses ruled
-out.
+`src/taskbar-autohide-anim-experiment.wh.cpp` preserves the second test. See
+`docs/findings-phase1.md`.
 
 ## 3. Secondary monitor support
 

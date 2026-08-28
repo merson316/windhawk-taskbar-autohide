@@ -324,3 +324,34 @@ notification. Three behaviours were tried against a real Discord notification:
 The burst rule also has to yield to the pointer: suppression applies only while
 the pointer is away from the edge, so a deliberate reveal during a notification
 still works.
+
+## Why the hide slide cannot be made visible (evidence, not assumption)
+
+Two orderings are possible and both fail, for opposite reasons:
+
+**Flag before the slide** (what the stable mod does). Setting ABS_ALWAYSONTOP
+drops the taskbar's rendered content, so the slide animates an empty window.
+Measured: 600 ms requested, 625 ms taken, 20 smooth steps, nothing visible.
+
+**Flag after the slide** (`taskbar-autohide-anim-experiment`). The slide runs
+correctly and the window is then put straight back:
+
+    show=0 from(0,0)-(48,1440) to(-46,0)-(2,1440) same=0
+      -> took 406 ms, 13 SetWindowPos steps, now (0,0)-(48,1440)
+
+Thirteen steps toward the hidden rect, and the window finishes at the docked
+rect. Windows continuously enforces the position implied by the flags, so
+without the hidden flag set the window cannot stay off-screen. A show slide then
+fires and the cycle repeats.
+
+So the hidden flag is simultaneously required for the window to move and fatal
+to the visuals. There is no ordering that satisfies both.
+
+Anything further has to intervene in what is *drawn*, not where the window is:
+keeping the content rendered while the flag says hidden. That is the XAML layer
+in `Taskbar.View.dll`. Note that `ViewCoordinator` is already ruled out -- its
+hooks bound and never fired, because it implements collapse-to-smaller-size, not
+auto-hide.
+
+The experimental mod is kept at `src/taskbar-autohide-anim-experiment.wh.cpp` as
+the record of this test.
