@@ -999,8 +999,58 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
+// Moving the taskbar can replace its window. The tick is posted to that window
+// and handled by our subclass, so a stale handle stops the watcher dead --
+// silently, and until the mod is reloaded. Re-acquire and re-subclass whenever
+// the handle changes or dies.
+void EnsureTraySubclass() {
+    HWND current = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!current) {
+        return;
+    }
+    if (current == g_trayWnd && IsWindow(g_trayWnd)) {
+        return;
+    }
+
+    DbgLog(L"taskbar window changed: %p -> %p, re-subclassing",
+           (void*)g_trayWnd, (void*)current);
+
+    if (g_trayWnd && g_subclassed && IsWindow(g_trayWnd)) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
+                                                         TrayWatchProc);
+    }
+
+    g_trayWnd = current;
+    g_subclassed =
+        WindhawkUtils::SetWindowSubclassFromAnyThread(g_trayWnd, TrayWatchProc,
+                                                      0) != FALSE;
+
+    // Everything cached describes the previous window.
+    g_trayUI = nullptr;
+    g_lastKnownEdge = 0xFFFFFFFF;
+    InterlockedExchange(&g_windowHidden, 0);
+    InterlockedExchange(&g_clipHold, 0);
+    InterlockedExchange(&g_regionSet, 0);
+    InterlockedExchange(&g_animOverride, 0);
+    InterlockedExchange(&g_animRequested, 0);
+    g_dockedBeforeHide = RECT{};
+    g_lastDockedRect = RECT{};
+    g_leaveTicks = 0;
+    g_dwellStart = 0;
+
+    DbgLog(L"re-subclassed: ok=%d", (int)g_subclassed);
+}
+
 DWORD WINAPI WatchThreadProc(LPVOID) {
     while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+        // Cheap, and the only thing that recovers from the taskbar window
+        // being replaced.
+        static int sinceCheck = 0;
+        if (++sinceCheck >= 25) {   // ~1s at the tick interval
+            sinceCheck = 0;
+            EnsureTraySubclass();
+        }
+
         if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
             RunHideAnimation();
         }
