@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lgdi32
+// @compilerOptions -lcomctl32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -383,16 +383,6 @@ bool g_subclassed = false;
 int g_leaveTicks = 0;
 ULONGLONG g_dwellStart = 0;
 
-// The monitor the taskbar belongs to, remembered while it is docked. Once
-// hidden the window can sit mostly over a neighbouring display, so asking which
-// monitor it currently overlaps gives the wrong answer.
-RECT g_ownMonitor{};
-
-// The docked edge can change under us. Every cached rect and hidden-state flag
-// describes the edge it was captured on, so they must all be discarded when it
-// moves, or a reveal restores the taskbar to the previous edge's geometry.
-UINT g_lastKnownEdge = 0xFFFFFFFF;
-
 // Windows unhides the taskbar itself for notifications and flashing buttons.
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
 // unhide the mod did not issue.
@@ -514,12 +504,8 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     UINT edge = CurrentStuckPlace(pThis);
     UINT effective = flags;
 
-    // Adding the hidden bit here is what makes hiding work at all, but it must
-    // not be added while the taskbar is plainly on screen: after an edge change
-    // Windows re-applies the flags, and marking it hidden then leaves the
-    // watcher waiting for a reveal that is already showing.
     if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-        !g_inUnhide && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
+        !g_inUnhide && !CursorAtRevealStrip(edge)) {
         effective = flags | ABS_ALWAYSONTOP;
     }
 
@@ -696,33 +682,7 @@ RECT g_clipRect{};
 // Set when the taskbar was hidden with ShowWindow because there was no
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
-volatile LONG g_regionSet = 0;
-
-// Counts ticks actually delivered to the subclass, so a post that succeeds but
-// never arrives can be told from one that fails outright.
-volatile LONG g_ticksReceived = 0;
 RECT g_dockedBeforeHide{};
-
-// Clip the window to its own monitor. Unlike resizing, a window region also
-// clips child windows, which is what the taskbar's content lives in.
-void ApplyMonitorClip(LONG x, LONG y, LONG w, LONG h, const RECT& mon) {
-    RECT winRect{x, y, x + w, y + h};
-    RECT visible{};
-    if (!IntersectRect(&visible, &winRect, &mon)) {
-        visible = RECT{0, 0, 0, 0};
-    }
-
-    // SetWindowRgn wants window-relative coordinates, and takes ownership.
-    HRGN rgn = CreateRectRgn(visible.left - x, visible.top - y,
-                             visible.right - x, visible.bottom - y);
-    SetWindowRgn(g_trayWnd, rgn, TRUE);
-}
-
-void ClearMonitorClip() {
-    if (InterlockedCompareExchange(&g_regionSet, 0, 1) == 1 && g_trayWnd) {
-        SetWindowRgn(g_trayWnd, nullptr, TRUE);
-    }
-}
 
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
@@ -744,23 +704,19 @@ void RunHideAnimation() {
            to.top, to.right, to.bottom, mon.left, mon.top, mon.right,
            mon.bottom, (int)haveMon, (int)spills, (int)clip);
 
-    // With a display beyond this edge there is no off-screen space, so the
-    // taskbar would slide onto the neighbour. Resizing the window does not help
-    // -- its content lives in a child window that renders past the parent --
-    // and hiding it outright does not hold, because Windows shows it again.
-    //
-    // A window region does clip child windows, so the taskbar can travel to its
-    // hidden position with everything past the monitor edge clipped away.
     if (clip) {
-        DbgLog(L"hide anim: clipping to the monitor while sliding");
-    }
-
-
-    if (from.left == to.left && from.top == to.top) {
-        DbgLog(L"hide anim: already at the target, nothing to animate");
+        // Nowhere to slide to: every position beyond this edge is on the
+        // neighbouring display, and the taskbar's content renders past any clip
+        // we apply, so animating would just play the slide over there. Hide it
+        // outright instead.
+        DbgLog(L"hide anim: no off-screen space, hiding window without a slide");
+        InterlockedExchange(&g_clipHold, 0);
+        InterlockedExchange(&g_windowHidden, 1);
+        ShowWindow(g_trayWnd, SW_HIDE);
         InterlockedExchange(&g_animOverride, 0);
         return;
     }
+
 
     const ULONGLONG start = GetTickCount64();
     for (;;) {
@@ -769,25 +725,16 @@ void RunHideAnimation() {
             break;
         }
         const double t = (double)elapsed / ms;
-        const LONG x = from.left + (LONG)((to.left - from.left) * t);
-        const LONG y = from.top + (LONG)((to.top - from.top) * t);
+        LONG x = from.left + (LONG)((to.left - from.left) * t);
+        LONG y = from.top + (LONG)((to.top - from.top) * t);
 
         SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        if (clip) {
-            ApplyMonitorClip(x, y, from.right - from.left,
-                             from.bottom - from.top, mon);
-        }
         Sleep(16);
     }
 
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    if (clip) {
-        ApplyMonitorClip(to.left, to.top, from.right - from.left,
-                         from.bottom - from.top, mon);
-        InterlockedExchange(&g_regionSet, 1);
-    }
 
     InterlockedExchange(&g_animOverride, 0);
 }
@@ -814,127 +761,23 @@ void WatcherTick() {
     if (!g_trayUI || !g_offsetsVerified || g_inWatcherCall ||
         !TrayUI_Unhide_Original || !TrayUI_SetAutoHideFlags_Original ||
         !TrayUI_GetDockedRect_Original) {
-        static ULONGLONG lastLog = 0;
-        const ULONGLONG now = GetTickCount64();
-        if (now - lastLog > 2000) {
-            lastLog = now;
-            DbgLog(L"idle: prerequisites. trayUI=%p verified=%d inCall=%d "
-                   L"unhide=%p setflags=%p dockedrect=%p",
-                   g_trayUI, (int)g_offsetsVerified, (int)g_inWatcherCall,
-                   (void*)TrayUI_Unhide_Original,
-                   (void*)TrayUI_SetAutoHideFlags_Original,
-                   (void*)TrayUI_GetDockedRect_Original);
-        }
         return;
     }
 
     UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
-        static ULONGLONG lastLog = 0;
-        const ULONGLONG now = GetTickCount64();
-        if (now - lastLog > 2000) {
-            lastLog = now;
-            DbgLog(L"idle: edge. edge=%u enabled=%d trayUI=%p", edge,
-                   (int)EdgeEnabled(edge), g_trayUI);
-        }
         return;
-    }
-
-    if (edge != g_lastKnownEdge) {
-        DbgLog(L"edge changed %u -> %u: discarding cached state",
-               g_lastKnownEdge, edge);
-        g_lastKnownEdge = edge;
-
-        // If the taskbar was hidden outright on the old edge, make it visible
-        // again: the position it was hidden at means nothing now.
-        ClearMonitorClip();
-        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1 &&
-            g_trayWnd) {
-            ShowWindow(g_trayWnd, SW_SHOWNA);
-        }
-        InterlockedExchange(&g_clipHold, 0);
-        InterlockedExchange(&g_animOverride, 0);
-        InterlockedExchange(&g_animRequested, 0);
-        g_dockedBeforeHide = RECT{};
-        g_lastDockedRect = RECT{};
-        g_clipRect = RECT{};
-        g_leaveTicks = 0;
-        g_dwellStart = 0;
-
-        // The taskbar is visible after a move, so the state must say so. Left
-        // set, the hidden bit makes the watcher wait for a reveal that is
-        // already showing -- it never hides again, and says nothing, because
-        // that branch is the one path with no logging.
-        UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
-        if (f & ABS_ALWAYSONTOP) {
-            DbgLog(L"edge change: clearing stale hidden bit 0x%X", f);
-            TrayUI_SetAutoHideFlags_Original(g_trayUI,
-                                             f & ~(UINT)ABS_ALWAYSONTOP);
-        }
-
-        return;   // resume next tick with clean state
     }
 
     UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
     if (!(stored & ABS_AUTOHIDE)) {
-        // Silent until now, which hid the reason the watcher stopped working
-        // after a move: either Windows cleared auto-hide, or the pointer is
-        // stale and this is not the taskbar's state at all.
-        static ULONGLONG lastLog = 0;
-        const ULONGLONG now = GetTickCount64();
-        if (now - lastLog > 2000) {
-            lastLog = now;
-            DbgLog(L"idle: auto-hide not set. edge=%u stored=0x%X trayUI=%p "
-                   L"realFlagsViaGetter=0x%X",
-                   edge, stored, g_trayUI,
-                   TrayUI_GetAutoHideFlags_Original
-                       ? TrayUI_GetAutoHideFlags_Original(
-                             (BYTE*)g_trayUI - 8)
-                       : 0xFFFFFFFF);
-        }
         return;
     }
 
     if (stored & ABS_ALWAYSONTOP) {
         // Hidden. Reveal once the pointer reaches the trigger strip; Unhide
         // performs the slide itself.
-        // Believed hidden. Check that against the window before trusting it:
-        // if most of the window is on screen it is plainly visible and the flag
-        // is stale, which otherwise deadlocks here forever, silently.
-        RECT actual{};
-        RECT mon = g_ownMonitor;
-        const bool haveOwn = mon.right > mon.left;
-        if (g_trayWnd && haveOwn && GetWindowRect(g_trayWnd, &actual)) {
-            RECT overlap{};
-            const LONG w = actual.right - actual.left;
-            const LONG h = actual.bottom - actual.top;
-            LONG ow = 0, oh = 0;
-            if (IntersectRect(&overlap, &actual, &mon)) {
-                ow = overlap.right - overlap.left;
-                oh = overlap.bottom - overlap.top;
-            }
-            if (w > 0 && h > 0 && ow * 2 > w && oh * 2 > h) {
-                DbgLog(L"state mismatch: flagged hidden but window is on screen "
-                       L"at (%ld,%ld)-(%ld,%ld); clearing 0x%X",
-                       actual.left, actual.top, actual.right, actual.bottom,
-                       stored);
-                TrayUI_SetAutoHideFlags_Original(
-                    g_trayUI, stored & ~(UINT)ABS_ALWAYSONTOP);
-                g_leaveTicks = 0;
-                return;
-            }
-        }
-
         if (!CursorAtRevealStrip(edge) && !CursorOverTaskbar(g_trayUI)) {
-            static ULONGLONG lastLog = 0;
-            const ULONGLONG now = GetTickCount64();
-            if (now - lastLog > 3000) {
-                lastLog = now;
-                DbgLog(L"hidden, waiting: window(%ld,%ld)-(%ld,%ld) stored=0x%X "
-                       L"edge=%u",
-                       actual.left, actual.top, actual.right, actual.bottom,
-                       stored, edge);
-            }
             g_leaveTicks = 0;
             return;
         }
@@ -942,38 +785,24 @@ void WatcherTick() {
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
 
-        ClearMonitorClip();
-
         if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
-            // Was hidden outright rather than moved. Only make it visible here:
-            // repositioning before Unhide is pointless, because the hidden flag
-            // is still set and the taskbar clamps the window straight back to
-            // its hidden rect. Unhide moves it once the flag is cleared.
+            // Was hidden outright rather than moved: put it back before asking
+            // Windows to unhide, so it reappears at full size in place.
+            DbgLog(L"reveal: restoring hidden window to (%ld,%ld) %ldx%ld",
+                   g_dockedBeforeHide.left, g_dockedBeforeHide.top,
+                   g_dockedBeforeHide.right - g_dockedBeforeHide.left,
+                   g_dockedBeforeHide.bottom - g_dockedBeforeHide.top);
+            SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
+                         g_dockedBeforeHide.top,
+                         g_dockedBeforeHide.right - g_dockedBeforeHide.left,
+                         g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
             ShowWindow(g_trayWnd, SW_SHOWNA);
         }
 
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
-
-        // Unhide does not always clear the hidden bit on this path. Left set,
-        // the watcher sees a hidden taskbar every tick and reveals it again,
-        // which reads as the taskbar never hiding at all.
-        UINT after = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
-        if (after & ABS_ALWAYSONTOP) {
-            TrayUI_SetAutoHideFlags_Original(g_trayUI,
-                                             after & ~(UINT)ABS_ALWAYSONTOP);
-            DbgLog(L"  reveal: cleared a stuck hidden bit (0x%X -> 0x%X)", after,
-                   after & ~(UINT)ABS_ALWAYSONTOP);
-        }
         g_inWatcherCall = false;
-
-        if (g_settings.debugLog && g_trayWnd) {
-            RECT r{};
-            GetWindowRect(g_trayWnd, &r);
-            DbgLog(L"  reveal done: (%ld,%ld)-(%ld,%ld) flags=0x%X", r.left,
-                   r.top, r.right, r.bottom,
-                   *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET));
-        }
         g_leaveTicks = 0;
         return;
     }
@@ -990,32 +819,7 @@ void WatcherTick() {
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
 
-    // Docked, so this is genuinely the taskbar's own monitor.
-    {
-        MONITORINFO mi{};
-        mi.cbSize = sizeof(mi);
-        HMONITOR own = MonitorFromRect(&docked, MONITOR_DEFAULTTONEAREST);
-        if (own && GetMonitorInfoW(own, &mi)) {
-            g_ownMonitor = mi.rcMonitor;
-        }
-    }
-
-    const bool overBar = PtInRect(&docked, pt) != FALSE;
-    const HWND fg = GetForegroundWindow();
-    const bool barFocused = fg == g_trayWnd;
-
-    if (overBar || barFocused) {
-        // The last unlogged path. Staying visible here is deliberate, but it
-        // looked identical to the mod having stopped working.
-        static ULONGLONG lastLog = 0;
-        const ULONGLONG now = GetTickCount64();
-        if (now - lastLog > 2000) {
-            lastLog = now;
-            DbgLog(L"staying visible: overBar=%d barFocused=%d fg=%p "
-                   L"cursor(%ld,%ld) docked(%ld,%ld)-(%ld,%ld)",
-                   (int)overBar, (int)barFocused, (void*)fg, pt.x, pt.y,
-                   docked.left, docked.top, docked.right, docked.bottom);
-        }
+    if (PtInRect(&docked, pt) || GetForegroundWindow() == g_trayWnd) {
         g_leaveTicks = 0;
         return;
     }
@@ -1084,7 +888,6 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (g_watchMsg && uMsg == g_watchMsg) {
-        InterlockedIncrement(&g_ticksReceived);
         WatcherTick();
         return 0;
     }
@@ -1092,73 +895,14 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
-// Moving the taskbar can replace its window. The tick is posted to that window
-// and handled by our subclass, so a stale handle stops the watcher dead --
-// silently, and until the mod is reloaded. Re-acquire and re-subclass whenever
-// the handle changes or dies.
-void EnsureTraySubclass() {
-    HWND current = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!current) {
-        return;
-    }
-    if (current == g_trayWnd && IsWindow(g_trayWnd)) {
-        return;
-    }
-
-    DbgLog(L"taskbar window changed: %p -> %p, re-subclassing",
-           (void*)g_trayWnd, (void*)current);
-
-    if (g_trayWnd && g_subclassed && IsWindow(g_trayWnd)) {
-        WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
-                                                         TrayWatchProc);
-    }
-
-    g_trayWnd = current;
-    g_subclassed =
-        WindhawkUtils::SetWindowSubclassFromAnyThread(g_trayWnd, TrayWatchProc,
-                                                      0) != FALSE;
-
-    // Everything cached describes the previous window.
-    g_trayUI = nullptr;
-    g_lastKnownEdge = 0xFFFFFFFF;
-    InterlockedExchange(&g_windowHidden, 0);
-    InterlockedExchange(&g_clipHold, 0);
-    InterlockedExchange(&g_regionSet, 0);
-    InterlockedExchange(&g_animOverride, 0);
-    InterlockedExchange(&g_animRequested, 0);
-    g_dockedBeforeHide = RECT{};
-    g_lastDockedRect = RECT{};
-    g_leaveTicks = 0;
-    g_dwellStart = 0;
-
-    DbgLog(L"re-subclassed: ok=%d", (int)g_subclassed);
-}
-
 DWORD WINAPI WatchThreadProc(LPVOID) {
     while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
-        // Cheap, and the only thing that recovers from the taskbar window
-        // being replaced.
-        static int sinceCheck = 0;
-        if (++sinceCheck >= 25) {   // ~1s at the tick interval
-            sinceCheck = 0;
-            EnsureTraySubclass();
-        }
-
         if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
             RunHideAnimation();
         }
 
         if (g_trayWnd && g_watchMsg) {
-            BOOL posted = PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
-            static ULONGLONG lastLog = 0;
-            const ULONGLONG now = GetTickCount64();
-            if (now - lastLog > 2000) {
-                lastLog = now;
-                DbgLog(L"tick: posted=%d err=%lu hwnd=%p received=%d",
-                       (int)posted, posted ? 0 : GetLastError(),
-                       (void*)g_trayWnd,
-                       (int)InterlockedExchange(&g_ticksReceived, 0));
-            }
+            PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
         }
         Sleep(WATCH_TICK_MS);
     }
@@ -1323,13 +1067,11 @@ void RestoreTaskbarIfHidden() {
 
     *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
 
-    ClearMonitorClip();
     if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
         ShowWindow(g_trayWnd, SW_SHOWNA);
     }
 
-    if (g_lastDockedRect.right > g_lastDockedRect.left &&
-        g_lastDockedRect.bottom > g_lastDockedRect.top) {
+    if (g_lastDockedRect.right > g_lastDockedRect.left) {
         SetWindowPos(g_trayWnd, nullptr, g_lastDockedRect.left,
                      g_lastDockedRect.top,
                      g_lastDockedRect.right - g_lastDockedRect.left,
