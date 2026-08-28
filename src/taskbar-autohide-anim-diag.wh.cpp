@@ -197,6 +197,46 @@ void WINAPI SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
     SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
 }
 
+// ------------------------------------------------------- animation gate hook
+
+// SlideWindow's last animation gate is a virtual call at vtable+0x360, which
+// resolves to a thin forwarder:
+//
+//     mov  0x228(%rcx),%rcx     ; collaborator object
+//     mov  (%rcx),%rax
+//     mov  0x230(%rax),%rax
+//     jmp  ...                  ; tail-call
+//
+// A zero return skips the animation. Hook it by RVA behind a signature guard
+// and log the result; it has no exported symbol.
+const DWORD kAnimGateRva = 0x85CE0;
+const BYTE kAnimGateSig[] = {
+    0x48, 0x8B, 0x89, 0x28, 0x02, 0x00, 0x00,  // mov 0x228(%rcx),%rcx
+    0x48, 0x8B, 0x01,                          // mov (%rcx),%rax
+    0x48, 0x8B, 0x80, 0x30, 0x02, 0x00, 0x00,  // mov 0x230(%rax),%rax
+    0xE9,                                      // jmp
+};
+
+using AnimGate_t = int(WINAPI*)(void* pThis);
+AnimGate_t AnimGate_Original;
+int WINAPI AnimGate_Hook(void* pThis) {
+    int ret = AnimGate_Original(pThis);
+    Log(L"  animation gate -> %d", ret);
+    return ret;
+}
+
+void HookAnimGate(HMODULE taskbar) {
+    BYTE* target = (BYTE*)taskbar + kAnimGateRva;
+    if (memcmp(target, kAnimGateSig, sizeof(kAnimGateSig)) != 0) {
+        Log(L"animation gate signature mismatch at +0x%X, not hooked",
+            kAnimGateRva);
+        return;
+    }
+    Wh_SetFunctionHook((void*)target, (void*)AnimGate_Hook,
+                       (void**)&AnimGate_Original);
+    Log(L"animation gate hooked at +0x%X", kAnimGateRva);
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 BOOL Wh_ModInit() {
@@ -245,6 +285,7 @@ BOOL Wh_ModInit() {
         };
         WindhawkUtils::HookSymbols(taskbar, slideHook, ARRAYSIZE(slideHook));
         Log(L"slide hook: %p", (void*)SlideWindow_Original);
+        HookAnimGate(taskbar);
     }
 
     return TRUE;
