@@ -73,6 +73,14 @@ or the other, not both, since they hook the same function.
     after the given time. 0 hides as soon as the pointer leaves; raise it to
     keep notifications visible for longer. Applies on every edge, including the
     bottom.
+- notificationBurstGapMs: 5000
+  $name: Notification burst gap (ms)
+  $description: >-
+    An app flashing its taskbar button produces one unhide per flash. Unhides
+    closer together than this count as one notification, so the taskbar shows
+    once rather than repeatedly. Raise it if a notification makes the taskbar
+    reappear after it should have settled; lower it if separate notifications
+    are being merged.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -117,6 +125,7 @@ struct Settings {
     bool edgeRight = true;
     int revealTolerance = 8;
     int notificationHoldMs = 1500;
+    int notificationBurstGapMs = 5000;
     int hideDurationMs = 0;
     int showDurationMs = 0;
 } g_settings;
@@ -157,6 +166,14 @@ void LoadSettings() {
         g_settings.notificationHoldMs = 0;
     } else if (g_settings.notificationHoldMs > 30000) {
         g_settings.notificationHoldMs = 30000;
+    }
+
+    g_settings.notificationBurstGapMs =
+        Wh_GetIntSetting(L"notificationBurstGapMs");
+    if (g_settings.notificationBurstGapMs < 0) {
+        g_settings.notificationBurstGapMs = 0;
+    } else if (g_settings.notificationBurstGapMs > 60000) {
+        g_settings.notificationBurstGapMs = 60000;
     }
 
     g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
@@ -257,10 +274,9 @@ volatile LONG64 g_holdVisibleUntil = 0;
 volatile LONG64 g_lastNotifyUnhide = 0;
 
 // A flashing taskbar button produces one unhide per flash. Unhides closer
-// together than this belong to the same burst and are treated as one
-// notification, so the taskbar shows once, hides after the hold, and stays
-// hidden while the flashing continues.
-#define NOTIFY_BURST_GAP_MS 5000
+// together than notificationBurstGapMs belong to the same burst and are treated
+// as one notification, so the taskbar shows once, hides after the hold, and
+// stays hidden while the flashing continues.
 RECT g_lastDockedRect{};
 
 // Set while Windows is unhiding, and while the watcher is calling in.
@@ -401,7 +417,7 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         LONG64 now = (LONG64)GetTickCount64();
         LONG64 last = InterlockedExchange64(&g_lastNotifyUnhide, now);
 
-        if (now - last > NOTIFY_BURST_GAP_MS) {
+        if (now - last > g_settings.notificationBurstGapMs) {
             // A new notification: show it for the configured hold.
             InterlockedExchange64(&g_holdVisibleUntil,
                                   now + g_settings.notificationHoldMs);
