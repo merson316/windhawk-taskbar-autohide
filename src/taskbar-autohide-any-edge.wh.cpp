@@ -51,6 +51,10 @@ or the other, not both, since they hook the same function.
   animation that is never triggered off-bottom.
 - Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
   class.
+- If a second display sits beyond the docked edge, the taskbar shrinks into
+  that edge rather than sliding out of view, since there is no off-screen space
+  to slide into. Revealing it there also needs a deliberate pause, so that
+  moving between monitors does not summon it -- see the reveal dwell setting.
 - Requires Windows 11 build 26200 or newer.
 */
 // ==/WindhawkModReadme==
@@ -125,6 +129,7 @@ or the other, not both, since they hook the same function.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
+#include <utility>
 
 // ABE_LEFT/TOP/RIGHT/BOTTOM and ABS_AUTOHIDE/ABS_ALWAYSONTOP come from
 // shellapi.h.
@@ -584,11 +589,54 @@ volatile LONG g_animOverride = 0;
 RECT g_animFrom{}, g_animTo{};
 int g_animDurationMs = 400;
 
+// True when another display occupies the space the taskbar would hide into.
+// Sliding a right-docked taskbar off a 3440-wide primary puts it at x >= 3440,
+// which is the next monitor, so it would hide onto that screen instead of out
+// of sight.
+BOOL CALLBACK HiddenRectMonitorEnum(HMONITOR mon, HDC, LPRECT, LPARAM data) {
+    auto* ctx = (std::pair<RECT, bool>*)data;
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi)) {
+        return TRUE;
+    }
+    RECT own{};
+    if (g_trayWnd) {
+        GetWindowRect(g_trayWnd, &own);
+    }
+    // Ignore the taskbar's own monitor.
+    if (PtInRect(&mi.rcMonitor, POINT{own.left, own.top})) {
+        return TRUE;
+    }
+    RECT tmp{};
+    if (IntersectRect(&tmp, &mi.rcMonitor, &ctx->first)) {
+        ctx->second = true;
+    }
+    return TRUE;
+}
+
+bool HiddenRectSpillsOntoAnotherDisplay(const RECT& hidden) {
+    std::pair<RECT, bool> ctx{hidden, false};
+    EnumDisplayMonitors(nullptr, nullptr, HiddenRectMonitorEnum,
+                        (LPARAM)&ctx);
+    return ctx.second;
+}
+
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
     const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
 
     InterlockedExchange(&g_animOverride, 1);
+
+    // If the hiding direction runs into another display, clip the taskbar to
+    // its own monitor as it goes, so it shrinks into the edge instead of
+    // sliding onto the neighbouring screen.
+    RECT mon{};
+    const bool clip = TrayMonitorRect(&mon) &&
+                      HiddenRectSpillsOntoAnotherDisplay(to);
+
+    const LONG w = from.right - from.left;
+    const LONG h = from.bottom - from.top;
 
     const ULONGLONG start = GetTickCount64();
     for (;;) {
@@ -597,15 +645,38 @@ void RunHideAnimation() {
             break;
         }
         const double t = (double)elapsed / ms;
-        const LONG x = from.left + (LONG)((to.left - from.left) * t);
-        const LONG y = from.top + (LONG)((to.top - from.top) * t);
-        SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
-                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        LONG x = from.left + (LONG)((to.left - from.left) * t);
+        LONG y = from.top + (LONG)((to.top - from.top) * t);
+
+        if (clip) {
+            LONG cw = w, ch = h;
+            if (x + w > mon.right) { cw = mon.right - x; }
+            if (y + h > mon.bottom) { ch = mon.bottom - y; }
+            if (x < mon.left) { cw = w - (mon.left - x); x = mon.left; }
+            if (y < mon.top) { ch = h - (mon.top - y); y = mon.top; }
+            if (cw < 1) { cw = 1; }
+            if (ch < 1) { ch = 1; }
+            SetWindowPos(g_trayWnd, nullptr, x, y, cw, ch,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        } else {
+            SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         Sleep(16);
     }
 
-    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
-                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (clip) {
+        // Finish as a sliver at the edge, still on its own monitor.
+        const LONG sliver = 2;
+        LONG fx = to.left, fy = to.top, fw = w, fh = h;
+        if (to.left + w > mon.right) { fx = mon.right - sliver; fw = sliver; }
+        if (to.top + h > mon.bottom) { fy = mon.bottom - sliver; fh = sliver; }
+        SetWindowPos(g_trayWnd, nullptr, fx, fy, fw, fh,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    } else {
+        SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     InterlockedExchange(&g_animOverride, 0);
 }
 
