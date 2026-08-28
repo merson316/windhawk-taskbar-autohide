@@ -281,3 +281,31 @@ unknown, and it risks flicker and the request=9 unhide reflex.
 The durations remain useful for one thing: a low value (25 ms) makes the hide
 effectively instantaneous, which removes the shell freeze described above and
 makes the reveal feel immediate.
+
+## Notification flapping (fixed)
+
+Windows forces an auto-hidden taskbar visible when an app flashes its taskbar
+button. The watcher re-hid it immediately, so it strobed: unhide, hide, unhide.
+
+Fixed by holding it visible for 4 s after any unhide the mod did not issue.
+Verified with a Discord notification against a left-docked taskbar:
+
+    14:45:16  show=1 -> took 156 ms
+    14:45:34  show=0 -> took 407 ms
+
+One show, one hide, 18 s apart, where previously it cycled.
+
+Note that `Better Taskbar Autohide` (installed here, 1500 ms delay) encodes the
+opposite intent -- it permits hiding *despite* a notification -- but works
+through `CTaskListWnd::PermitAutoHide`, which sits on Windows' own hide path.
+That path does not run off-bottom, so the two do not currently conflict. If the
+hold ever needs to match that behaviour, the value to change is HOLD_VISIBLE_MS.
+
+### Reproducing
+
+`tools/flash-taskbar.ps1` flashes a taskbar button. Two traps found while
+writing it: `FlashWindowEx` is silently ignored while the target window is in
+the foreground, so the window must be minimised first; and Windows 11 Notepad is
+a packaged app whose `MainWindowHandle` goes stale after minimising, so it does
+not work as a target. Use `-Process Discord` or another normal app. Toast
+notifications do not force an auto-hidden taskbar visible at all.
