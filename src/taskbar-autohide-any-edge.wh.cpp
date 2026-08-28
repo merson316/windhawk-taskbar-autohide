@@ -157,50 +157,60 @@ PCWSTR EdgeName(UINT edge) {
 
 // --------------------------------------------------------------- the override
 
-// True only for the duration of a SetAutoHideFlags call on this thread. While
-// set, GetStuckPlace reports ABE_BOTTOM so the flag store, which refuses to
-// take effect on any other edge, succeeds.
-thread_local bool g_pretendBottom = false;
+// Attempt 1 (spoofing GetStuckPlace for the duration of SetAutoHideFlags)
+// was tried and did not work: the flag store does not consult GetStuckPlace.
+// See docs/findings-phase1.md. This is attempt 2 -- report the intended flags
+// from the getter instead.
+//
+// Only one taskbar exists on this configuration (MMTaskbarEnabled=0), and the
+// getter is reached through an adjustor thunk so its `this` cannot be matched
+// against the setter's. State is therefore tracked globally.
+
+volatile LONG g_desiredFlags = 0;   // last value Windows asked us to store
+volatile LONG g_currentEdge = ABE_BOTTOM;
 
 using TrayUI_GetStuckPlace_t = UINT(WINAPI*)(void* pThis);
 TrayUI_GetStuckPlace_t TrayUI_GetStuckPlace_Original;
-UINT WINAPI TrayUI_GetStuckPlace_Hook(void* pThis) {
-    if (g_pretendBottom) {
-        return ABE_BOTTOM;
-    }
-    return TrayUI_GetStuckPlace_Original(pThis);
+
+using TrayUI_SetStuckPlace_t = void(WINAPI*)(void* pThis, UINT edge);
+TrayUI_SetStuckPlace_t TrayUI_SetStuckPlace_Original;
+void WINAPI TrayUI_SetStuckPlace_Hook(void* pThis, UINT edge) {
+    InterlockedExchange(&g_currentEdge, (LONG)edge);
+    FixLog(L"SetStuckPlace(%u %s)", edge, EdgeName(edge));
+    TrayUI_SetStuckPlace_Original(pThis, edge);
 }
 
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
-    UINT edge = TrayUI_GetStuckPlace_Original
-                    ? TrayUI_GetStuckPlace_Original(pThis)
-                    : ABE_BOTTOM;
-
-    // Bottom already works; leave it completely untouched.
-    bool spoof = (edge != ABE_BOTTOM);
-
-    FixLog(L"SetAutoHideFlags(0x%X) edge=%u %s spoof=%d", flags, edge,
-           EdgeName(edge), (int)spoof);
-
-    if (spoof) {
-        g_pretendBottom = true;
-        TrayUI_SetAutoHideFlags_Original(pThis, flags);
-        g_pretendBottom = false;
-    } else {
-        TrayUI_SetAutoHideFlags_Original(pThis, flags);
+    // `this` is unadjusted here, so the edge read is trustworthy.
+    if (TrayUI_GetStuckPlace_Original) {
+        InterlockedExchange(&g_currentEdge,
+                            (LONG)TrayUI_GetStuckPlace_Original(pThis));
     }
+    InterlockedExchange(&g_desiredFlags, (LONG)flags);
+
+    FixLog(L"SetAutoHideFlags(0x%X) edge=%u %s", flags, (UINT)g_currentEdge,
+           EdgeName((UINT)g_currentEdge));
+
+    TrayUI_SetAutoHideFlags_Original(pThis, flags);
 }
 
-// Verification only. Confirms whether the flags actually took hold.
 using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void* pThis);
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
-    if (ret != 0) {
-        FixLog(L"GetAutoHideFlags -> 0x%X", ret);
+
+    UINT edge = (UINT)g_currentEdge;
+    UINT desired = (UINT)g_desiredFlags;
+
+    // Bottom works natively; never interfere there. Only substitute when the
+    // store was refused, i.e. Windows asked for flags and the getter reports
+    // none.
+    if (edge != ABE_BOTTOM && desired != 0 && ret == 0) {
+        return desired;
     }
+
     return ret;
 }
 
@@ -211,11 +221,8 @@ using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
 void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                                     HMONITOR monitor, bool show, bool animate) {
-    UINT edge = TrayUI_GetStuckPlace_Original
-                    ? TrayUI_GetStuckPlace_Original(pThis)
-                    : 0xFFFFFFFF;
-    FixLog(L"*** SlideWindow show=%d [edge=%u %s] rect=(%ld,%ld)-(%ld,%ld)",
-           (int)show, edge, EdgeName(edge), rect ? rect->left : 0,
+    FixLog(L"*** SlideWindow show=%d [edge=%u] rect=(%ld,%ld)-(%ld,%ld)",
+           (int)show, (UINT)g_currentEdge, rect ? rect->left : 0,
            rect ? rect->top : 0, rect ? rect->right : 0,
            rect ? rect->bottom : 0);
     TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
@@ -249,7 +256,11 @@ BOOL Wh_ModInit() {
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))",
           LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"},
-         &TrayUI_GetStuckPlace_Original, TrayUI_GetStuckPlace_Hook, true},
+         &TrayUI_GetStuckPlace_Original, nullptr, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SetStuckPlace(unsigned int))",
+          LR"(public: virtual void __cdecl TrayUI::SetStuckPlace(unsigned int) )"},
+         &TrayUI_SetStuckPlace_Original, TrayUI_SetStuckPlace_Hook, true},
 
         {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))",
           LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int) )"},
@@ -262,6 +273,7 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
          &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
+
     };
 
     if (!WindhawkUtils::HookSymbols(g_taskbarModule, hooks, ARRAYSIZE(hooks))) {
@@ -271,12 +283,19 @@ BOOL Wh_ModInit() {
 
     // The two hooks that actually implement the fix are mandatory. Running
     // with either missing would change nothing while appearing to work.
-    if (!TrayUI_GetStuckPlace_Original || !TrayUI_SetAutoHideFlags_Original) {
+    if (!TrayUI_GetAutoHideFlags_Original || !TrayUI_SetAutoHideFlags_Original ||
+        !TrayUI_GetStuckPlace_Original) {
         FixLog(L"FATAL: required symbols unresolved (GetStuckPlace=%p, "
-               L"SetAutoHideFlags=%p)",
+               L"SetAutoHideFlags=%p, GetAutoHideFlags=%p)",
                (void*)TrayUI_GetStuckPlace_Original,
-               (void*)TrayUI_SetAutoHideFlags_Original);
+               (void*)TrayUI_SetAutoHideFlags_Original,
+               (void*)TrayUI_GetAutoHideFlags_Original);
         return FALSE;
+    }
+
+    // Seed the edge so the very first getter call is judged correctly.
+    if (TrayUI_GetStuckPlace_Original) {
+        FixLog(L"initial edge unknown until first SetStuckPlace/SetAutoHideFlags");
     }
 
     FixLog(L"hooks installed, ready");
