@@ -103,6 +103,16 @@ or the other, not both, since they hook the same function.
 
     Raise it if the taskbar keeps reappearing during a single notification.
     Lower it if two genuinely separate notifications get merged into one.
+- revealDwellMs: 120
+  $name: Reveal dwell (ms)
+  $description: >-
+    How long the pointer must stay in the trigger strip before the taskbar
+    appears.
+
+    This matters when another display sits beyond the docked edge: without a
+    dwell the taskbar pops out whenever you move between monitors, and a quick
+    pass can be missed entirely. Raise it if the taskbar appears when you were
+    only moving to the next screen; set 0 for an instant reveal.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -146,6 +156,7 @@ struct Settings {
     bool edgeTop = true;
     bool edgeRight = true;
     int revealTolerance = 8;
+    int revealDwellMs = 120;
     int notificationHoldMs = 1500;
     int notificationBurstGapMs = 5000;
     int hideDurationMs = 0;
@@ -186,12 +197,33 @@ void LoadSettings() {
         g_settings.notificationHoldMs = 30000;
     }
 
+    g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
+    if (g_settings.revealDwellMs < 0) {
+        g_settings.revealDwellMs = 0;
+    } else if (g_settings.revealDwellMs > 2000) {
+        g_settings.revealDwellMs = 2000;
+    }
+
     g_settings.notificationBurstGapMs =
         Wh_GetIntSetting(L"notificationBurstGapMs");
     if (g_settings.notificationBurstGapMs < 0) {
-        g_settings.notificationBurstGapMs = 0;
+        g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
+    if (g_settings.revealDwellMs < 0) {
+        g_settings.revealDwellMs = 0;
+    } else if (g_settings.revealDwellMs > 2000) {
+        g_settings.revealDwellMs = 2000;
+    }
+
+    g_settings.notificationBurstGapMs = 0;
     } else if (g_settings.notificationBurstGapMs > 60000) {
-        g_settings.notificationBurstGapMs = 60000;
+        g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
+    if (g_settings.revealDwellMs < 0) {
+        g_settings.revealDwellMs = 0;
+    } else if (g_settings.revealDwellMs > 2000) {
+        g_settings.revealDwellMs = 2000;
+    }
+
+    g_settings.notificationBurstGapMs = 60000;
     }
 
     g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
@@ -284,6 +316,7 @@ void* g_trayUI = nullptr;
 HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
 int g_leaveTicks = 0;
+ULONGLONG g_dwellStart = 0;
 
 // Windows unhides the taskbar itself for notifications and flashing buttons.
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
