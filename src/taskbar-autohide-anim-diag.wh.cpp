@@ -194,7 +194,20 @@ void WINAPI SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
         rect ? rect->top : 0, rect ? rect->right : 0, rect ? rect->bottom : 0,
         (int)sameRect);
 
+    // The animated path is a synchronous timed loop: it raises thread priority
+    // and steps the window using GetTickCount. So a real animation makes this
+    // call take roughly the duration; an instant return means it was skipped
+    // regardless of what the gates reported.
+    ULONGLONG t0 = GetTickCount64();
     SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+    ULONGLONG elapsed = GetTickCount64() - t0;
+
+    RECT after{};
+    if (hWnd) {
+        GetWindowRect(hWnd, &after);
+    }
+    Log(L"  -> took %llu ms, now (%ld,%ld)-(%ld,%ld)", elapsed, after.left,
+        after.top, after.right, after.bottom);
 }
 
 // ------------------------------------------------------- animation gate hook
