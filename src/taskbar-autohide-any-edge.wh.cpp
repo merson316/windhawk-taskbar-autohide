@@ -290,6 +290,13 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
         return ret;
     }
 
+    // This function is reached on a base 8 bytes below the one the other calls
+    // use, so it is a second source for the pointer the watcher needs. Without
+    // it the watcher idles until a layout pass happens to run GetDockedRect.
+    if (!g_trayUI) {
+        g_trayUI = (BYTE*)pThis + 8;
+    }
+
     return *(UINT*)((BYTE*)pThis + GETFLAGS_FLAGS_OFFSET);
 }
 
@@ -390,6 +397,19 @@ void ApplyDurationOverrides(void* pThis) {
 // hooked functions are called while the taskbar sits idle, so there is no
 // polling site. A timer on the taskbar's own thread supplies one.
 void WatcherTick() {
+    // No pointer yet: nothing has run GetDockedRect and no state change has run
+    // GetAutoHideFlags. Force a recompute rather than waiting for the user to
+    // interact with something. SWP_FRAMECHANGED provokes the layout that
+    // WM_SETTINGCHANGE alone did not.
+    if (!g_trayUI && g_trayWnd) {
+        static int nudgeTicks = 0;
+        if ((nudgeTicks++ % 8) == 0) {
+            SetWindowPos(g_trayWnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                             SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+    }
+
     if (!g_trayUI || !g_offsetsVerified || g_inWatcherCall ||
         !TrayUI_Unhide_Original || !TrayUI_SetAutoHideFlags_Original ||
         !TrayUI_GetDockedRect_Original) {
