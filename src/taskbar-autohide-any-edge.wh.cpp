@@ -11,16 +11,48 @@
 
 // ==WindhawkModReadme==
 /*
-# Taskbar auto-hide any edge (diagnostic)
+# Taskbar auto-hide on any edge
 
-Read-only instrumentation for Windows 11 26H2. Logs which functions in
-`TrayUI`'s auto-hide chain are called when the auto-hide setting is toggled
-while the taskbar is docked to a non-bottom edge.
+Windows 11 26H2 can dock the taskbar to the top, left or right, but
+"Automatically hide the taskbar" only works on the bottom edge. Elsewhere the
+setting is accepted, reports success, and does nothing at all.
 
-Writes to `%LOCALAPPDATA%\windhawk-autohide-fix.log`. Changes no behaviour:
-every hook calls the original and returns its result unmodified.
+This mod makes it work on the other three edges.
 
-This mod is a diagnostic step, not a fix. Disable it once the log is captured.
+## What was actually wrong
+
+`TrayUI::GetAutoHideFlags` masks the auto-hide flags to zero unless the taskbar
+is docked to the bottom:
+
+    cmpl $0x3,0x118(%rbx)     ; edge == ABE_BOTTOM ?
+    je   .return_real
+    xor  %eax,%eax            ; otherwise report no flags
+    ret
+  .return_real:
+    mov  0x44(%rbx),%eax      ; the genuinely stored flags
+
+The flags are stored correctly on every edge. Everything downstream is gated on
+the masked result -- GetDockedRect returns the hidden rect only when
+(flags & 3) == 3 -- so no hide is ever attempted.
+
+## What the mod does
+
+- Reports the genuinely stored flags instead of the masked zero.
+- Stores ABS_ALWAYSONTOP alongside ABS_AUTOHIDE off-bottom, which is what the
+  bottom edge does and what the hidden-rect test requires.
+- Watches the pointer on a timer and drives reveal and hide, because Windows'
+  own cursor-at-edge detection does not run off-bottom.
+- Leaves the bottom edge completely untouched.
+
+## Known limitations
+
+- No smooth show/hide animation. The Windows 11 easing is a XAML compositor
+  animation that is never triggered off-bottom, so the taskbar moves without it.
+- Primary taskbar only. Secondary taskbars use a separate CSecondaryTray class
+  and are not handled.
+- Tied to Taskbar.dll internals. The member offsets are validated against a byte
+  signature inside GetAutoHideFlags; if a Windows update changes it, the mod
+  goes inert rather than misbehaving.
 */
 // ==/WindhawkModReadme==
 
