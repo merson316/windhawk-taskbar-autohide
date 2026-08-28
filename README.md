@@ -32,7 +32,11 @@ the masked result — `GetDockedRect` returns the hidden rect only when
   the bottom edge does and what the hidden-rect test requires.
 - Drives reveal and hide from a timer, because Windows' own cursor-at-edge
   detection does not run off-bottom.
-- Leaves the bottom edge entirely untouched.
+- Leaves the bottom edge's auto-hide entirely untouched.
+- Hides again a set time after a notification, which Windows otherwise refuses
+  to do while a taskbar button is flashing. This applies on every edge and makes
+  [Better Taskbar Autohide](https://windhawk.net/mods/taskbar-autohide-better)
+  redundant -- run one or the other, since they hook the same function.
 
 ## Requirements
 
@@ -55,7 +59,9 @@ Compile → Enable.
 | Setting | Default | Meaning |
 |---|---|---|
 | Enable on the left / top / right edge | on | Which edges the mod acts on |
-| Reveal trigger width | 4 px | How close to the edge the pointer must get |
+| Reveal trigger width | 8 px | How close to the edge the pointer must get |
+| Keep visible after a notification | 1500 ms | How long a flashing taskbar button keeps the taskbar up |
+| Hide / reveal animation duration | 0 (Windows default) | Slide duration; runs synchronously, so keep it short |
 
 ## Known limitations
 

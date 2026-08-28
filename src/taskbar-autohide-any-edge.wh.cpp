@@ -27,6 +27,16 @@ on the bottom edge.
 
 The bottom edge is left untouched.
 
+## Notification handling
+
+Windows refuses to auto-hide the taskbar while an app is flashing its taskbar
+button, which can leave it visible indefinitely. This mod hides it again after
+`notificationHoldMs` (1500 ms by default), on every edge including the bottom.
+
+That makes Cirn09's [Better Taskbar
+Autohide](https://windhawk.net/mods/taskbar-autohide-better) redundant; run one
+or the other, not both, since they hook the same function.
+
 ## Known limitations
 
 - No smooth show/hide animation: the Windows 11 easing is a XAML compositor
@@ -55,6 +65,14 @@ The bottom edge is left untouched.
   $name: Reveal animation duration (ms)
   $description: >-
     0 keeps the Windows default (200 ms). Range 25-600.
+- notificationHoldMs: 1500
+  $name: Keep visible after a notification (ms)
+  $description: >-
+    Windows refuses to auto-hide the taskbar while an app is flashing its
+    taskbar button, which can leave it up indefinitely. This hides it again
+    after the given time. 0 hides as soon as the pointer leaves; raise it to
+    keep notifications visible for longer. Applies on every edge, including the
+    bottom.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -98,6 +116,7 @@ struct Settings {
     bool edgeTop = true;
     bool edgeRight = true;
     int revealTolerance = 8;
+    int notificationHoldMs = 1500;
     int hideDurationMs = 0;
     int showDurationMs = 0;
 } g_settings;
@@ -133,6 +152,13 @@ void LoadSettings() {
     // Clamp out-of-range values rather than discarding them: silently turning
     // an over-large value into "no override" looks identical to the setting
     // being ignored.
+    g_settings.notificationHoldMs = Wh_GetIntSetting(L"notificationHoldMs");
+    if (g_settings.notificationHoldMs < 0) {
+        g_settings.notificationHoldMs = 0;
+    } else if (g_settings.notificationHoldMs > 30000) {
+        g_settings.notificationHoldMs = 30000;
+    }
+
     g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
     g_settings.showDurationMs = ClampDuration(Wh_GetIntSetting(L"showDurationMs"));
 }
@@ -228,7 +254,6 @@ int g_leaveTicks = 0;
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
 // unhide the mod did not issue.
 volatile LONG64 g_holdVisibleUntil = 0;
-#define HOLD_VISIBLE_MS 4000
 RECT g_lastDockedRect{};
 
 // Set while Windows is unhiding, and while the watcher is calling in.
@@ -366,8 +391,9 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     }
 
     if (!g_inWatcherCall) {
-        InterlockedExchange64(&g_holdVisibleUntil,
-                              (LONG64)(GetTickCount64() + HOLD_VISIBLE_MS));
+        InterlockedExchange64(
+            &g_holdVisibleUntil,
+            (LONG64)(GetTickCount64() + g_settings.notificationHoldMs));
     }
 
     bool prev = g_inUnhide;
@@ -425,6 +451,30 @@ void ApplyDurationOverrides(void* pThis) {
                                           : g_defaultHideDuration;
     *show = g_settings.showDurationMs > 0 ? g_settings.showDurationMs
                                           : g_defaultShowDuration;
+}
+
+// ------------------------------------------------- notification auto-hide
+
+// Windows refuses to auto-hide while an app flashes its taskbar button, and
+// keeps refusing until the flashing stops, so the taskbar can sit there
+// indefinitely. CTaskListWnd::PermitAutoHide is the veto, and it is on Windows'
+// own hide path -- the path that runs on the bottom edge, where this mod's
+// watcher is deliberately inactive.
+//
+// Overriding it here gives the same behaviour on every edge from one mod. The
+// approach is the one used by Cirn09's "Better Taskbar Autohide"
+// (https://windhawk.net/mods/taskbar-autohide-better), reimplemented against
+// this mod's own notification tracking rather than a separate message hook.
+
+using CTaskListWnd_PermitAutoHide_t = int(WINAPI*)(void* pThis);
+CTaskListWnd_PermitAutoHide_t CTaskListWnd_PermitAutoHide_Original;
+int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
+    if (g_settings.notificationHoldMs > 0 &&
+        (LONG64)GetTickCount64() >=
+            InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
+        return TRUE;   // hold elapsed: allow hiding even if Windows objects
+    }
+    return CTaskListWnd_PermitAutoHide_Original(pThis);
 }
 
 // ------------------------------------------------------------ pointer watcher
@@ -606,6 +656,11 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
          &TrayUI_SlideWindow_Original, nullptr, true},
+
+        {{LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void))",
+          LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void) )"},
+         &CTaskListWnd_PermitAutoHide_Original,
+         CTaskListWnd_PermitAutoHide_Hook, true},
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
