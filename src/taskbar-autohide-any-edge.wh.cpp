@@ -24,6 +24,22 @@ This mod is a diagnostic step, not a fix. Disable it once the log is captured.
 */
 // ==/WindhawkModReadme==
 
+// ==WindhawkModSettings==
+/*
+- edgeLeft: true
+  $name: Enable on the left edge
+- edgeTop: true
+  $name: Enable on the top edge
+- edgeRight: true
+  $name: Enable on the right edge
+- revealTolerance: 4
+  $name: Reveal trigger width (pixels)
+  $description: >-
+    How close to the screen edge the pointer must get before the taskbar
+    reappears.
+*/
+// ==/WindhawkModSettings==
+
 #include <windhawk_utils.h>
 
 #include <stdarg.h>
@@ -288,6 +304,32 @@ const BYTE kFlagsGateSig[] = {
 
 bool g_flagsOffsetsVerified = false;
 
+struct Settings {
+    bool edgeLeft = true;
+    bool edgeTop = true;
+    bool edgeRight = true;
+    int revealTolerance = 4;
+} g_settings;
+
+bool EdgeEnabled(UINT edge) {
+    switch (edge) {
+        case ABE_LEFT:  return g_settings.edgeLeft;
+        case ABE_TOP:   return g_settings.edgeTop;
+        case ABE_RIGHT: return g_settings.edgeRight;
+        default:        return false;
+    }
+}
+
+void LoadSettings() {
+    g_settings.edgeLeft = Wh_GetIntSetting(L"edgeLeft") != 0;
+    g_settings.edgeTop = Wh_GetIntSetting(L"edgeTop") != 0;
+    g_settings.edgeRight = Wh_GetIntSetting(L"edgeRight") != 0;
+    g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
+    if (g_settings.revealTolerance < 1 || g_settings.revealTolerance > 64) {
+        g_settings.revealTolerance = 4;
+    }
+}
+
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
     if (!pThis || !g_flagsOffsetsVerified) {
@@ -297,7 +339,7 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     // Read the edge from the same member the function itself uses, so this
     // cannot disagree with the original.
     UINT edge = *(UINT*)((BYTE*)pThis + kTrayUiEdgeOffset);
-    if (edge >= ABE_BOTTOM) {
+    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return ret;   // bottom works natively; anything higher is implausible
     }
 
@@ -433,7 +475,7 @@ bool CursorAtDockedEdge(UINT edge) {
     bool onMonitor = !(pt.x < m.left || pt.x > m.right || pt.y < m.top ||
                        pt.y > m.bottom);
 
-    const LONG tol = 4;
+    const LONG tol = g_settings.revealTolerance;
     bool result = false;
     if (onMonitor) {
         switch (edge) {
@@ -483,7 +525,7 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     // edge sits at 0x118 there but 0x110 in GetDockedRect. Reusing the getter's
     // offset here read the wrong field entirely.
     UINT effective = flags;
-    if ((flags & 1) && edge < ABE_BOTTOM && !g_inUnhide &&
+    if ((flags & 1) && edge < ABE_BOTTOM && EdgeEnabled(edge) && !g_inUnhide &&
         !CursorAtDockedEdge(edge)) {
         effective = flags | 2;
     }
@@ -711,85 +753,6 @@ void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
     DiagLog(L"_AutoHideCollision LEAVE");
 }
 
-// ------------------------------------------------------- XAML view layer
-
-// Moving the taskbar window is not enough: its pixels are drawn by the XAML
-// layer in Taskbar.View.dll, which keeps its own expanded/collapsed state. A
-// self-issued Unhide(2,1) moved the window to the docked rect and held it there
-// for two seconds with nothing visible, while a click reveals it reliably --
-// because activation drives the XAML expand and our flag changes do not.
-//
-// ViewCoordinator owns that state. ShouldTaskbarBeExpanded is the predicate
-// behind UpdateIsExpandedAfterHoverDelay, i.e. the hover reveal.
-
-using ViewCoordinator_ShouldTaskbarBeExpanded_t = bool(WINAPI*)(void* pThis,
-                                                                UINT64 id,
-                                                                bool arg);
-ViewCoordinator_ShouldTaskbarBeExpanded_t
-    ViewCoordinator_ShouldTaskbarBeExpanded_Original;
-bool WINAPI ViewCoordinator_ShouldTaskbarBeExpanded_Hook(void* pThis, UINT64 id,
-                                                         bool arg) {
-    bool ret = ViewCoordinator_ShouldTaskbarBeExpanded_Original(pThis, id, arg);
-
-    UINT edge = (UINT)g_currentEdge;
-    if (edge < ABE_BOTTOM && !ret && CursorAtDockedEdge(edge)) {
-        DiagLog(L"ShouldTaskbarBeExpanded: false with cursor at edge -> true");
-        return true;
-    }
-
-    return ret;
-}
-
-using ViewCoordinator_ExpandTaskbar_t = void(WINAPI*)(void* pThis, UINT64 id);
-ViewCoordinator_ExpandTaskbar_t ViewCoordinator_ExpandTaskbar_Original;
-void WINAPI ViewCoordinator_ExpandTaskbar_Hook(void* pThis, UINT64 id) {
-    DiagLog(L"ExpandTaskbar");
-    ViewCoordinator_ExpandTaskbar_Original(pThis, id);
-}
-
-using ViewCoordinator_CollapseTaskbar_t = void(WINAPI*)(void* pThis, UINT64 id);
-ViewCoordinator_CollapseTaskbar_t ViewCoordinator_CollapseTaskbar_Original;
-void WINAPI ViewCoordinator_CollapseTaskbar_Hook(void* pThis, UINT64 id) {
-    DiagLog(L"CollapseTaskbar");
-    ViewCoordinator_CollapseTaskbar_Original(pThis, id);
-}
-
-bool HookTaskbarViewSymbols() {
-    HMODULE view = GetModuleHandleW(L"Taskbar.View.dll");
-    if (!view) {
-        view = GetModuleHandleW(L"ExplorerExtensions.dll");
-    }
-    if (!view) {
-        DiagLog(L"Taskbar.View.dll not loaded, XAML hooks skipped");
-        return false;
-    }
-
-    WindhawkUtils::SYMBOL_HOOK hooks[] = {
-        {{LR"(public: bool __cdecl winrt::Taskbar::implementation::ViewCoordinator::ShouldTaskbarBeExpanded(unsigned __int64,bool))",
-          LR"(public: bool __cdecl winrt::Taskbar::implementation::ViewCoordinator::ShouldTaskbarBeExpanded(unsigned __int64,bool) )"},
-         &ViewCoordinator_ShouldTaskbarBeExpanded_Original,
-         ViewCoordinator_ShouldTaskbarBeExpanded_Hook, true},
-
-        {{LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::ExpandTaskbar(unsigned __int64))",
-          LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::ExpandTaskbar(unsigned __int64) )"},
-         &ViewCoordinator_ExpandTaskbar_Original,
-         ViewCoordinator_ExpandTaskbar_Hook, true},
-
-        {{LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::CollapseTaskbar(unsigned __int64))",
-          LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::CollapseTaskbar(unsigned __int64) )"},
-         &ViewCoordinator_CollapseTaskbar_Original,
-         ViewCoordinator_CollapseTaskbar_Hook, true},
-    };
-
-    bool ok = WindhawkUtils::HookSymbols(view, hooks, ARRAYSIZE(hooks));
-    DiagLog(L"XAML hooks: HookSymbols=%d ShouldTaskbarBeExpanded=%p "
-            L"Expand=%p Collapse=%p",
-            (int)ok, (void*)ViewCoordinator_ShouldTaskbarBeExpanded_Original,
-            (void*)ViewCoordinator_ExpandTaskbar_Original,
-            (void*)ViewCoordinator_CollapseTaskbar_Original);
-    return ok;
-}
-
 // -------------------------------------------------------------- edge watcher
 
 // GetAutoHideFlags is not a hot path: it fires in bursts around state changes
@@ -822,7 +785,7 @@ void WatcherTick() {
     }
 
     UINT edge = *(UINT*)((BYTE*)g_trayUI + 0x110);
-    if (edge >= ABE_BOTTOM) {
+    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
     }
 
@@ -914,6 +877,13 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
+
+void Wh_ModSettingsChanged() {
+    LoadSettings();
+    DiagLog(L"settings: left=%d top=%d right=%d tol=%d",
+            (int)g_settings.edgeLeft, (int)g_settings.edgeTop,
+            (int)g_settings.edgeRight, g_settings.revealTolerance);
+}
 
 BOOL Wh_ModInit() {
     InitializeCriticalSection(&g_logLock);
@@ -1046,8 +1016,6 @@ BOOL Wh_ModInit() {
 
     DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
             EdgeName((UINT)g_currentEdge));
-
-    HookTaskbarViewSymbols();
 
     g_trayWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (g_trayWnd) {
