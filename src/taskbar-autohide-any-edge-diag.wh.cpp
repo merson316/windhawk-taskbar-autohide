@@ -141,6 +141,86 @@ void DiagLog(PCWSTR fmt, ...) {
     LeaveCriticalSection(&g_logLock);
 }
 
+// ------------------------------------------------------------- edge accessor
+
+// ABE_LEFT=0, ABE_TOP=1, ABE_RIGHT=2, ABE_BOTTOM=3.
+PCWSTR EdgeName(UINT edge) {
+    switch (edge) {
+        case 0: return L"LEFT";
+        case 1: return L"TOP";
+        case 2: return L"RIGHT";
+        case 3: return L"BOTTOM";
+        default: return L"?";
+    }
+}
+
+using TrayUI_GetStuckPlace_t = UINT(WINAPI*)(void* pThis);
+TrayUI_GetStuckPlace_t g_pGetStuckPlace = nullptr;
+
+// Resolved but never hooked, so calling it from inside another hook cannot
+// re-enter our own instrumentation.
+UINT CurrentStuckPlace(void* pThis) {
+    if (!g_pGetStuckPlace || !pThis) {
+        return 0xFFFFFFFF;
+    }
+    return g_pGetStuckPlace(pThis);
+}
+
+// --------------------------------------------------------- state/flags hooks
+
+using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void* pThis);
+TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
+UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
+    UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"GetAutoHideFlags -> 0x%X   [edge=%u %s]", ret, edge,
+            EdgeName(edge));
+    return ret;
+}
+
+using TrayUI_GetDesktopModeAutoHide_t = UINT(WINAPI*)(void* pThis);
+TrayUI_GetDesktopModeAutoHide_t TrayUI_GetDesktopModeAutoHide_Original;
+UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
+    UINT ret = TrayUI_GetDesktopModeAutoHide_Original(pThis);
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"GetDesktopModeAutoHide -> 0x%X   [edge=%u %s]", ret, edge,
+            EdgeName(edge));
+    return ret;
+}
+
+using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
+TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
+void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"SetAutoHideFlags(0x%X)  ENTER [edge=%u %s]", flags, edge,
+            EdgeName(edge));
+    TrayUI_SetAutoHideFlags_Original(pThis, flags);
+    DiagLog(L"SetAutoHideFlags(0x%X)  LEAVE", flags);
+}
+
+using TrayUI_SetAutoHideState_t = LONG(WINAPI*)(void* pThis, int state);
+TrayUI_SetAutoHideState_t TrayUI_SetAutoHideState_Original;
+LONG WINAPI TrayUI_SetAutoHideState_Hook(void* pThis, int state) {
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"SetAutoHideState(%d) ENTER [edge=%u %s]", state, edge,
+            EdgeName(edge));
+    LONG ret = TrayUI_SetAutoHideState_Original(pThis, state);
+    DiagLog(L"SetAutoHideState(%d) LEAVE -> 0x%08X", state, ret);
+    return ret;
+}
+
+using TrayUI_AutoHideChangedOnMonitor_t = void(WINAPI*)(void* pThis,
+                                                        HMONITOR monitor);
+TrayUI_AutoHideChangedOnMonitor_t TrayUI_AutoHideChangedOnMonitor_Original;
+void WINAPI TrayUI_AutoHideChangedOnMonitor_Hook(void* pThis,
+                                                 HMONITOR monitor) {
+    UINT edge = CurrentStuckPlace(pThis);
+    DiagLog(L"AutoHideChangedOnMonitor(%p) ENTER [edge=%u %s]", (void*)monitor,
+            edge, EdgeName(edge));
+    TrayUI_AutoHideChangedOnMonitor_Original(pThis, monitor);
+    DiagLog(L"AutoHideChangedOnMonitor(%p) LEAVE", (void*)monitor);
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
@@ -169,6 +249,46 @@ BOOL Wh_ModInit() {
     }
 
     DiagLog(L"taskbar.dll loaded at %p", (void*)g_taskbarModule);
+
+    WindhawkUtils::SYMBOL_HOOK hooks[] = {
+        // Resolved only; deliberately not hooked.
+        {{LR"(?GetStuckPlace@TrayUI@@UEAAIXZ)"}, &g_pGetStuckPlace, nullptr,
+         true},
+
+        {{LR"(?GetAutoHideFlags@TrayUI@@UEAAIXZ)"},
+         &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
+
+        {{LR"(?GetDesktopModeAutoHide@TrayUI@@UEBAIXZ)"},
+         &TrayUI_GetDesktopModeAutoHide_Original,
+         TrayUI_GetDesktopModeAutoHide_Hook, true},
+
+        {{LR"(?SetAutoHideFlags@TrayUI@@UEAAXI@Z)"},
+         &TrayUI_SetAutoHideFlags_Original, TrayUI_SetAutoHideFlags_Hook, true},
+
+        {{LR"(?SetAutoHideState@TrayUI@@UEAAJH@Z)"},
+         &TrayUI_SetAutoHideState_Original, TrayUI_SetAutoHideState_Hook, true},
+
+        {{LR"(?AutoHideChangedOnMonitor@TrayUI@@QEAAXPEAUHMONITOR__@@@Z)"},
+         &TrayUI_AutoHideChangedOnMonitor_Original,
+         TrayUI_AutoHideChangedOnMonitor_Hook, true},
+    };
+
+    if (!WindhawkUtils::HookSymbols(g_taskbarModule, hooks, ARRAYSIZE(hooks))) {
+        DiagLog(L"FATAL: HookSymbols failed");
+        return FALSE;
+    }
+
+    // Every entry is optional so a single rename degrades instead of killing
+    // the mod, but a diagnosis without these two is meaningless.
+    if (!g_pGetStuckPlace) {
+        DiagLog(L"WARN: GetStuckPlace unresolved, edge will log as ?");
+    }
+    if (!TrayUI_SetAutoHideState_Original) {
+        DiagLog(L"FATAL: SetAutoHideState unresolved, cannot diagnose");
+        return FALSE;
+    }
+
+    DiagLog(L"state/flags hooks installed");
     return TRUE;
 }
 
