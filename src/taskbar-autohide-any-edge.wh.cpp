@@ -6,6 +6,7 @@
 // @author          merson316
 // @include         explorer.exe
 // @architecture    x86-64
+// @compilerOptions -lcomctl32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -256,6 +257,7 @@ TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 
 // Defined further down, alongside the unhide handling.
 bool CursorAtDockedEdge(UINT edge);
+LRESULT CALLBACK TrayWatchProc(HWND, UINT, WPARAM, LPARAM, DWORD_PTR);
 void LogTrayWindowRect(PCWSTR when);
 
 // Cursor transitions are detected in GetAutoHideFlags, which runs constantly,
@@ -579,6 +581,10 @@ thread_local bool g_inSelfUnhide = false;
 UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int param) {
     UINT ret = TrayUI_GetDockedRect_Original(pThis, rect, param);
 
+    // This function's `this` is the base Unhide and SetAutoHideFlags expect.
+    extern void* g_trayUI;
+    g_trayUI = pThis;
+
     LONG pending = InterlockedExchange(&g_pendingAction, kPendingNone);
     if (pending != kPendingNone && !g_inSelfUnhide && pThis &&
         TrayUI_Unhide_Original && TrayUI_SetAutoHideFlags_Original &&
@@ -784,6 +790,86 @@ bool HookTaskbarViewSymbols() {
     return ok;
 }
 
+// -------------------------------------------------------------- edge watcher
+
+// GetAutoHideFlags is not a hot path: it fires in bursts around state changes
+// and not at all while the taskbar sits hidden. A run with the cursor moved
+// repeatedly along the left edge produced two cursor samples, 28 seconds apart.
+// So detection needs a timer; there is no polling site among the hooks.
+//
+// V1 also used a timer and crashed Explorer. The cause was not the timer or the
+// thread: it called _ComputeHiddenRect, which GetDockedRect invokes as
+// `lea -0x30(%rdi),%rcx` -- a base 0x30 lower than the caller's. Passing the
+// unadjusted pointer meant a wrong `this`. Unhide and SetAutoHideFlags share
+// GetDockedRect's base, and Unhide has already been called that way without
+// incident, so this watcher touches only those two and never computes rects.
+
+#define WATCH_TIMER_ID 0x57484132   // 'WHA2'
+#define WATCH_TICK_MS  120
+
+void* g_trayUI = nullptr;   // captured in GetDockedRect: correct base
+HWND g_trayWnd = nullptr;
+bool g_subclassed = false;
+bool g_timerSet = false;
+thread_local bool g_inWatcherCall = false;
+bool g_watcherLastAtEdge = false;
+
+void WatcherTick() {
+    if (!g_trayUI || !g_flagsOffsetsVerified || g_inWatcherCall ||
+        !TrayUI_Unhide_Original || !TrayUI_SetAutoHideFlags_Original) {
+        return;
+    }
+
+    UINT edge = *(UINT*)((BYTE*)g_trayUI + 0x110);
+    if (edge >= ABE_BOTTOM) {
+        return;
+    }
+
+    UINT stored = *(UINT*)((BYTE*)g_trayUI + 0x3c);
+    if (!(stored & 1)) {
+        return;   // auto-hide not on
+    }
+
+    bool atEdge = CursorAtDockedEdge(edge);
+    if (atEdge == g_watcherLastAtEdge) {
+        return;
+    }
+    g_watcherLastAtEdge = atEdge;
+
+    if (atEdge && (stored & 2)) {
+        DiagLog(L"watcher: cursor at edge, Unhide(2,1)");
+        LogTrayWindowRect(L"before-unhide");
+        g_inWatcherCall = true;
+        TrayUI_Unhide_Original(g_trayUI, 2, 1);
+        g_inWatcherCall = false;
+        LogTrayWindowRect(L"after-unhide");
+    } else if (!atEdge && !(stored & 2)) {
+        DiagLog(L"watcher: cursor left, storing 0x%X", stored | 2);
+        LogTrayWindowRect(L"before-hide");
+        g_inWatcherCall = true;
+        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | 2);
+        g_inWatcherCall = false;
+        LogTrayWindowRect(L"after-hide");
+    }
+}
+
+LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
+                               LPARAM lParam, DWORD_PTR dwRefData) {
+    if (!g_timerSet) {
+        // Set from the window's own thread, which is where messages arrive.
+        SetTimer(hWnd, WATCH_TIMER_ID, WATCH_TICK_MS, nullptr);
+        g_timerSet = true;
+        DiagLog(L"watcher: timer armed on %p", (void*)hWnd);
+    }
+
+    if (uMsg == WM_TIMER && wParam == WATCH_TIMER_ID) {
+        WatcherTick();
+        return 0;
+    }
+
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
@@ -922,6 +1008,16 @@ BOOL Wh_ModInit() {
 
     HookTaskbarViewSymbols();
 
+    g_trayWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (g_trayWnd) {
+        g_subclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
+                           g_trayWnd, TrayWatchProc, 0) != FALSE;
+        DiagLog(L"watcher: subclassed %p ok=%d", (void*)g_trayWnd,
+                (int)g_subclassed);
+    } else {
+        DiagLog(L"watcher: Shell_TrayWnd not found");
+    }
+
     DiagLog(L"hooks installed: %d/%d resolved", resolvedCount,
             (int)ARRAYSIZE(checks));
 
@@ -933,6 +1029,14 @@ BOOL Wh_ModInit() {
 }
 
 void Wh_ModUninit() {
+    if (g_trayWnd && g_timerSet) {
+        KillTimer(g_trayWnd, WATCH_TIMER_ID);
+    }
+    if (g_subclassed && g_trayWnd) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
+                                                         TrayWatchProc);
+    }
+
     DiagLog(L"=== diag mod uninit ===");
 
     // Clear the guard before closing so any hook still in flight on another
