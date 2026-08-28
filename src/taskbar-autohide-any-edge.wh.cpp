@@ -537,8 +537,43 @@ void WINAPI TrayUI_ComputeHiddenRect_Hook(void* pThis, RECT* rect, UINT edge) {
 using TrayUI_GetDockedRect_t = UINT(WINAPI*)(void* pThis, RECT* rect,
                                              int param);
 TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
+// Windows detects "hidden and the cursor is at my edge" itself and issues
+// Unhide(flags=2, request=1) -- that is the one request code observed to
+// actually slide the taskbar back. Off-bottom that detection never runs, so
+// hovering does nothing while a click still reveals it via activation.
+//
+// Issue that same call ourselves on cursor arrival. This is done from
+// GetDockedRect rather than from a timer: it runs on the taskbar's own thread
+// and shares Unhide's `this` base (both use 0x110/0x3c, versus the getter's
+// 0x118/0x44 on a base 8 lower). The V1 driver crashed precisely because it
+// called TrayUI members from the wrong thread with an unverified pointer.
+using TrayUI_Unhide_t = void(WINAPI*)(void* pThis, int flags, int request);
+extern TrayUI_Unhide_t TrayUI_Unhide_Original;
+
+thread_local bool g_inSelfUnhide = false;
+bool g_selfUnhideArmed = true;
+
 UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int param) {
     UINT ret = TrayUI_GetDockedRect_Original(pThis, rect, param);
+
+    if (!g_inSelfUnhide && pThis && TrayUI_Unhide_Original &&
+        g_flagsOffsetsVerified) {
+        UINT edge = *(UINT*)((BYTE*)pThis + 0x110);
+        if (edge < ABE_BOTTOM) {
+            UINT stored = *(UINT*)((BYTE*)pThis + 0x3c);
+            bool atEdge = CursorAtDockedEdge(edge);
+
+            if (!atEdge) {
+                g_selfUnhideArmed = true;      // re-arm once the cursor leaves
+            } else if (g_selfUnhideArmed && (stored & 3) == 3) {
+                g_selfUnhideArmed = false;     // fire at most once per arrival
+                DiagLog(L"self-unhide: cursor at edge, issuing Unhide(2,1)");
+                g_inSelfUnhide = true;
+                TrayUI_Unhide_Original(pThis, 2, 1);
+                g_inSelfUnhide = false;
+            }
+        }
+    }
     if (rect) {
         DiagLog(L"GetDockedRect(%d) -> 0x%X (%ld,%ld)-(%ld,%ld)", param, ret,
                 rect->left, rect->top, rect->right, rect->bottom);
