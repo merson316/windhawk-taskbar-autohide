@@ -679,6 +679,11 @@ bool HiddenRectSpillsOntoAnotherDisplay(const RECT& hidden, UINT edge) {
 volatile LONG g_clipHold = 0;
 RECT g_clipRect{};
 
+// Set when the taskbar was hidden with ShowWindow because there was no
+// off-screen space to slide into.
+volatile LONG g_windowHidden = 0;
+RECT g_dockedBeforeHide{};
+
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
     const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
@@ -735,11 +740,16 @@ void RunHideAnimation() {
         LONG fx = to.left, fy = to.top, fw = w, fh = h;
         if (to.left + w > mon.right) { fx = mon.right - sliver; fw = sliver; }
         if (to.top + h > mon.bottom) { fy = mon.bottom - sliver; fh = sliver; }
-        DbgLog(L"hide anim: clipped sliver (%ld,%ld) %ldx%ld", fx, fy, fw, fh);
+        // A 2 px sliver is not enough: the XAML content lives in a child
+        // window that keeps its own size and renders past the shrunken parent,
+        // so it still appears on the neighbouring display. With nowhere to hide
+        // into, hide the window outright. The watcher polls the pointer, so it
+        // does not need a visible sliver to detect the reveal.
+        DbgLog(L"hide anim: no off-screen space, hiding window outright");
         g_clipRect = RECT{fx, fy, fx + fw, fy + fh};
-        InterlockedExchange(&g_clipHold, 1);
-        SetWindowPos(g_trayWnd, nullptr, fx, fy, fw, fh,
-                     SWP_NOZORDER | SWP_NOACTIVATE);
+        InterlockedExchange(&g_clipHold, 0);
+        InterlockedExchange(&g_windowHidden, 1);
+        ShowWindow(g_trayWnd, SW_HIDE);
     } else {
         InterlockedExchange(&g_clipHold, 0);
         SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
@@ -793,6 +803,22 @@ void WatcherTick() {
 
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
+
+        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
+            // Was hidden outright rather than moved: put it back before asking
+            // Windows to unhide, so it reappears at full size in place.
+            DbgLog(L"reveal: restoring hidden window to (%ld,%ld) %ldx%ld",
+                   g_dockedBeforeHide.left, g_dockedBeforeHide.top,
+                   g_dockedBeforeHide.right - g_dockedBeforeHide.left,
+                   g_dockedBeforeHide.bottom - g_dockedBeforeHide.top);
+            SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
+                         g_dockedBeforeHide.top,
+                         g_dockedBeforeHide.right - g_dockedBeforeHide.left,
+                         g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            ShowWindow(g_trayWnd, SW_SHOWNA);
+        }
+
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
@@ -839,6 +865,7 @@ void WatcherTick() {
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
 
         GetWindowRect(g_trayWnd, &g_animFrom);
+        g_dockedBeforeHide = docked;
         g_animTo = hidden;
         g_animDurationMs =
             g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
@@ -1058,6 +1085,10 @@ void RestoreTaskbarIfHidden() {
     }
 
     *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
+
+    if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
+        ShowWindow(g_trayWnd, SW_SHOWNA);
+    }
 
     if (g_lastDockedRect.right > g_lastDockedRect.left) {
         SetWindowPos(g_trayWnd, nullptr, g_lastDockedRect.left,
