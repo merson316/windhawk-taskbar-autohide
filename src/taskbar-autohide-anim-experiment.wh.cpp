@@ -570,6 +570,56 @@ void ApplyDurationOverrides(void* pThis) {
                                           : g_defaultShowDuration;
 }
 
+// ------------------------------------------------------ position enforcement
+
+// Windows enforces one of two taskbar positions, chosen by the hidden flag, and
+// corrects anything else. That correction is what makes the slide invisible:
+// each intermediate position is overwritten before it can be drawn.
+//
+// Log every SetWindowPos aimed at the taskbar together with its return address,
+// resolved to module+offset, to identify the code performing the correction.
+
+thread_local bool g_inOurSlide = false;
+
+// clang under mingw does not provide MSVC's _ReturnAddress intrinsic.
+#define RETURN_ADDRESS() __builtin_return_address(0)
+
+PCWSTR DescribeCaller(void* ret, DWORD* offsetOut) {
+    static WCHAR name[64];
+    HMODULE mod = nullptr;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)ret, &mod) ||
+        !mod) {
+        *offsetOut = 0;
+        return L"?";
+    }
+
+    WCHAR full[MAX_PATH];
+    if (!GetModuleFileNameW(mod, full, ARRAYSIZE(full))) {
+        *offsetOut = 0;
+        return L"?";
+    }
+
+    PCWSTR base = wcsrchr(full, L'\\');
+    wcscpy_s(name, ARRAYSIZE(name), base ? base + 1 : full);
+    *offsetOut = (DWORD)((BYTE*)ret - (BYTE*)mod);
+    return name;
+}
+
+using SetWindowPos_t = decltype(&SetWindowPos);
+SetWindowPos_t SetWindowPos_Original;
+BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND after, int x, int y, int cx,
+                              int cy, UINT flags) {
+    if (hWnd && hWnd == g_trayWnd) {
+        DWORD off = 0;
+        PCWSTR who = DescribeCaller(RETURN_ADDRESS(), &off);
+        ExpLog(L"    SetWindowPos tray -> (%d,%d) %dx%d flags=0x%X  from %s+0x%X%s",
+               x, y, cx, cy, flags, who, off, g_inOurSlide ? L"  [our slide]" : L"");
+    }
+    return SetWindowPos_Original(hWnd, after, x, y, cx, cy, flags);
+}
+
 // ------------------------------------------------------- deferred content hide
 
 // EXPERIMENT.
@@ -744,10 +794,12 @@ void WatcherTick() {
                half.bottom);
         g_inWatcherCall = true;
         TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
+        g_inOurSlide = true;
         TrayUI_SlideWindow_Original(
             g_trayUI, g_trayWnd, &half,
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
             true);
+        g_inOurSlide = false;
         g_inWatcherCall = false;
 
         // Parked and invisible: describe the window and its children, since
