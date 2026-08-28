@@ -148,6 +148,10 @@ void DbgLog(PCWSTR fmt, ...);
 // GetDockedRect, Unhide and SlideWindow. GetAutoHideFlags is reached on a base
 // 8 bytes lower, so it sees these at 0x118 and 0x44. Both are validated at load
 // against a byte signature inside GetAutoHideFlags.
+// Set to the edge currently declined because a display sits beyond it; the
+// hooks below consult it so that edge is left entirely alone.
+extern volatile LONG g_declinedEdge;
+
 #define TRAYUI_EDGE_OFFSET  0x110
 #define TRAYUI_FLAGS_OFFSET 0x3c
 #define GETFLAGS_EDGE_OFFSET  0x118
@@ -483,7 +487,8 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     }
 
     UINT edge = *(UINT*)((BYTE*)pThis + GETFLAGS_EDGE_OFFSET);
-    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
+    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge) ||
+        InterlockedCompareExchange(&g_declinedEdge, -1, -1) == (LONG)edge) {
         return ret;
     }
 
@@ -506,6 +511,7 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     UINT effective = flags;
 
     if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
+        InterlockedCompareExchange(&g_declinedEdge, -1, -1) != (LONG)edge &&
         !g_inUnhide && !CursorAtRevealStrip(edge)) {
         effective = flags | ABS_ALWAYSONTOP;
     }
@@ -683,6 +689,11 @@ RECT g_clipRect{};
 // Set when the taskbar was hidden with ShowWindow because there was no
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
+
+// Set to the edge currently being declined because a display sits beyond it.
+// The hooks must stand down as well, or Windows still moves the taskbar to its
+// hidden position -- which is on that display.
+volatile LONG g_declinedEdge = -1;
 RECT g_dockedBeforeHide{};
 
 void RunHideAnimation() {
@@ -779,12 +790,18 @@ void WatcherTick() {
         if (HiddenRectSpillsOntoAnotherDisplay(probeDocked, edge)) {
             static ULONGLONG lastLog = 0;
             const ULONGLONG now = GetTickCount64();
+            InterlockedExchange(&g_declinedEdge, (LONG)edge);
             if (now - lastLog > 10000) {
                 lastLog = now;
                 DbgLog(L"edge %u has a display beyond it; not managing auto-hide",
                        edge);
             }
             return;
+        }
+        if (InterlockedCompareExchange(&g_declinedEdge, -1, (LONG)edge) ==
+            (LONG)edge) {
+            DbgLog(L"edge %u no longer has a display beyond it; managing again",
+                   edge);
         }
     }
 
