@@ -690,6 +690,8 @@ RECT g_clipRect{};
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
 
+void RestoreTaskbarIfHidden();   // defined with the teardown helpers
+
 // Set to the edge currently being declined because a display sits beyond it.
 // The hooks must stand down as well, or Windows still moves the taskbar to its
 // hidden position -- which is on that display.
@@ -810,6 +812,13 @@ void WatcherTick() {
             // neighbouring display. Standing down is not enough -- clear the
             // flag once so Windows puts it back where it belongs.
             if (InterlockedExchange(&g_declinedEdge, (LONG)edge) != (LONG)edge) {
+                // Declining stops the next hide; it does not undo one that
+                // already happened. Arriving on a declined edge while hidden
+                // leaves the taskbar parked at its hidden position, which on
+                // this edge is the neighbouring display. Restore it first --
+                // the restore reads the flags cleared just below.
+                RestoreTaskbarIfHidden();
+
                 UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
 
                 // Turning auto-hide off is what actually gives the work area
