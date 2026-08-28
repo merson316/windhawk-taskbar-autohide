@@ -790,7 +790,20 @@ void WatcherTick() {
         if (HiddenRectSpillsOntoAnotherDisplay(probeDocked, edge)) {
             static ULONGLONG lastLog = 0;
             const ULONGLONG now = GetTickCount64();
-            InterlockedExchange(&g_declinedEdge, (LONG)edge);
+            // Entering the declined state: if the taskbar is already flagged
+            // hidden it is parked at its hidden position, which is on the
+            // neighbouring display. Standing down is not enough -- clear the
+            // flag once so Windows puts it back where it belongs.
+            if (InterlockedExchange(&g_declinedEdge, (LONG)edge) != (LONG)edge) {
+                UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+                if (f & ABS_ALWAYSONTOP) {
+                    DbgLog(L"declining edge %u: clearing hidden state 0x%X so "
+                           L"the taskbar returns to its docked position",
+                           edge, f);
+                    TrayUI_SetAutoHideFlags_Original(
+                        g_trayUI, f & ~(UINT)ABS_ALWAYSONTOP);
+                }
+            }
             if (now - lastLog > 10000) {
                 lastLog = now;
                 DbgLog(L"edge %u has a display beyond it; not managing auto-hide",
