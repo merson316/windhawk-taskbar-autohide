@@ -310,6 +310,17 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     bool atEdge = CursorAtDockedEdge(edge);
     NudgeTaskbarRelayout(atEdge);
 
+    // Re-assert the hidden state once the cursor leaves. After Unhide reveals
+    // the taskbar it stores 0x1 (shown), and off-bottom nothing ever puts the
+    // hidden bit back -- the timer that normally does so does not run, which is
+    // why the taskbar stayed visible once revealed. The hide itself is not
+    // driven by SlideWindow (show=0 never fires); it is the layout pass reading
+    // GetDockedRect, so asserting the bit plus the transition nudge above is
+    // what re-hides it.
+    if (!atEdge && (stored & 1) && !(stored & 2)) {
+        return stored | 2u;
+    }
+
     if (stored != ret) {
         DiagLog(L"GetAutoHideFlags: stored 0x%X, masked to 0x%X [edge=%u %s]",
                 stored, ret, edge, EdgeName(edge));
