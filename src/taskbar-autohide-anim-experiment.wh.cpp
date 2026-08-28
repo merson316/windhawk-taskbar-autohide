@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge-anim
 // @name            Taskbar auto-hide on any edge (animation experiment)
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         0.1.0
+// @version         0.2.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -12,16 +12,7 @@
 
 // ==WindhawkModReadme==
 /*
-# Taskbar auto-hide on any edge (animation experiment)
-
-**Experimental.** Run this *instead of* the stable mod, never alongside it --
-both hook the same functions. If it misbehaves, disable it and re-enable the
-stable one.
-
-It differs in exactly one way: the hide slide runs before the taskbar is marked
-hidden, so the content is still drawn while the window moves. The hidden rect is
-computed from the docked rect rather than obtained by setting the flag, because
-setting the flag is what drops the content.
+# Taskbar auto-hide on any edge
 
 Windows 11 26H2 can dock the taskbar to the top, left or right, but
 "Automatically hide the taskbar" only works on the bottom edge. Elsewhere the
@@ -121,6 +112,8 @@ or the other, not both, since they hook the same function.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
+#include <stdarg.h>
+#include <string>
 
 // ABE_LEFT/TOP/RIGHT/BOTTOM and ABS_AUTOHIDE/ABS_ALWAYSONTOP come from
 // shellapi.h.
@@ -144,6 +137,48 @@ UINT g_watchMsg = 0;
 HANDLE g_watchThread = nullptr;
 volatile LONG g_watchStop = 0;
 #define LEAVE_TICKS    2
+
+// ------------------------------------------------------------ experiment log
+
+HANDLE g_expLog = INVALID_HANDLE_VALUE;
+
+void ExpLogOpen() {
+    WCHAR base[MAX_PATH];
+    if (!GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH)) {
+        return;
+    }
+    std::wstring path(base);
+    path += L"\\windhawk-anim-experiment.log";
+    g_expLog = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE |
+                               FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+}
+
+void ExpLog(PCWSTR fmt, ...) {
+    if (g_expLog == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    WCHAR line[512];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int off = swprintf(line, ARRAYSIZE(line), L"%02u:%02u:%02u.%03u ", st.wHour,
+                       st.wMinute, st.wSecond, st.wMilliseconds);
+    va_list ap;
+    va_start(ap, fmt);
+    vswprintf(line + off, ARRAYSIZE(line) - off - 3, fmt, ap);
+    va_end(ap);
+    size_t len = wcslen(line);
+    line[len] = L'\r'; line[len + 1] = L'\n'; line[len + 2] = L'\0';
+    char utf8[1024];
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
+                                    nullptr, nullptr);
+    if (bytes > 1) {
+        DWORD written = 0;
+        WriteFile(g_expLog, utf8, (DWORD)(bytes - 1), &written, nullptr);
+    }
+}
 
 // ------------------------------------------------------------------ settings
 
@@ -519,6 +554,47 @@ void ApplyDurationOverrides(void* pThis) {
                                           : g_defaultShowDuration;
 }
 
+// ------------------------------------------------------- deferred content hide
+
+// EXPERIMENT.
+//
+// Setting the hidden flag is required for the window to move and stay
+// off-screen, but it also drops the taskbar's rendered content, so the slide
+// animates an empty window. Both orderings were measured and both fail:
+// flag-first hides invisibly, flag-last snaps the window back.
+//
+// TaskbarHost::SetAutoHide is the bridge from the tray state to the view layer.
+// If the content drop happens there, deferring that one call until after the
+// slide keeps the taskbar drawn while it moves, without disturbing the flags.
+
+using TaskbarHost_SetAutoHide_t = void(WINAPI*)(void* pThis, UINT state);
+TaskbarHost_SetAutoHide_t TaskbarHost_SetAutoHide_Original;
+
+thread_local bool g_deferContentHide = false;
+void* g_pendingHost = nullptr;
+UINT g_pendingState = 0;
+bool g_havePending = false;
+
+void WINAPI TaskbarHost_SetAutoHide_Hook(void* pThis, UINT state) {
+    if (g_deferContentHide) {
+        ExpLog(L"  TaskbarHost::SetAutoHide(%u) DEFERRED", state);
+        g_pendingHost = pThis;
+        g_pendingState = state;
+        g_havePending = true;
+        return;
+    }
+    ExpLog(L"  TaskbarHost::SetAutoHide(%u)", state);
+    TaskbarHost_SetAutoHide_Original(pThis, state);
+}
+
+void FlushDeferredContentHide() {
+    if (g_havePending && TaskbarHost_SetAutoHide_Original) {
+        ExpLog(L"  replaying TaskbarHost::SetAutoHide(%u)", g_pendingState);
+        g_havePending = false;
+        TaskbarHost_SetAutoHide_Original(g_pendingHost, g_pendingState);
+    }
+}
+
 // ------------------------------------------------- notification auto-hide
 
 // Windows refuses to auto-hide while an app flashes its taskbar button, and
@@ -622,51 +698,31 @@ void WatcherTick() {
     }
     g_leaveTicks = 0;
 
-    // EXPERIMENT.
-    //
-    // The stable mod sets the hidden flag and then slides. Setting that flag
-    // drops the taskbar's rendered content, so the slide animates an empty
-    // window and cannot be seen.
-    //
-    // Here the hidden rect is computed rather than asked for -- asking requires
-    // setting the flag, which is the thing being avoided. Every trace shows the
-    // hidden rect is the docked rect pushed off-screen leaving a 2 px sliver,
-    // e.g. (0,0)-(48,1440) -> (-46,0)-(2,1440). So slide first, with the
-    // content still drawn, and mark it hidden only afterwards.
-    const LONG kSliver = 2;
-    RECT hidden = docked;
-    const LONG w = docked.right - docked.left;
-    const LONG h = docked.bottom - docked.top;
-
-    switch (edge) {
-        case ABE_LEFT:
-            hidden.left = docked.left - (w - kSliver);
-            hidden.right = hidden.left + w;
-            break;
-        case ABE_TOP:
-            hidden.top = docked.top - (h - kSliver);
-            hidden.bottom = hidden.top + h;
-            break;
-        case ABE_RIGHT:
-            hidden.left = docked.left + (w - kSliver);
-            hidden.right = hidden.left + w;
-            break;
-        default:
-            break;
-    }
-
+    // Unhide slides itself, but nothing performs the hide slide off-bottom, so
+    // set the state and then issue the slide. With the flags now set,
+    // GetDockedRect returns the hidden rect.
     g_inWatcherCall = true;
+    ExpLog(L"hide: setting flags 0x%X", stored | ABS_ALWAYSONTOP);
+
+    // Hold back the view-layer notification across both the flag change and the
+    // slide, so the taskbar keeps drawing while it moves.
+    g_deferContentHide = true;
+    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
     if (TrayUI_SlideWindow_Original && g_trayWnd) {
+        RECT hidden{};
+        TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
         ApplyDurationOverrides(g_trayUI);
+        ExpLog(L"hide: sliding to (%ld,%ld)-(%ld,%ld)", hidden.left, hidden.top,
+               hidden.right, hidden.bottom);
         TrayUI_SlideWindow_Original(
             g_trayUI, g_trayWnd, &hidden,
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
             true);
     }
 
-    // Only now record it as hidden, so the reveal path takes over.
-    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
+    g_deferContentHide = false;
+    FlushDeferredContentHide();
     g_inWatcherCall = false;
 }
 
@@ -705,6 +761,7 @@ const BYTE kSig[] = {
 };
 
 void Wh_ModSettingsChanged() {
+    ExpLogOpen();
     LoadSettings();
 }
 
@@ -747,6 +804,10 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
          &TrayUI_SlideWindow_Original, nullptr, true},
+
+        {{LR"(public: void __cdecl TaskbarHost::SetAutoHide(unsigned int))",
+          LR"(public: void __cdecl TaskbarHost::SetAutoHide(unsigned int) )"},
+         &TaskbarHost_SetAutoHide_Original, TaskbarHost_SetAutoHide_Hook, true},
 
         {{LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void))",
           LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void) )"},

@@ -12,7 +12,8 @@ WINUSER="${WINUSER:-$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n')}"
 LOCALAPP="/mnt/c/Users/$WINUSER/AppData/Local"
 for f in "$LOCALAPP/windhawk-autohide-fix.log" \
          "$LOCALAPP/windhawk-autohide-diag.log" \
-         "$LOCALAPP/windhawk-anim-diag.log"; do
+         "$LOCALAPP/windhawk-anim-diag.log" \
+         "$LOCALAPP/windhawk-anim-experiment.log"; do
   if [ -f "$f" ]; then
     : > "$f" && echo "truncated $(basename "$f")"
   else
