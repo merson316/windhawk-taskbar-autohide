@@ -24,6 +24,16 @@ This mod is a diagnostic step, not a fix. Disable it once the log is captured.
 */
 // ==/WindhawkModReadme==
 
+// ==WindhawkModSettings==
+/*
+- dryRun: true
+  $name: Dry run (safe)
+  $description: >-
+    Run the hide logic and log what it would do, without moving the taskbar.
+    Turn this off once the log shows the loop behaving sanely.
+*/
+// ==/WindhawkModSettings==
+
 #include <windhawk_utils.h>
 
 #include <stdarg.h>
@@ -263,6 +273,7 @@ UINT WINAPI TrayUI_GetDesktopModeAutoHide_Hook(void* pThis) {
 
 // Defined below in the hide driver section.
 extern void* g_trayUI;
+LRESULT CALLBACK TraySubclassProc(HWND, UINT, WPARAM, LPARAM, DWORD_PTR);
 void EngageDriver();
 void DisengageDriver();
 
@@ -517,8 +528,12 @@ bool HookAutoHideGate(HMODULE module) {
 void* g_trayUI = nullptr;                // real (unadjusted) TrayUI instance
 HWND g_trayWnd = nullptr;
 bool g_driverEngaged = false;
+bool g_subclassed = false;
 bool g_isHidden = false;
+bool g_inSlide = false;                  // reentrancy guard: SlideWindow pumps
 int g_idleTicks = 0;
+int g_tickCount = 0;
+bool g_dryRun = true;
 
 bool GetTrayMonitorRect(RECT* out) {
     if (!g_trayWnd) {
@@ -557,16 +572,29 @@ void DriveHide() {
         return;
     }
 
+    if (g_inSlide) {
+        return;
+    }
+
     UINT edge = (UINT)g_currentEdge;
     RECT hidden{};
     TrayUI_ComputeHiddenRect_Original(g_trayUI, &hidden, edge);
 
     HMONITOR mon = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
-    DiagLog(L"DRIVER: hiding to (%ld,%ld)-(%ld,%ld) edge=%u %s", hidden.left,
-            hidden.top, hidden.right, hidden.bottom, edge, EdgeName(edge));
+    DiagLog(L"DRIVER: %s hide to (%ld,%ld)-(%ld,%ld) edge=%u %s",
+            g_dryRun ? L"WOULD" : L"doing", hidden.left, hidden.top,
+            hidden.right, hidden.bottom, edge, EdgeName(edge));
 
-    TrayUI_SlideWindow_Original(g_trayUI, g_trayWnd, &hidden, mon, false, true);
+    // Mark hidden before sliding: the slide animates and pumps messages, so
+    // the tick can re-enter before the call returns.
     g_isHidden = true;
+
+    if (!g_dryRun) {
+        g_inSlide = true;
+        TrayUI_SlideWindow_Original(g_trayUI, g_trayWnd, &hidden, mon, false,
+                                    true);
+        g_inSlide = false;
+    }
 }
 
 void DriveShow() {
@@ -575,21 +603,39 @@ void DriveShow() {
         return;
     }
 
+    if (g_inSlide) {
+        return;
+    }
+
     RECT docked{};
     TrayUI_GetDockedRect_Original(g_trayUI, &docked, 0);
 
     HMONITOR mon = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
-    DiagLog(L"DRIVER: showing to (%ld,%ld)-(%ld,%ld)", docked.left, docked.top,
+    DiagLog(L"DRIVER: %s show to (%ld,%ld)-(%ld,%ld)",
+            g_dryRun ? L"WOULD" : L"doing", docked.left, docked.top,
             docked.right, docked.bottom);
 
-    TrayUI_SlideWindow_Original(g_trayUI, g_trayWnd, &docked, mon, true, true);
     g_isHidden = false;
     g_idleTicks = 0;
+
+    if (!g_dryRun) {
+        g_inSlide = true;
+        TrayUI_SlideWindow_Original(g_trayUI, g_trayWnd, &docked, mon, true,
+                                    true);
+        g_inSlide = false;
+    }
 }
 
 void DriverTick() {
-    if (!g_driverEngaged || !g_trayUI) {
+    if (!g_driverEngaged || !g_trayUI || g_inSlide) {
         return;
+    }
+
+    // Heartbeat: without it, a hang inside the tick is indistinguishable from
+    // a loop that simply had nothing to do.
+    if ((++g_tickCount % 10) == 0) {
+        DiagLog(L"DRIVER: tick %d hidden=%d idle=%d", g_tickCount,
+                (int)g_isHidden, g_idleTicks);
     }
 
     UINT edge = (UINT)g_currentEdge;
@@ -654,8 +700,12 @@ void EngageDriver() {
         return;
     }
 
-    WindhawkUtils::SetWindowSubclassFromAnyThread(g_trayWnd, TraySubclassProc,
-                                                  0);
+    if (!g_subclassed) {
+        DiagLog(L"DRIVER: not subclassed, refusing to engage");
+        return;
+    }
+
+    // Safe here: this runs on the taskbar's own thread.
     SetTimer(g_trayWnd, AUTOHIDE_TIMER_ID, AUTOHIDE_TICK_MS, nullptr);
     g_driverEngaged = true;
     g_idleTicks = 0;
@@ -672,8 +722,6 @@ void DisengageDriver() {
     }
     if (g_trayWnd) {
         KillTimer(g_trayWnd, AUTOHIDE_TIMER_ID);
-        WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
-                                                         TraySubclassProc);
     }
     g_driverEngaged = false;
     DiagLog(L"DRIVER: disengaged");
@@ -801,6 +849,21 @@ BOOL Wh_ModInit() {
     }
     HookAutoHideGate(g_taskbarModule);
 
+    g_dryRun = Wh_GetIntSetting(L"dryRun") != 0;
+    DiagLog(L"dryRun=%d", (int)g_dryRun);
+
+    // Subclass once, here, off the taskbar thread. Doing it from inside a hook
+    // means marshalling onto the thread already being run on, which deadlocks.
+    g_trayWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (g_trayWnd) {
+        g_subclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
+                           g_trayWnd, TraySubclassProc, 0) != FALSE;
+        DiagLog(L"subclassed Shell_TrayWnd %p: %d", (void*)g_trayWnd,
+                (int)g_subclassed);
+    } else {
+        DiagLog(L"Shell_TrayWnd not found at init");
+    }
+
     DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
             EdgeName((UINT)g_currentEdge));
 
@@ -814,8 +877,19 @@ BOOL Wh_ModInit() {
     return TRUE;
 }
 
+void Wh_ModSettingsChanged() {
+    g_dryRun = Wh_GetIntSetting(L"dryRun") != 0;
+    DiagLog(L"settings changed: dryRun=%d", (int)g_dryRun);
+}
+
 void Wh_ModUninit() {
     DisengageDriver();
+
+    if (g_subclassed && g_trayWnd) {
+        WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
+                                                         TraySubclassProc);
+        g_subclassed = false;
+    }
 
     DiagLog(L"=== diag mod uninit ===");
 
