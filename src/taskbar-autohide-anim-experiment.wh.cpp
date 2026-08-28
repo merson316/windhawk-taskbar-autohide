@@ -611,7 +611,10 @@ using SetWindowPos_t = decltype(&SetWindowPos);
 SetWindowPos_t SetWindowPos_Original;
 BOOL WINAPI SetWindowPos_Hook(HWND hWnd, HWND after, int x, int y, int cx,
                               int cy, UINT flags) {
-    if (hWnd && hWnd == g_trayWnd) {
+    // Do not filter on g_trayWnd alone: if that handle is wrong or stale the
+    // correction would be invisible. Log anything moved while our slide runs,
+    // plus everything aimed at the handle we believe is the taskbar.
+    if (hWnd && (hWnd == g_trayWnd || g_inOurSlide)) {
         DWORD off = 0;
         PCWSTR who = DescribeCaller(RETURN_ADDRESS(), &off);
         ExpLog(L"    SetWindowPos tray -> (%d,%d) %dx%d flags=0x%X  from %s+0x%X%s",
@@ -1032,6 +1035,19 @@ BOOL Wh_ModInit() {
         Wh_Log(L"could not start the watch thread");
         return FALSE;
     }
+
+
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        void* swp = (void*)GetProcAddress(user32, "SetWindowPos");
+        if (swp) {
+            Wh_SetFunctionHook(swp, (void*)SetWindowPos_Hook,
+                               (void**)&SetWindowPos_Original);
+            ExpLog(L"SetWindowPos hooked");
+        }
+    }
+
+    ExpLog(L"=== experiment ready, trayWnd=%p ===", (void*)g_trayWnd);
 
     return TRUE;
 }
