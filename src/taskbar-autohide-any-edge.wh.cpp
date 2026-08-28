@@ -30,8 +30,13 @@ The bottom edge is left untouched.
 ## Notification handling
 
 Windows refuses to auto-hide the taskbar while an app is flashing its taskbar
-button, which can leave it visible indefinitely. This mod hides it again after
-`notificationHoldMs` (1500 ms by default), on every edge including the bottom.
+button, which can leave it visible indefinitely. This mod shows it once, holds
+it for `notificationHoldMs` (1500 ms by default), then lets it hide and stay
+hidden for the rest of the flashing.
+
+This works on every edge, including the bottom, and is independent of the
+per-edge toggles above -- those govern which edges the mod drives auto-hide on,
+not notification handling.
 
 That makes Cirn09's [Better Taskbar
 Autohide](https://windhawk.net/mods/taskbar-autohide-better) redundant; run one
@@ -338,6 +343,7 @@ bool CursorAtRevealStrip(UINT edge) {
         case ABE_LEFT:  return pt.x <= m.left + tol;
         case ABE_TOP:   return pt.y <= m.top + tol;
         case ABE_RIGHT: return pt.x >= m.right - tol - 1;
+        case ABE_BOTTOM: return pt.y >= m.bottom - tol - 1;
         default:        return false;
     }
 }
@@ -423,10 +429,12 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
                                   now + g_settings.notificationHoldMs);
         } else if (now >= InterlockedCompareExchange64(&g_holdVisibleUntil, 0,
                                                        0) &&
-                   edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-                   !CursorAtRevealStrip(edge)) {
-            // Same burst, already shown for its hold, and the pointer is not
-            // at the edge: keep it hidden rather than flashing it back up.
+                   edge <= ABE_BOTTOM && !CursorAtRevealStrip(edge)) {
+            // Same burst, already shown for its hold, and the pointer is not at
+            // the edge: keep it hidden rather than flashing it back up. Applies
+            // on every edge including the bottom, where Windows drives the
+            // hiding itself -- the per-edge toggles govern auto-hide driving,
+            // not notification handling.
             return;
         }
     }

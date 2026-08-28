@@ -60,7 +60,7 @@ Compile → Enable.
 |---|---|---|
 | Enable on the left / top / right edge | on | Which edges the mod acts on |
 | Reveal trigger width | 8 px | How close to the edge the pointer must get |
-| Keep visible after a notification | 1500 ms | How long a flashing taskbar button keeps the taskbar up |
+| Keep visible after a notification | 1500 ms | How long a flashing taskbar button keeps the taskbar up (all edges) |
 | Notification burst gap | 5000 ms | Unhides closer together than this count as one notification |
 | Hide / reveal animation duration | 0 (Windows default) | Slide duration; runs synchronously, so keep it short |
 
