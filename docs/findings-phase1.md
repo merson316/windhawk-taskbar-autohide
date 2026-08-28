@@ -256,3 +256,28 @@ needed to fire -- the reveal felt sticky while the hide, with the pointer away
 and the queue quiet, always felt responsive. Replaced with a worker thread
 posting an ordinary registered message, which is not deprioritised, while the
 work still runs on the taskbar's thread.
+
+## Why the duration setting has no visible effect
+
+Verified with `hideDurationMs: 600`:
+
+    dur(h=600,s=150)
+    show=0 -> took 625 ms, 20 SetWindowPos steps,
+              (0,0)-(48,1440) -> (-46,0)-(2,1440)
+
+The override lands, and the window slides smoothly for the full duration. But
+25 ms and 600 ms look identical, because **the taskbar's rendered content
+disappears at the state change, before the slide begins**. The window then
+animates while already empty, so its duration cannot be seen.
+
+That content is drawn by the XAML layer. `SlideWindow` moves the window, not the
+pixels, so no amount of tuning here changes what is visible.
+
+One untried idea, recorded rather than pursued: set the flags to obtain the
+hidden rect, set them back to "shown" so the content keeps rendering, run the
+slide, and only then mark it hidden. Whether the content survives that thrash is
+unknown, and it risks flicker and the request=9 unhide reflex.
+
+The durations remain useful for one thing: a low value (25 ms) makes the hide
+effectively instantaneous, which removes the shell freeze described above and
+makes the reveal feel immediate.

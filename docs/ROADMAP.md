@@ -22,9 +22,18 @@ edge. The perceived difference is geometric -- a vertical taskbar sweeps 48 px
 of screen area where a horizontal one sweeps 3440 px, so the same motion reads
 as much faster.
 
-`hideDurationMs` / `showDurationMs` settings were added to lengthen it to taste.
-See `docs/findings-phase1.md` for the measurements and the five hypotheses that
-were ruled out.
+`hideDurationMs` / `showDurationMs` settings were added and verified to work --
+600 ms produces a measured 625 ms slide in 20 steps -- but they make no visible
+difference, because the taskbar's rendered content disappears at the state
+change before the slide starts. The window animates while already empty.
+
+Their practical use is the opposite of the original intent: a low value such as
+25 ms makes the hide effectively instant, which avoids freezing the shell, since
+the slide runs synchronously on the taskbar's UI thread.
+
+Anything further here means reaching the XAML layer that draws the content.
+`SlideWindow` cannot do it. See `docs/findings-phase1.md` for the measurements
+and the hypotheses ruled out.
 
 ## 3. Secondary monitor support
 
