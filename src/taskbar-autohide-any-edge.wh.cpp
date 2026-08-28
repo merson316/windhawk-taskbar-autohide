@@ -29,6 +29,9 @@ The bottom edge is left untouched.
 
 ## Notification handling
 
+Controlled by the two "Notifications" settings. **Set "keep visible for" to 0 to
+turn it off entirely**; any value above 0 turns it on.
+
 Windows refuses to auto-hide the taskbar while an app is flashing its taskbar
 button, which can leave it visible indefinitely. This mod shows it once, holds
 it for `notificationHoldMs` (1500 ms by default), then lets it hide and stay
@@ -71,21 +74,32 @@ or the other, not both, since they hook the same function.
   $description: >-
     0 keeps the Windows default (200 ms). Range 25-600.
 - notificationHoldMs: 1500
-  $name: Keep visible after a notification (ms)
+  $name: Notifications - keep visible for (ms)
   $description: >-
-    Windows refuses to auto-hide the taskbar while an app is flashing its
-    taskbar button, which can leave it up indefinitely. This hides it again
-    after the given time. 0 hides as soon as the pointer leaves; raise it to
-    keep notifications visible for longer. Applies on every edge, including the
-    bottom.
+    When an app wants attention it flashes its taskbar button, and Windows then
+    refuses to auto-hide the taskbar until the flashing stops - which can leave
+    it on screen indefinitely.
+
+    With this set, the taskbar appears once, stays for this long, then hides
+    again and stays hidden for the rest of the flashing.
+
+    Set to 0 to turn notification handling off completely: the taskbar then
+    behaves as Windows intends, staying up for the whole notification on the
+    bottom edge, and hiding as soon as the pointer leaves on other edges.
+
+    Applies on every edge, including the bottom, regardless of the per-edge
+    switches above.
 - notificationBurstGapMs: 5000
-  $name: Notification burst gap (ms)
+  $name: Notifications - treat as one within (ms)
   $description: >-
-    An app flashing its taskbar button produces one unhide per flash. Unhides
-    closer together than this count as one notification, so the taskbar shows
-    once rather than repeatedly. Raise it if a notification makes the taskbar
-    reappear after it should have settled; lower it if separate notifications
-    are being merged.
+    Only used when the setting above is not 0.
+
+    A flashing taskbar button asks for the taskbar once per flash, not once per
+    notification. Requests closer together than this are treated as the same
+    notification, so the taskbar shows once instead of popping up repeatedly.
+
+    Raise it if the taskbar keeps reappearing during a single notification.
+    Lower it if two genuinely separate notifications get merged into one.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-

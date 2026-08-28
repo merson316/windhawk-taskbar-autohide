@@ -58,11 +58,36 @@ Compile → Enable.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Enable on the left / top / right edge | on | Which edges the mod acts on |
-| Reveal trigger width | 8 px | How close to the edge the pointer must get |
-| Keep visible after a notification | 1500 ms | How long a flashing taskbar button keeps the taskbar up (all edges) |
-| Notification burst gap | 5000 ms | Unhides closer together than this count as one notification |
-| Hide / reveal animation duration | 0 (Windows default) | Slide duration; runs synchronously, so keep it short |
+| Enable on the left / top / right edge | on | Which edges the mod drives auto-hide on. The bottom edge is never touched, since Windows already handles it. |
+| Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
+| Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
+| Notifications - treat as one within | 5000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
+| Hide / reveal animation duration | 0 | Overrides the slide duration (25-600 ms). 0 keeps the Windows default. |
+
+### Notification handling
+
+When an app wants attention it flashes its taskbar button, and Windows then
+refuses to auto-hide the taskbar until the flashing stops. On a busy machine
+that can mean the taskbar simply stays on screen.
+
+With `Notifications - keep visible for` set above 0, the taskbar appears once,
+stays for that long, then hides again and stays hidden for the rest of the
+flashing. Moving the pointer to the edge still reveals it at any time.
+
+This works on **every** edge including the bottom, and is independent of the
+per-edge switches -- those decide where the mod drives auto-hide, not how
+notifications are handled. It replaces [Better Taskbar
+Autohide](https://windhawk.net/mods/taskbar-autohide-better); run one or the
+other, never both, as they hook the same function.
+
+To disable it and get stock Windows behaviour back, set the value to 0.
+
+### A note on the animation duration
+
+The slide is a synchronous loop on the taskbar's own thread, so the duration is
+also how long the shell is blocked. Values above a few hundred milliseconds
+freeze the taskbar rather than slowing the animation, which is why the range is
+capped at 600 ms. A low value such as 25 ms makes hiding effectively instant.
 
 ## Known limitations
 
