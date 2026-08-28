@@ -3,7 +3,11 @@
 # Usage: tools/readlog.sh [--clear|--tail]
 set -uo pipefail
 
-LOG="/mnt/c/Users/<user>/AppData/Local/windhawk-autohide-diag.log"
+# Resolve the Windows user rather than hardcoding it.
+WINUSER="${WINUSER:-$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n')}"
+LOCALAPP="/mnt/c/Users/$WINUSER/AppData/Local"
+
+LOG="$LOCALAPP/windhawk-autohide-diag.log"
 
 case "${1:-}" in
   --clear) : > "$LOG" 2>/dev/null && echo "cleared $LOG" || echo "not present: $LOG"; ;;

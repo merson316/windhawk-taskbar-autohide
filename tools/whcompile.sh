@@ -5,6 +5,10 @@
 # Usage: tools/whcompile.sh <file.wh.cpp>
 set -uo pipefail
 
+# Resolve the Windows user rather than hardcoding it.
+WINUSER="${WINUSER:-$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n')}"
+LOCALAPP="/mnt/c/Users/$WINUSER/AppData/Local"
+
 SRC="${1:?usage: whcompile.sh <file.wh.cpp>}"
 [ -f "$SRC" ] || { echo "no such file: $SRC" >&2; exit 2; }
 
@@ -12,8 +16,8 @@ CLANG="/mnt/c/Program Files/Windhawk/Compiler/bin/clang++.exe"
 INCLUDE='C:\Program Files\Windhawk\Compiler\include'
 [ -x "$CLANG" ] || { echo "Windhawk clang not found at $CLANG" >&2; exit 2; }
 
-STAGE_WIN='C:\Users\<user>\AppData\Local\Temp'
-STAGE_WSL='/mnt/c/Users/<user>/AppData/Local/Temp'
+STAGE_WIN="C:\\Users\\$WINUSER\\AppData\\Local\\Temp"
+STAGE_WSL="$LOCALAPP/Temp"
 BASE="whcompile_$$.cpp"
 OUT="whcompile_$$.dll"
 cp "$SRC" "$STAGE_WSL/$BASE" || exit 2

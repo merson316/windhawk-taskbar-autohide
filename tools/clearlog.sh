@@ -6,8 +6,12 @@
 # log then never reappears and a whole test run is lost. Truncation keeps the
 # mod's handle valid.
 set -uo pipefail
-for f in /mnt/c/Users/<user>/AppData/Local/windhawk-autohide-fix.log \
-         /mnt/c/Users/<user>/AppData/Local/windhawk-autohide-diag.log; do
+
+# Resolve the Windows user rather than hardcoding it.
+WINUSER="${WINUSER:-$(cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r\n')}"
+LOCALAPP="/mnt/c/Users/$WINUSER/AppData/Local"
+for f in "$LOCALAPP/windhawk-autohide-fix.log" \
+         "$LOCALAPP/windhawk-autohide-diag.log"; do
   if [ -f "$f" ]; then
     : > "$f" && echo "truncated $(basename "$f")"
   else

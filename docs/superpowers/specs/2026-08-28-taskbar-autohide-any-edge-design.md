@@ -19,7 +19,7 @@ edges.
 |---|---|
 | Windows build | 10.0.26300.9278 (26H2) |
 | Windhawk | 1.7.3 |
-| Primary display | 3440x1440 at (0,0), taskbar docked left, 48 px |
+| Primary display | the primary display at (0,0), taskbar docked left, 48 px |
 | Second display | 1440x2560 portrait at (3440,-422), no taskbar |
 | `Advanced\TaskbarLocation` | `0` (= `ABE_LEFT`, matches the live work area) |
 | `Advanced\MMTaskbarEnabled` | `0` (taskbar on primary display only) |
@@ -183,9 +183,9 @@ the chance of an anti-cheat incident.
 - Therefore a mod's `@include explorer.exe` limits where the **mod** runs, not
   where the **engine** is injected. Per-mod targeting is not the protection and
   must not be presented as such.
-- Installed game libraries: `<GameDrive>:\SteamLibrary`, `<GameDrive>:\SteamLibrary`,
-  `<GameDrive>:\SteamLibrary`, `<GameDrive>:\Origin`, `<GameDrive>:\BNet`. The Steam paths match the
-  default `steamapps\common\` exclusion. `<GameDrive>:\BNet` is a custom folder name
+- Installed game libraries: `<drive>:\SteamLibrary`, `<drive>:\SteamLibrary`,
+  `<drive>:\SteamLibrary`, `<drive>:\<launcher>`, `<drive>:\<launcher>`. The Steam paths match the
+  default `steamapps\common\` exclusion. `<drive>:\<launcher>` is a custom folder name
   unlikely to match the default Battle.net/Blizzard patterns.
 
 ### Configuration requirement
@@ -197,11 +197,11 @@ and Riot install locations.
 
 Game libraries on this machine are to be excluded by path:
 
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\Origin\*
-    <GameDrive>:\BNet\*
+    <drive>:\SteamLibrary\*
+    <drive>:\SteamLibrary\*
+    <drive>:\SteamLibrary\*
+    <drive>:\<launcher>\*
+    <drive>:\<launcher>\*
     C:\XboxGames\*
 
 This is applied and verified **before** the diagnostic mod is enabled, so that

@@ -9,11 +9,11 @@ exclusions. A mod's `@include` controls where the *mod* runs, not where the
 Settings -> Advanced settings -> More advanced settings -> Process exclusion
 list, additive to Windhawk's built-in exclusions:
 
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\Origin\*
-    <GameDrive>:\BNet\*
+    <drive>:\SteamLibrary\*
+    <drive>:\SteamLibrary\*
+    <drive>:\SteamLibrary\*
+    <drive>:\<launcher>\*
+    <drive>:\<launcher>\*
     C:\XboxGames\*
 
 ## Verify
@@ -26,7 +26,7 @@ single pipe-separated `REG_SZ`:
 
 Expected:
 
-    Exclude    REG_SZ    <GameDrive>:\SteamLibrary\*|<GameDrive>:\Origin\*|<GameDrive>:\BNet\*|C:\XboxGames\*
+    Exclude    REG_SZ    <drive>:\SteamLibrary\*|<drive>:\SteamLibrary\*|<drive>:\SteamLibrary\*|<drive>:\<launcher>\*|<drive>:\<launcher>\*|C:\XboxGames\*
 
 An empty `Include` value alongside it is correct: it means default broad
 injection minus the exclusions above, rather than an allowlist.

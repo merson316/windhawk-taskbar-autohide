@@ -11,3 +11,4 @@ research/*-pdb-strings.txt
 # Verbatim copies of other authors' mods, kept locally for reference only.
 # Fetch from https://github.com/ramensoftware/windhawk-mods instead.
 research/reference-*.wh.cpp
+research/v1-preclean-backup.wh.cpp

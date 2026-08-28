@@ -76,11 +76,11 @@ Expected now: **no output** (no exclusion value has been set). This is the faili
 In Windhawk: **Settings → Advanced settings → More advanced settings → Process exclusion list**. Add these six lines, keeping any entries already present:
 
 ```
-<GameDrive>:\SteamLibrary\*
-<GameDrive>:\SteamLibrary\*
-<GameDrive>:\SteamLibrary\*
-<GameDrive>:\Origin\*
-<GameDrive>:\BNet\*
+<drive>:\SteamLibrary\*
+<drive>:\SteamLibrary\*
+<drive>:\SteamLibrary\*
+<drive>:\<launcher>\*
+<drive>:\<launcher>\*
 C:\XboxGames\*
 ```
 
@@ -119,11 +119,11 @@ exclusions. A mod's `@include` controls where the *mod* runs, not where the
 Settings -> Advanced settings -> More advanced settings -> Process exclusion
 list, additive to Windhawk's built-in exclusions:
 
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\SteamLibrary\*
-    <GameDrive>:\Origin\*
-    <GameDrive>:\BNet\*
+    <drive>:\SteamLibrary\*
+    <drive>:\SteamLibrary\*
+    <drive>:\SteamLibrary\*
+    <drive>:\<launcher>\*
+    <drive>:\<launcher>\*
     C:\XboxGames\*
 
 ## Verify

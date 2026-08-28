@@ -11,7 +11,7 @@ needs the full cycle tested: hide, reveal, stay-up, re-hide, work-area release.
 
 The reveal trigger and stay-visible test are already written generically against
 `ABE_*`, so failures are most likely in geometry rather than logic. The hidden
-rect for the left edge is `(-46,0)-(2,1440)` on a 3440x1440 display -- a 2px
+rect for the left edge is `(-46,0)-(2,1440)` on a the primary display display -- a 2px
 sliver. Confirm the equivalent on the other edges rather than assuming symmetry.
 
 ## 2. Show and hide animation
