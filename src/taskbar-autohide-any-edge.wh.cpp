@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32
+// @compilerOptions -lcomctl32 -lgdi32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -682,7 +682,38 @@ RECT g_clipRect{};
 // Set when the taskbar was hidden with ShowWindow because there was no
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
+
+// A window region clips child windows, unlike a resize, so it can keep the
+// taskbar's content off a neighbouring display while the window itself sits
+// partly over it. Remembered while docked, because once hidden the window
+// overlaps the wrong monitor and cannot be asked which one it belongs to.
+volatile LONG g_regionSet = 0;
+RECT g_ownMonitor{};
 RECT g_dockedBeforeHide{};
+
+// Clip the window to the monitor the taskbar belongs to.
+void ApplyMonitorClip(LONG x, LONG y, LONG w, LONG h) {
+    if (g_ownMonitor.right <= g_ownMonitor.left || !g_trayWnd) {
+        return;
+    }
+    RECT win{x, y, x + w, y + h};
+    RECT vis{};
+    if (!IntersectRect(&vis, &win, &g_ownMonitor)) {
+        vis = RECT{x, y, x, y};
+    }
+    // Window-relative, and SetWindowRgn takes ownership of the region.
+    SetWindowRgn(g_trayWnd,
+                 CreateRectRgn(vis.left - x, vis.top - y, vis.right - x,
+                               vis.bottom - y),
+                 TRUE);
+    InterlockedExchange(&g_regionSet, 1);
+}
+
+void ClearMonitorClip() {
+    if (InterlockedCompareExchange(&g_regionSet, 0, 1) == 1 && g_trayWnd) {
+        SetWindowRgn(g_trayWnd, nullptr, TRUE);
+    }
+}
 
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
@@ -709,12 +740,7 @@ void RunHideAnimation() {
         // neighbouring display, and the taskbar's content renders past any clip
         // we apply, so animating would just play the slide over there. Hide it
         // outright instead.
-        DbgLog(L"hide anim: no off-screen space, hiding window without a slide");
-        InterlockedExchange(&g_clipHold, 0);
-        InterlockedExchange(&g_windowHidden, 1);
-        ShowWindow(g_trayWnd, SW_HIDE);
-        InterlockedExchange(&g_animOverride, 0);
-        return;
+        DbgLog(L"hide anim: clipping to the taskbar's own monitor while sliding");
     }
 
 
@@ -730,11 +756,19 @@ void RunHideAnimation() {
 
         SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        if (clip) {
+            ApplyMonitorClip(x, y, from.right - from.left,
+                             from.bottom - from.top);
+        }
         Sleep(16);
     }
 
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (clip) {
+        ApplyMonitorClip(to.left, to.top, from.right - from.left,
+                         from.bottom - from.top);
+    }
 
     InterlockedExchange(&g_animOverride, 0);
 }
@@ -785,24 +819,15 @@ void WatcherTick() {
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
 
-        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
-            // Was hidden outright rather than moved: put it back before asking
-            // Windows to unhide, so it reappears at full size in place.
-            DbgLog(L"reveal: restoring hidden window to (%ld,%ld) %ldx%ld",
-                   g_dockedBeforeHide.left, g_dockedBeforeHide.top,
-                   g_dockedBeforeHide.right - g_dockedBeforeHide.left,
-                   g_dockedBeforeHide.bottom - g_dockedBeforeHide.top);
-            SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
-                         g_dockedBeforeHide.top,
-                         g_dockedBeforeHide.right - g_dockedBeforeHide.left,
-                         g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
-            ShowWindow(g_trayWnd, SW_SHOWNA);
-        }
+        // The clip stays on through Unhide's slide, so the taskbar is not drawn
+        // over the neighbouring display on its way back in. It is dropped once
+        // the slide has finished.
 
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
+
+        ClearMonitorClip();
         g_leaveTicks = 0;
         return;
     }
@@ -818,6 +843,15 @@ void WatcherTick() {
     }
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
+
+    {
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        HMONITOR own = MonitorFromRect(&docked, MONITOR_DEFAULTTONEAREST);
+        if (own && GetMonitorInfoW(own, &mi)) {
+            g_ownMonitor = mi.rcMonitor;
+        }
+    }
 
     if (PtInRect(&docked, pt) || GetForegroundWindow() == g_trayWnd) {
         g_leaveTicks = 0;
@@ -1067,6 +1101,7 @@ void RestoreTaskbarIfHidden() {
 
     *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
 
+    ClearMonitorClip();
     if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
         ShowWindow(g_trayWnd, SW_SHOWNA);
     }
