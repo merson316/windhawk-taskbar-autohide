@@ -256,6 +256,16 @@ TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 
 // Defined further down, alongside the unhide handling.
 bool CursorAtDockedEdge(UINT edge);
+
+// Cursor transitions are detected in GetAutoHideFlags, which runs constantly,
+// but acted on in GetDockedRect, which is the only place with the right `this`
+// base and which runs only on layout passes. Detecting and acting in the same
+// place failed: GetDockedRect was called 22 times in a whole session and missed
+// almost every transition. The nudge posted on each transition is what brings
+// the layout pass along shortly after.
+enum PendingAction { kPendingNone = 0, kPendingReveal, kPendingHide };
+volatile LONG g_pendingAction = kPendingNone;
+extern bool g_lastCursorAtEdge;
 void NudgeTaskbarRelayout(bool cursorAtEdge);
 
 const size_t kTrayUiFlagsOffset = 0x44;
@@ -308,6 +318,15 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     // Report the truth and let Unhide clear the bit itself via
     // SetAutoHideFlags(0x1), which the in-unhide passthrough leaves untouched.
     bool atEdge = CursorAtDockedEdge(edge);
+
+    if (atEdge != g_lastCursorAtEdge) {
+        if (atEdge && (stored & 3) == 3) {
+            InterlockedExchange(&g_pendingAction, kPendingReveal);
+        } else if (!atEdge && (stored & 1) && !(stored & 2)) {
+            InterlockedExchange(&g_pendingAction, kPendingHide);
+        }
+    }
+
     NudgeTaskbarRelayout(atEdge);
 
     // The getter reports the stored value and nothing else. Synthesising a
@@ -549,35 +568,30 @@ using TrayUI_SetAutoHideFlags_t2 = void(WINAPI*)(void* pThis, UINT flags);
 extern TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 
 thread_local bool g_inSelfUnhide = false;
-bool g_cursorWasAtEdge = false;
 
 UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int param) {
     UINT ret = TrayUI_GetDockedRect_Original(pThis, rect, param);
 
-    if (!g_inSelfUnhide && pThis && TrayUI_Unhide_Original &&
-        TrayUI_SetAutoHideFlags_Original && g_flagsOffsetsVerified) {
+    LONG pending = InterlockedExchange(&g_pendingAction, kPendingNone);
+    if (pending != kPendingNone && !g_inSelfUnhide && pThis &&
+        TrayUI_Unhide_Original && TrayUI_SetAutoHideFlags_Original &&
+        g_flagsOffsetsVerified) {
         UINT edge = *(UINT*)((BYTE*)pThis + 0x110);
         if (edge < ABE_BOTTOM) {
             UINT stored = *(UINT*)((BYTE*)pThis + 0x3c);
-            bool atEdge = CursorAtDockedEdge(edge);
 
-            if (atEdge && !g_cursorWasAtEdge && (stored & 3) == 3) {
-                // Arrived: reveal. Unhide clears the hidden bit itself.
-                DiagLog(L"self-unhide: cursor arrived, Unhide(2,1)");
+            if (pending == kPendingReveal && (stored & 3) == 3) {
+                DiagLog(L"self-unhide: revealing, Unhide(2,1)");
                 g_inSelfUnhide = true;
                 TrayUI_Unhide_Original(pThis, 2, 1);
                 g_inSelfUnhide = false;
-            } else if (!atEdge && g_cursorWasAtEdge && (stored & 1) &&
+            } else if (pending == kPendingHide && (stored & 1) &&
                        !(stored & 2)) {
-                // Left: re-hide by storing the hidden bit, as the bottom edge
-                // does. The layout pass then moves it to the hidden rect.
-                DiagLog(L"self-hide: cursor left, storing 0x%X", stored | 2);
+                DiagLog(L"self-hide: storing 0x%X", stored | 2);
                 g_inSelfUnhide = true;
                 TrayUI_SetAutoHideFlags_Original(pThis, stored | 2);
                 g_inSelfUnhide = false;
             }
-
-            g_cursorWasAtEdge = atEdge;
         }
     }
     if (rect) {
