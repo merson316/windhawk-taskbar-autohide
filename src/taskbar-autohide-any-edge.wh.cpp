@@ -943,7 +943,22 @@ void WatcherTick() {
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
 
-    if (PtInRect(&docked, pt) || GetForegroundWindow() == g_trayWnd) {
+    const bool overBar = PtInRect(&docked, pt) != FALSE;
+    const HWND fg = GetForegroundWindow();
+    const bool barFocused = fg == g_trayWnd;
+
+    if (overBar || barFocused) {
+        // The last unlogged path. Staying visible here is deliberate, but it
+        // looked identical to the mod having stopped working.
+        static ULONGLONG lastLog = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - lastLog > 2000) {
+            lastLog = now;
+            DbgLog(L"staying visible: overBar=%d barFocused=%d fg=%p "
+                   L"cursor(%ld,%ld) docked(%ld,%ld)-(%ld,%ld)",
+                   (int)overBar, (int)barFocused, (void*)fg, pt.x, pt.y,
+                   docked.left, docked.top, docked.right, docked.bottom);
+        }
         g_leaveTicks = 0;
         return;
     }
