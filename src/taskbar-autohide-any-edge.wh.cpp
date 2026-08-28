@@ -320,12 +320,14 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     // faking it in the getter keeps this+0x44 and GetAutoHideFlags in
     // agreement; an earlier attempt faked it in the getter and the taskbar hid
     // without the work area being released or unhide being armed.
+    // Use the edge from GetStuckPlace, not a raw member read. GetDockedRect
+    // does `add $-8,%rcx` before calling the getter, so GetAutoHideFlags sees a
+    // `this` 8 bytes below the base these other methods use -- which is why the
+    // edge sits at 0x118 there but 0x110 in GetDockedRect. Reusing the getter's
+    // offset here read the wrong field entirely.
     UINT effective = flags;
-    if (g_flagsOffsetsVerified && pThis && (flags & 1)) {
-        UINT storeEdge = *(UINT*)((BYTE*)pThis + kTrayUiEdgeOffset);
-        if (storeEdge < ABE_BOTTOM) {
-            effective = flags | 2;
-        }
+    if ((flags & 1) && edge < ABE_BOTTOM) {
+        effective = flags | 2;
     }
 
     DiagLog(L"SetAutoHideFlags(0x%X)%s ENTER [edge=%u %s]", flags,
