@@ -1,0 +1,14 @@
+?GetStuckPlace@TrayUI@@UEAAIXZ	public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void)
+?GetAutoHideFlags@TrayUI@@UEAAIXZ	public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void)
+?GetDesktopModeAutoHide@TrayUI@@UEBAIXZ	public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const
+?SetAutoHideFlags@TrayUI@@UEAAXI@Z	public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int)
+?SetAutoHideState@TrayUI@@UEAAJH@Z	public: virtual long __cdecl TrayUI::SetAutoHideState(int)
+?AutoHideChangedOnMonitor@TrayUI@@QEAAXPEAUHMONITOR__@@@Z	public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *)
+?_ComputeHiddenRect@TrayUI@@QEAAXPEAUtagRECT@@I@Z	public: void __cdecl TrayUI::_ComputeHiddenRect(struct tagRECT *,unsigned int)
+?GetDockedRect@TrayUI@@UEAAIPEAUtagRECT@@H@Z	public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int)
+?ShrinkRectToStuckEdge@TrayUI@@AEBAXAEAUtagRECT@@H@Z	private: void __cdecl TrayUI::ShrinkRectToStuckEdge(struct tagRECT &,int)const
+?GetStuckInfo@TrayUI@@UEAAXPEAUtagRECT@@PEAI@Z	public: virtual void __cdecl TrayUI::GetStuckInfo(struct tagRECT *,unsigned int *)
+?SlideWindow@TrayUI@@UEAAXPEAUHWND__@@PEBUtagRECT@@PEAUHMONITOR__@@_N3@Z	public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool)
+?Unhide@TrayUI@@UEAAXW4TrayUnhideFlags@TrayCommon@@W4UnhideRequest@3@@Z	public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest)
+?SetUnhideTimer@TrayUI@@UEAAXJJ@Z	public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long)
+?_AutoHideCollision@TrayUI@@QEAAXXZ	public: void __cdecl TrayUI::_AutoHideCollision(void)

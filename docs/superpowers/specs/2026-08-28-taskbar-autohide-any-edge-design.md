@@ -79,10 +79,15 @@ Both `@include explorer.exe` and resolve symbols in `Taskbar.dll` through
 `WindhawkUtils::HookSymbols`, guarded on build >= 26200 so they no-op on
 unexpected versions instead of misbehaving.
 
-Symbol hooks use the mangled names taken verbatim from this machine's cached
-PDB (`Engine/Symbols/Taskbar.pdb/EB0D05FD...`), which matches the live
-`Taskbar.dll`. The precedent that `SYMBOL_HOOK` accepts mangled names is the
-existing `taskbar-auto-hide-speed` mod. Adjustor thunks (`W7EAA`, `WBI@EAA`
+Symbol hooks use **undecorated** names, in the exact form produced by
+`UnDecorateSymbolName` with ` __ptr64` stripped. `WindhawkUtils::HookSymbols`
+does not accept mangled names: the mangled string in `taskbar-auto-hide-speed`
+is passed to `GetProcAddress` against ExplorerPatcher's DLL, a different
+mechanism entirely. The mangled forms are extracted from this machine's cached
+PDB (`Engine/Symbols/Taskbar.pdb/EB0D05FD...`, matching the live
+`Taskbar.dll`) and converted; the mapping lives in `research/symbol-map.tsv`.
+Format correctness was confirmed by reproducing the known-good `SlideWindow`
+string from `taskbar-auto-hide-speed` byte for byte. Adjustor thunks (`W7EAA`, `WBI@EAA`
 variants) are deliberately not hooked.
 
 ### Logging transport

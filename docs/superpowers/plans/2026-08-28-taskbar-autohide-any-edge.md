@@ -19,7 +19,7 @@ Every task's requirements implicitly include these. Values are copied verbatim f
 - **No global or low-level input hooks** — `WH_MOUSE_LL`, `WH_KEYBOARD_LL`, or any system-wide `SetWindowsHookEx` are forbidden. Cursor work uses in-process `GetCursorPos` polling.
 - **No injection, memory access or handle acquisition against any process other than `explorer.exe`.**
 - Phase 1 must not alter behaviour: every hook calls the original and returns its result unmodified.
-- Symbol hook strings are the **mangled names taken verbatim** from this machine's cached PDB. Adjustor thunks (`W7EAA`, `WBI@EAA` variants) must not be hooked.
+- Symbol hook strings are **undecorated names** in the exact form produced by `UnDecorateSymbolName` with ` __ptr64` stripped, e.g. `public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,...)`. `WindhawkUtils::HookSymbols` does **not** accept mangled names. The mangled forms in `research/symbol-map.tsv` are the source they were derived from; `tools/undname.exe` regenerates the mapping. Adjustor thunks (`W7EAA`, `WBI@EAA` variants) must not be hooked.
 - Diagnostic log path: `%LOCALAPPDATA%\windhawk-autohide-diag.log`, written line-at-a-time so an Explorer restart cannot lose the trace.
 - The live taskbar edge comes from `TrayUI::GetStuckPlace()`. **Never read `StuckRects3`** — it holds a stale right-edge blob on this machine.
 - Secondary displays are out of scope while `MMTaskbarEnabled` is `0`.
@@ -641,23 +641,23 @@ Replace the `return TRUE;` at the end of `Wh_ModInit` with:
 ```cpp
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         // Resolved only; deliberately not hooked.
-        {{LR"(?GetStuckPlace@TrayUI@@UEAAIXZ)"}, &g_pGetStuckPlace, nullptr,
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))"}, &g_pGetStuckPlace, nullptr,
          true},
 
-        {{LR"(?GetAutoHideFlags@TrayUI@@UEAAIXZ)"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))"},
          &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
 
-        {{LR"(?GetDesktopModeAutoHide@TrayUI@@UEBAIXZ)"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const)"},
          &TrayUI_GetDesktopModeAutoHide_Original,
          TrayUI_GetDesktopModeAutoHide_Hook, true},
 
-        {{LR"(?SetAutoHideFlags@TrayUI@@UEAAXI@Z)"},
+        {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))"},
          &TrayUI_SetAutoHideFlags_Original, TrayUI_SetAutoHideFlags_Hook, true},
 
-        {{LR"(?SetAutoHideState@TrayUI@@UEAAJH@Z)"},
+        {{LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int))"},
          &TrayUI_SetAutoHideState_Original, TrayUI_SetAutoHideState_Hook, true},
 
-        {{LR"(?AutoHideChangedOnMonitor@TrayUI@@QEAAXPEAUHMONITOR__@@@Z)"},
+        {{LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *))"},
          &TrayUI_AutoHideChangedOnMonitor_Original,
          TrayUI_AutoHideChangedOnMonitor_Hook, true},
     };
@@ -838,30 +838,30 @@ void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
 Insert before the closing `};` of the existing array:
 
 ```cpp
-        {{LR"(?_ComputeHiddenRect@TrayUI@@QEAAXPEAUtagRECT@@I@Z)"},
+        {{LR"(public: void __cdecl TrayUI::_ComputeHiddenRect(struct tagRECT *,unsigned int))"},
          &TrayUI_ComputeHiddenRect_Original, TrayUI_ComputeHiddenRect_Hook,
          true},
 
-        {{LR"(?GetDockedRect@TrayUI@@UEAAIPEAUtagRECT@@H@Z)"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int))"},
          &TrayUI_GetDockedRect_Original, TrayUI_GetDockedRect_Hook, true},
 
-        {{LR"(?ShrinkRectToStuckEdge@TrayUI@@AEBAXAEAUtagRECT@@H@Z)"},
+        {{LR"(private: void __cdecl TrayUI::ShrinkRectToStuckEdge(struct tagRECT &,int)const)"},
          &TrayUI_ShrinkRectToStuckEdge_Original,
          TrayUI_ShrinkRectToStuckEdge_Hook, true},
 
-        {{LR"(?GetStuckInfo@TrayUI@@UEAAXPEAUtagRECT@@PEAI@Z)"},
+        {{LR"(public: virtual void __cdecl TrayUI::GetStuckInfo(struct tagRECT *,unsigned int *))"},
          &TrayUI_GetStuckInfo_Original, TrayUI_GetStuckInfo_Hook, true},
 
-        {{LR"(?SlideWindow@TrayUI@@UEAAXPEAUHWND__@@PEBUtagRECT@@PEAUHMONITOR__@@_N3@Z)"},
+        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))"},
          &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
 
-        {{LR"(?Unhide@TrayUI@@UEAAXW4TrayUnhideFlags@TrayCommon@@W4UnhideRequest@3@@Z)"},
+        {{LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))"},
          &TrayUI_Unhide_Original, TrayUI_Unhide_Hook, true},
 
-        {{LR"(?SetUnhideTimer@TrayUI@@UEAAXJJ@Z)"},
+        {{LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long))"},
          &TrayUI_SetUnhideTimer_Original, TrayUI_SetUnhideTimer_Hook, true},
 
-        {{LR"(?_AutoHideCollision@TrayUI@@QEAAXXZ)"},
+        {{LR"(public: void __cdecl TrayUI::_AutoHideCollision(void))"},
          &TrayUI_AutoHideCollision_Original, TrayUI_AutoHideCollision_Hook,
          true},
 ```

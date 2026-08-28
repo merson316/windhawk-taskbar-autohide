@@ -252,23 +252,23 @@ BOOL Wh_ModInit() {
 
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         // Resolved only; deliberately not hooked.
-        {{LR"(?GetStuckPlace@TrayUI@@UEAAIXZ)"}, &g_pGetStuckPlace, nullptr,
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))"}, &g_pGetStuckPlace, nullptr,
          true},
 
-        {{LR"(?GetAutoHideFlags@TrayUI@@UEAAIXZ)"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))"},
          &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
 
-        {{LR"(?GetDesktopModeAutoHide@TrayUI@@UEBAIXZ)"},
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDesktopModeAutoHide(void)const)"},
          &TrayUI_GetDesktopModeAutoHide_Original,
          TrayUI_GetDesktopModeAutoHide_Hook, true},
 
-        {{LR"(?SetAutoHideFlags@TrayUI@@UEAAXI@Z)"},
+        {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))"},
          &TrayUI_SetAutoHideFlags_Original, TrayUI_SetAutoHideFlags_Hook, true},
 
-        {{LR"(?SetAutoHideState@TrayUI@@UEAAJH@Z)"},
+        {{LR"(public: virtual long __cdecl TrayUI::SetAutoHideState(int))"},
          &TrayUI_SetAutoHideState_Original, TrayUI_SetAutoHideState_Hook, true},
 
-        {{LR"(?AutoHideChangedOnMonitor@TrayUI@@QEAAXPEAUHMONITOR__@@@Z)"},
+        {{LR"(public: void __cdecl TrayUI::AutoHideChangedOnMonitor(struct HMONITOR__ *))"},
          &TrayUI_AutoHideChangedOnMonitor_Original,
          TrayUI_AutoHideChangedOnMonitor_Hook, true},
     };
@@ -280,15 +280,36 @@ BOOL Wh_ModInit() {
 
     // Every entry is optional so a single rename degrades instead of killing
     // the mod, but a diagnosis without these two is meaningless.
-    if (!g_pGetStuckPlace) {
-        DiagLog(L"WARN: GetStuckPlace unresolved, edge will log as ?");
+    // Report every symbol individually. A silently-empty resolve previously
+    // looked like a successful run, which cost a full diagnostic round-trip.
+    struct {
+        PCWSTR name;
+        void* resolved;
+    } checks[] = {
+        {L"GetStuckPlace", (void*)g_pGetStuckPlace},
+        {L"GetAutoHideFlags", (void*)TrayUI_GetAutoHideFlags_Original},
+        {L"GetDesktopModeAutoHide", (void*)TrayUI_GetDesktopModeAutoHide_Original},
+        {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
+        {L"SetAutoHideState", (void*)TrayUI_SetAutoHideState_Original},
+        {L"AutoHideChangedOnMonitor", (void*)TrayUI_AutoHideChangedOnMonitor_Original},
+    };
+
+    int resolvedCount = 0;
+    for (const auto& c : checks) {
+        DiagLog(L"  symbol %-28s %s", c.name,
+                c.resolved ? L"OK" : L"UNRESOLVED");
+        if (c.resolved) {
+            resolvedCount++;
+        }
     }
+
+    DiagLog(L"state/flags hooks installed: %d/%d resolved", resolvedCount,
+            (int)ARRAYSIZE(checks));
+
     if (!TrayUI_SetAutoHideState_Original) {
         DiagLog(L"FATAL: SetAutoHideState unresolved, cannot diagnose");
         return FALSE;
     }
-
-    DiagLog(L"state/flags hooks installed");
     return TRUE;
 }
 
