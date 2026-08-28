@@ -185,10 +185,10 @@ TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
 TrayUI_Unhide_t TrayUI_Unhide_Original;
+// Resolved, never hooked. Registering the same symbol twice in one HookSymbols
+// call corrupts the trampoline and breaks every slide, so the address is used
+// directly for both the signature check and the calls.
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
-// Resolved without hooking, so it points at the real function body. Reading the
-// signature from _Original would read Windhawk's trampoline instead.
-TrayUI_SlideWindow_t TrayUI_SlideWindow_Address;
 
 bool g_offsetsVerified = false;
 
@@ -359,16 +359,6 @@ void ApplyDurationOverrides(void* pThis) {
     }
 }
 
-#define TrayUI_SlideWindow_Hooked TrayUI_SlideWindow_Original
-void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
-                                    HMONITOR monitor, bool show, bool animate) {
-    UINT edge = CurrentStuckPlace(pThis);
-    if (edge < ABE_BOTTOM && EdgeEnabled(edge)) {
-        ApplyDurationOverrides(pThis);
-    }
-    TrayUI_SlideWindow_Hooked(pThis, hWnd, rect, monitor, show, animate);
-}
-
 // ------------------------------------------------------------ pointer watcher
 
 // Windows' cursor-at-edge detection does not run off-bottom, and none of the
@@ -399,6 +389,7 @@ void WatcherTick() {
             return;
         }
 
+        ApplyDurationOverrides(g_trayUI);
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
@@ -431,6 +422,7 @@ void WatcherTick() {
     // Unhide slides itself, but nothing performs the hide slide off-bottom, so
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
+    ApplyDurationOverrides(g_trayUI);
     g_inWatcherCall = true;
     TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
@@ -517,11 +509,7 @@ BOOL Wh_ModInit() {
 
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
-         &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
-
-        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
-          LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
-         &TrayUI_SlideWindow_Address, nullptr, true},
+         &TrayUI_SlideWindow_Original, nullptr, true},
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
@@ -550,7 +538,7 @@ BOOL Wh_ModInit() {
         }
     }
 
-    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Address;
+    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Original;
     g_durationOffsetsVerified =
         memcmp(slide + kShowDurSigOffset, kShowDurSig, sizeof(kShowDurSig)) ==
             0 &&
