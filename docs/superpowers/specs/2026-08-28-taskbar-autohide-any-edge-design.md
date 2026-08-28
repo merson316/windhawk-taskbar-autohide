@@ -213,13 +213,42 @@ The mod must confine its footprint to `explorer.exe`:
 
 ### Residual risk
 
-No configuration makes injection-based modding provably safe against kernel
-anti-cheat, and this spec does not claim otherwise. The allowlist removes the
-known injection vector; it cannot guarantee how a given anti-cheat vendor
-classifies a LocalSystem service that performs injection at all. The only
-posture with no residual risk is Windhawk not running during a session, via
-`windhawk.exe -exit`. Auto-hide simply reverts to stock behaviour while it is
-closed, so this costs nothing but the taskbar tweak.
+Framing matters here, because the likely failure mode is not the dramatic one.
+
+For a process properly protected by a kernel anti-cheat (EAC, BattlEye,
+Vanguard), the driver registers `ObRegisterCallbacks` and strips
+`PROCESS_VM_WRITE` / `PROCESS_CREATE_THREAD` from handles opened against the
+game. A user-mode injector gets its handle downgraded regardless of privilege,
+so the expected outcome is that **injection fails**, not that it succeeds and
+earns a ban. Running as LocalSystem does not defeat a kernel object callback.
+
+The realistic cost is therefore **games failing to launch**, not bans. This is
+documented: Battlefield 2042 will not start while Windhawk is running
+(ramensoftware/windhawk discussion #164), resolved by adding the executable to
+the process exclusion list.
+
+Three qualifications keep this from being a guarantee:
+
+- Not every title is protected by a competent kernel anti-cheat. World of
+  Warcraft's Warden is user-mode, and many Steam, Origin and Battle.net titles
+  have weak or no anti-cheat. Injection into those succeeds, which is precisely
+  where detection without prevention applies.
+- A blocked injection attempt is still an observable event that a driver may
+  record. "Could not inject" does not imply "was not logged".
+- Injection happens at process creation, so there is a window before an
+  anti-cheat registers protection. Well-built products close it; not all are
+  well built.
+
+Issue #495 reports permanent bans from World of Warcraft and League of Legends
+attributed to Windhawk. That attribution is self-reported and unverified, and
+users of one injector commonly run others, so it is weak evidence of causation.
+It is recorded here as a known claim, not as an established risk.
+
+The allowlist configuration above is justified primarily because it prevents
+concrete launch failures, and secondarily because it removes the question
+entirely at no cost. The only posture with no residual risk remains Windhawk not
+running during a session, via `windhawk.exe -exit`; auto-hide reverts to stock
+behaviour while it is closed.
 
 ## Error handling and safety
 
