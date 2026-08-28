@@ -1,34 +1,44 @@
 # Roadmap
 
-The left edge works end to end: hides on idle, reveals on hover, stays up while
-in use, re-hides on leave, work area released throughout. What follows is the
-work still outstanding, in the order it makes sense to tackle it.
+Left and top work end to end: hide on idle, reveal on hover, stay up while in
+use, re-hide on leave, work area released throughout. The right edge is the same
+code and behaves identically where it has somewhere to hide into. What follows
+is the work still outstanding.
 
-## 1. Top and right edges
+## 1. Top and right edges -- done
 
-Implemented and settings-gated, but only the left edge has been exercised. Each
-needs the full cycle tested: hide, reveal, stay-up, re-hide, work-area release.
+Both exercised through the full cycle: hide, reveal, stay-up, re-hide. The
+reveal trigger and stay-visible tests were written generically against `ABE_*`,
+and no edge-specific geometry bug turned up. The hidden rect for the left edge
+is `(-46,0)-(2,1440)` on the primary display -- a 2px sliver.
 
-The reveal trigger and stay-visible test are already written generically against
-`ABE_*`, so failures are most likely in geometry rather than logic. The hidden
-rect for the left edge is `(-46,0)-(2,1440)` on a the primary display display -- a 2px
-sliver. Confirm the equivalent on the other edges rather than assuming symmetry.
+The right edge is skipped automatically when a display sits beyond it, which is
+the configuration on the development machine; see section 2b.
 
-## 2. Show and hide animation - exhausted at the Win32 layer
+## 2. Show and hide animation -- done
 
-The window animates correctly off-bottom: full duration, smooth interpolation,
-no interference. It is invisible because the taskbar's pixels are drawn by a
-Composition island whose visual position the compositor owns, so moving the HWND
-never moves what is on screen.
+**Solved.** The taskbar rewrites requested window positions in its
+`WM_WINDOWPOSCHANGING` handler, forcing every intermediate position to the
+endpoint the auto-hide flags imply. The window really was moving; each step was
+snapped to the destination before it could be drawn, so the hide looked instant.
 
-Eleven hypotheses were tested and eliminated, including three of my own
-confident explanations. The table is in `docs/findings-phase1.md`. The decisive
-test was animating from a separate thread: 81 window moves over 600 ms with the
-UI thread free, still invisible.
+The fix is two parts, both shipped:
 
-Reopening means driving the composition visual directly, alongside
-`SharedAnimations::TaskbarCollapseAnimation`. That is a different project, not a
-continuation of this one. `ViewCoordinator` is ruled out as an entry point.
+- Restore the requested position after calling `DefSubclassProc`, so
+  intermediate frames survive the clamp.
+- Drive the slide from the watch thread rather than through `SlideWindow`, which
+  runs its loop on the taskbar's UI thread and blocks the repaint.
+
+Eleven hypotheses were tested and eliminated before this one, including three
+confident explanations of my own; the table is in `docs/findings-phase1.md`.
+That document's earlier conclusion -- that the slide could not be made visible
+because the pixels belong to a Composition island -- was wrong, and is marked as
+superseded there.
+
+Remaining: the mod's slide is linear, where Windows uses an eased curve. Driving
+the composition visual directly, alongside
+`SharedAnimations::TaskbarCollapseAnimation`, would close that gap. It is a
+different project, and `ViewCoordinator` is ruled out as an entry point.
 
 ## 2b. Known issue: reveal appears to come from the neighbouring display
 
@@ -37,7 +47,6 @@ display -- right-docked on a 3440-wide primary hides to `3438-3486`, and
 everything past 3440 is the next monitor. The reveal therefore animates *from*
 the neighbour, which reads as the taskbar flying in from the wrong screen.
 
-Mitigation: set the reveal duration to 25 ms so the movement is imperceptible.
 
 A proper fix means the taskbar not occupying the neighbouring display while
 hidden, which is the same problem as the hide spilling over there. An attempt at
@@ -55,9 +64,10 @@ between edges. Five fixes produced five new failures and no sign of the last
 one. Reverted.
 
 **Resolution: not a defect to fix.** An edge with a monitor beyond it has
-nowhere to hide into, so the per-edge setting is the answer -- turn that edge
-off and the mod stands down entirely. Anything here should be read as
-background, not a plan.
+nowhere to hide into. The mod now detects this itself -- `DisplayBeyondEdge`
+probes one pixel past the taskbar monitor's boundary -- and stands down on that
+edge, which is what "Skip edges facing another display" controls. Anything above
+should be read as background, not a plan.
 
 ## 3. Secondary monitor support
 

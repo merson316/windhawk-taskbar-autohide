@@ -37,8 +37,7 @@ button, which can leave it visible indefinitely. This mod shows it once, holds
 it for `notificationHoldMs` (1500 ms by default), then lets it hide and stay
 hidden for the rest of the flashing.
 
-This works on every edge, including the bottom, and is independent of the
-edge the taskbar is docked to, including the bottom.
+This works on every edge the taskbar can dock to, including the bottom.
 
 That makes Cirn09's [Better Taskbar
 Autohide](https://windhawk.net/mods/taskbar-autohide-better) redundant; run one
@@ -46,8 +45,9 @@ or the other, not both, since they hook the same function.
 
 ## Known limitations
 
-- No smooth show/hide animation: the Windows 11 easing is a XAML compositor
-  animation that is never triggered off-bottom.
+- The hide is a linear slide, not the eased Windows curve. Windows clamps every
+  intermediate position to the endpoint, so the mod animates the hide itself;
+  the reveal still uses Windows' own slide. Both durations are configurable.
 - Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
   class.
 - An edge with another display beyond it has nowhere off-screen to hide into,

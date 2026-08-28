@@ -169,9 +169,15 @@ at `0x118` from a base-B pointer.
 
 ## Still open
 
-- No smooth animation: the Windows 11 easing is a XAML compositor animation
-  that is never triggered off-bottom.
-- Top and right edges are implemented but untested.
+*As of phase 1. The first two were resolved later; see `docs/ROADMAP.md`.*
+
+- ~~No smooth animation: the Windows 11 easing is a XAML compositor animation
+  that is never triggered off-bottom.~~ **Resolved.** The cause was position
+  enforcement in `WM_WINDOWPOSCHANGING`; the mod animates the hide itself. The
+  slide is linear rather than eased.
+- ~~Top and right edges are implemented but untested.~~ **Resolved.** Both
+  exercised through the full cycle; an edge facing another display is now
+  skipped automatically.
 - Secondary taskbars remain out of scope.
 
 ---
@@ -326,6 +332,12 @@ the pointer is away from the edge, so a deliberate reveal during a notification
 still works.
 
 ## Why the hide slide cannot be made visible (evidence, not assumption)
+
+> **Superseded.** This conclusion was wrong. The slide was later made visible
+> and ships: the cause was position enforcement in `WM_WINDOWPOSCHANGING`, not
+> the Composition island, and restoring the requested position after the clamp
+> fixes it. See the next section and `docs/ROADMAP.md` section 2. The evidence
+> below is accurate; only the conclusion drawn from it was not.
 
 Two orderings are possible and both fail, for opposite reasons:
 

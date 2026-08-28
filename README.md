@@ -30,8 +30,8 @@ the masked result — `GetDockedRect` returns the hidden rect only when
 - Reports the genuinely stored flags rather than the masked zero.
 - Stores `ABS_ALWAYSONTOP` alongside `ABS_AUTOHIDE` off-bottom, which is what
   the bottom edge does and what the hidden-rect test requires.
-- Drives reveal and hide from a timer, because Windows' own cursor-at-edge
-  detection does not run off-bottom.
+- Drives reveal and hide from a watch thread, because Windows' own
+  cursor-at-edge detection does not run off-bottom.
 - Leaves the bottom edge's auto-hide entirely untouched.
 - Hides again a set time after a notification, which Windows otherwise refuses
   to do while a taskbar button is flashing. This applies on every edge and makes
@@ -59,10 +59,12 @@ Compile → Enable.
 | Setting | Default | Meaning |
 |---|---|---|
 | Skip edges facing another display | on | Leaves an edge alone when a monitor sits beyond it, since there is nowhere off-screen to hide into. The bottom edge is never touched, as Windows already handles it. |
-| Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
+| Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
+| Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
 | Notifications - treat as one within | 5000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
-| Hide / reveal animation duration | 0 | Overrides the slide duration (25-600 ms). 0 keeps the Windows default. |
+| Reveal dwell | 120 ms | How long the pointer must rest in the trigger strip before the taskbar appears. 0 reveals instantly. |
+| Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
 
 ### Notification handling
 
@@ -80,24 +82,33 @@ other, never both, as they hook the same function.
 
 To disable it and get stock Windows behaviour back, set the value to 0.
 
-### A note on the animation duration
+### A note on the animation durations
 
-The slide is a synchronous loop on the taskbar's own thread, so the duration is
-also how long the shell is blocked. Values above a few hundred milliseconds
-freeze the taskbar rather than slowing the animation, which is why the range is
-capped at 600 ms. A low value such as 25 ms makes hiding effectively instant.
+The two durations behave differently, because the two directions are driven by
+different code.
+
+The **hide** is animated by the mod on its own watch thread, so its duration
+does not block the shell. Windows rewrites intermediate positions in
+`WM_WINDOWPOSCHANGING`, forcing each step to the endpoint, which is why an
+unmodified vertical taskbar appears to vanish instantly; the mod restores the
+requested position after that clamp so the intermediate frames survive.
+
+The **reveal** still goes through Windows' own `SlideWindow`, a synchronous loop
+on the taskbar's thread. Its duration is therefore also how long the shell is
+blocked, so keep it short -- a few hundred milliseconds at most.
 
 ## Known limitations
 
-- **No smooth animation.** The Windows 11 easing is a XAML compositor animation
-  that is never triggered off-bottom, so the taskbar moves without it.
+- **The hide is a linear slide, not the eased Windows curve.** Windows clamps
+  every intermediate position to the endpoint, which is why an unmodified
+  vertical taskbar appears to vanish instantly; the mod animates the hide itself
+  instead. The reveal still uses Windows' own slide. Both durations are
+  configurable.
 - **Primary taskbar only.** Secondary taskbars use a separate `CSecondaryTray`
   class and are not handled.
 - **Tied to `Taskbar.dll` internals.** The two member offsets are validated
   against a byte signature inside `GetAutoHideFlags`; if a Windows update
   changes that function, the mod goes inert rather than misbehaving.
-- Top and right edges are implemented but have not been tested as thoroughly as
-  the left.
 - **An edge with another display beyond it cannot hide.** The hidden position
   is real screen space on the neighbouring monitor, so the taskbar would slide
   into view there instead of out of sight. Detected automatically and skipped:
