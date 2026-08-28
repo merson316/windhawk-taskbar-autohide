@@ -287,19 +287,14 @@ LONG WINAPI TrayUI_SetAutoHideState_Hook(void* pThis, int state) {
     }
 
     UINT realEdge = (UINT)g_currentEdge;
-    bool spoof = (realEdge != ABE_BOTTOM);
 
-    DiagLog(L"SetAutoHideState(%d) ENTER [realEdge=%u %s] spoof=%d", state,
-            realEdge, EdgeName(realEdge), (int)spoof);
+    // Spoofing GetStuckPlace here was tried and disproved: the gate inside
+    // SetAutoHideState does not read the edge that way. It calls a predicate
+    // which is hooked directly instead -- see AutoHideSuppressed_Hook.
+    DiagLog(L"SetAutoHideState(%d) ENTER [realEdge=%u %s]", state, realEdge,
+            EdgeName(realEdge));
 
-    LONG ret;
-    if (spoof) {
-        g_pretendBottom = true;
-        ret = TrayUI_SetAutoHideState_Original(pThis, state);
-        g_pretendBottom = false;
-    } else {
-        ret = TrayUI_SetAutoHideState_Original(pThis, state);
-    }
+    LONG ret = TrayUI_SetAutoHideState_Original(pThis, state);
 
     DiagLog(L"SetAutoHideState(%d) LEAVE -> 0x%08X", state, ret);
     return ret;
@@ -419,6 +414,75 @@ void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
     DiagLog(L"_AutoHideCollision ENTER [edge=%u %s]", edge, EdgeName(edge));
     TrayUI_AutoHideCollision_Original(pThis);
     DiagLog(L"_AutoHideCollision LEAVE");
+}
+
+// ---------------------------------------------------------------- the gate
+
+// Disassembly of TrayUI::SetAutoHideState shows:
+//
+//     lea   -0x28(%rcx),%r12      ; adjust `this`
+//     mov   %r12,%rcx
+//     call  sub_18005CFF4         ; predicate
+//     xor   %edi,%edi
+//     test  %al,%al
+//     cmove %ebx,%edi             ; predicate true -> requested state forced 0
+//
+// so a true return silently disables auto-hide. The predicate itself is:
+//
+//     add   $0x298,%rcx
+//     cmp   (%rcx),0              ; null -> false
+//     call  ...                   ; resolve member
+//     call  sub_18005D398         ; query
+//     cmp   $0x2,%eax             ; == 2 -> true (suppress)
+//
+// It has no exported symbol, so it is hooked by relative address, guarded by
+// a byte signature so that a Windows update which moves or changes it causes
+// the hook to be skipped rather than applied to the wrong code.
+
+const DWORD kAutoHideSuppressedRva = 0x5CFF4;
+
+const BYTE kAutoHideSuppressedSig[] = {
+    0x48, 0x89, 0x5C, 0x24, 0x18,              // mov  %rbx,0x18(%rsp)
+    0x57,                                      // push %rdi
+    0x48, 0x83, 0xEC, 0x20,                    // sub  $0x20,%rsp
+    0x33, 0xDB,                                // xor  %ebx,%ebx
+    0x8B, 0xFB,                                // mov  %ebx,%edi
+    0x89, 0x5C, 0x24, 0x30,                    // mov  %ebx,0x30(%rsp)
+    0x48, 0x81, 0xC1, 0x98, 0x02, 0x00, 0x00,  // add  $0x298,%rcx
+};
+
+using AutoHideSuppressed_t = BYTE(WINAPI*)(void* pThis);
+AutoHideSuppressed_t AutoHideSuppressed_Original;
+BYTE WINAPI AutoHideSuppressed_Hook(void* pThis) {
+    BYTE ret = AutoHideSuppressed_Original(pThis);
+    UINT edge = (UINT)g_currentEdge;
+
+    if (ret && edge != ABE_BOTTOM) {
+        DiagLog(L"GATE: suppressed=1 at edge %u %s -> overriding to 0", edge,
+                EdgeName(edge));
+        return 0;
+    }
+
+    if (ret) {
+        DiagLog(L"GATE: suppressed=1 at BOTTOM, left alone");
+    }
+    return ret;
+}
+
+bool HookAutoHideGate(HMODULE module) {
+    BYTE* target = (BYTE*)module + kAutoHideSuppressedRva;
+
+    if (memcmp(target, kAutoHideSuppressedSig,
+               sizeof(kAutoHideSuppressedSig)) != 0) {
+        DiagLog(L"GATE: signature mismatch at +0x%X, not hooking",
+                kAutoHideSuppressedRva);
+        return false;
+    }
+
+    Wh_SetFunctionHook((void*)target, (void*)AutoHideSuppressed_Hook,
+                       (void**)&AutoHideSuppressed_Original);
+    DiagLog(L"GATE: hooked at +0x%X", kAutoHideSuppressedRva);
+    return true;
 }
 
 // ------------------------------------------------------------------ lifecycle
@@ -541,6 +605,8 @@ BOOL Wh_ModInit() {
     if (seeded != 0xFFFFFFFF) {
         InterlockedExchange(&g_currentEdge, (LONG)seeded);
     }
+    HookAutoHideGate(g_taskbarModule);
+
     DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
             EdgeName((UINT)g_currentEdge));
 
