@@ -14,7 +14,7 @@ The reveal trigger and stay-visible test are already written generically against
 rect for the left edge is `(-46,0)-(2,1440)` on a the primary display display -- a 2px
 sliver. Confirm the equivalent on the other edges rather than assuming symmetry.
 
-## 2. Show and hide animation - RESOLVED, no defect
+## 2. Show and hide animation - IN PROGRESS
 
 Investigated and closed. The slide animation already runs correctly off-bottom:
 identical duration, step count, spacing, flags and interpolation to the bottom
@@ -31,9 +31,14 @@ Their practical use is the opposite of the original intent: a low value such as
 25 ms makes the hide effectively instant, which avoids freezing the shell, since
 the slide runs synchronously on the taskbar's UI thread.
 
-Anything further here means reaching the XAML layer that draws the content.
-`SlideWindow` cannot do it. See `docs/findings-phase1.md` for the measurements
-and the hypotheses ruled out.
+The content disappearing is caused by the mod's own ordering, not by a Windows
+limitation: setting the hidden flag drops the rendered content, and the slide
+then animates an empty window. The current build sets the flag only long enough
+to read the hidden rect, restores it so the content keeps drawing, slides, and
+marks it hidden afterwards. Whether the content survives that is being tested.
+
+See `docs/findings-phase1.md` for the measurements and the hypotheses ruled
+out.
 
 ## 3. Secondary monitor support
 

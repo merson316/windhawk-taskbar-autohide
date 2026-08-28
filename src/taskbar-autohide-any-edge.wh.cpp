@@ -223,6 +223,12 @@ void* g_trayUI = nullptr;
 HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
 int g_leaveTicks = 0;
+
+// When Windows unhides the taskbar itself -- a notification, a flashing button
+// -- re-hiding immediately makes it flap: it unhides, the watcher hides it, and
+// round again. Hold it visible for a while after any unhide we did not issue.
+volatile LONG64 g_holdVisibleUntil = 0;
+#define HOLD_VISIBLE_MS 4000
 RECT g_lastDockedRect{};
 
 // Set while Windows is unhiding, and while the watcher is calling in.
@@ -359,6 +365,12 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         return;
     }
 
+    if (!g_inWatcherCall) {
+        // Not ours: Windows wants it visible, so stop trying to hide it.
+        InterlockedExchange64(&g_holdVisibleUntil,
+                              (LONG64)(GetTickCount64() + HOLD_VISIBLE_MS));
+    }
+
     bool prev = g_inUnhide;
     g_inUnhide = true;
     TrayUI_Unhide_Original(pThis, flags, request);
@@ -484,6 +496,12 @@ void WatcherTick() {
         return;
     }
 
+    if ((LONG64)GetTickCount64() <
+        InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
+        g_leaveTicks = 0;
+        return;   // Windows asked for it to be visible
+    }
+
     if (++g_leaveTicks < LEAVE_TICKS) {
         return;
     }
@@ -493,22 +511,30 @@ void WatcherTick() {
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
     g_inWatcherCall = true;
-    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
-    if (TrayUI_SlideWindow_Original && g_trayWnd) {
-        RECT hidden{};
+    // Setting the hidden flag drops the taskbar's rendered content, so sliding
+    // afterwards animates an empty window and the motion cannot be seen. Set
+    // the flag only long enough to read the hidden rect, restore it so the
+    // content keeps drawing, run the slide, and mark it hidden at the end.
+    RECT hidden{};
+    bool haveRect = false;
+    if (TrayUI_GetDockedRect_Original) {
+        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
+        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored);
+        haveRect = hidden.right > hidden.left || hidden.bottom > hidden.top;
+    }
 
-        // Apply immediately before the slide: SetAutoHideFlags above resets
-        // these members, which is why applying earlier worked for the reveal
-        // (nothing intervenes before Unhide) but not for the hide.
+    if (haveRect && TrayUI_SlideWindow_Original && g_trayWnd) {
         ApplyDurationOverrides(g_trayUI);
-
         TrayUI_SlideWindow_Original(
             g_trayUI, g_trayWnd, &hidden,
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
             true);
     }
+
+    // Now record it as hidden, so the reveal path takes over from here.
+    TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
     g_inWatcherCall = false;
 }
 
