@@ -819,8 +819,10 @@ void WatcherTick() {
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
     if (g_settings.halfHideProbe) {
-        // Park it half off-screen, flag untouched, and stop. Purely to see
-        // whether the taskbar still draws away from its docked position.
+        // Park half off-screen using our own movement, so nothing overrides the
+        // destination the way SlideWindow did, and hold it there.
+        //
+        // The flag must be set or Windows snaps the window back to docked.
         RECT half = docked;
         const LONG w = docked.right - docked.left;
         const LONG h = docked.bottom - docked.top;
@@ -833,67 +835,31 @@ void WatcherTick() {
                             half.right = half.left + w; break;
             default: return;
         }
-        // The hidden flag is what allows the window to stay off its docked
-        // position: without it Windows snaps it straight back, as the previous
-        // probe showed. So set it, then park half off-screen, so the taskbar
-        // holds a position where half of it is still on screen. If nothing is
-        // visible there, the flag suppresses drawing; if half a taskbar is
-        // visible, it renders fine away from docked.
-        ExpLog(L"PROBE: flag 0x%X then parking half off-screen at "
-               L"(%ld,%ld)-(%ld,%ld)",
-               stored | ABS_ALWAYSONTOP, half.left, half.top, half.right,
-               half.bottom);
+
         g_inWatcherCall = true;
         TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
-        g_inOurSlide = true;
-        TrayUI_SlideWindow_Original(
-            g_trayUI, g_trayWnd, &half,
-            MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
-            true);
-        g_inOurSlide = false;
+        SetWindowPos(g_trayWnd, nullptr, half.left, half.top, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         g_inWatcherCall = false;
 
-        // Parked and invisible: describe the window and its children, since
-        // nothing about the state changed -- only the position.
-        RECT r{};
-        GetWindowRect(g_trayWnd, &r);
-        LONG exStyle = GetWindowLongPtrW(g_trayWnd, GWL_EXSTYLE);
-        LONG style = GetWindowLongPtrW(g_trayWnd, GWL_STYLE);
+        Sleep(120);   // let the compositor present a frame
 
-        HRGN rgn = CreateRectRgn(0, 0, 0, 0);
-        int rgnType = GetWindowRgn(g_trayWnd, rgn);
-        RECT rgnBox{};
-        if (rgnType != ERROR) {
-            GetRgnBox(rgn, &rgnBox);
-        }
-        DeleteObject(rgn);
-
-        BYTE alpha = 255;
-        DWORD lwFlags = 0;
-        COLORREF key = 0;
-        BOOL layered = GetLayeredWindowAttributes(g_trayWnd, &key, &alpha,
-                                                  &lwFlags);
-
-        ExpLog(L"PROBE: tray (%ld,%ld)-(%ld,%ld) visible=%d style=0x%08X "
-               L"exStyle=0x%08X rgn=%d rgnBox=(%ld,%ld)-(%ld,%ld) "
-               L"layered=%d alpha=%u",
-               r.left, r.top, r.right, r.bottom,
-               (int)IsWindowVisible(g_trayWnd), (unsigned)style,
-               (unsigned)exStyle, rgnType, rgnBox.left, rgnBox.top,
-               rgnBox.right, rgnBox.bottom, (int)layered, alpha);
+        RECT after{};
+        GetWindowRect(g_trayWnd, &after);
+        ExpLog(L"PROBE: parked at (%ld,%ld)-(%ld,%ld), window now "
+               L"(%ld,%ld)-(%ld,%ld)",
+               half.left, half.top, half.right, half.bottom, after.left,
+               after.top, after.right, after.bottom);
 
         HWND child = GetWindow(g_trayWnd, GW_CHILD);
-        int n = 0;
-        while (child && n < 8) {
-            WCHAR cls[128] = L"";
-            GetClassNameW(child, cls, ARRAYSIZE(cls));
+        if (child) {
             RECT cr{};
             GetWindowRect(child, &cr);
-            ExpLog(L"    child %d: %s (%ld,%ld)-(%ld,%ld) visible=%d", n, cls,
-                   cr.left, cr.top, cr.right, cr.bottom,
+            WCHAR cls[128] = L"";
+            GetClassNameW(child, cls, ARRAYSIZE(cls));
+            ExpLog(L"    content bridge %s at (%ld,%ld)-(%ld,%ld) visible=%d",
+                   cls, cr.left, cr.top, cr.right, cr.bottom,
                    (int)IsWindowVisible(child));
-            child = GetWindow(child, GW_HWNDNEXT);
-            n++;
         }
         return;
     }
