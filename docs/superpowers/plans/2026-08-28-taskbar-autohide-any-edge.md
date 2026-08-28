@@ -65,8 +65,8 @@ Applied before any mod is enabled, so that later mod breakage is attributable to
 - [ ] **Step 1: Write the verification command and run it — expect failure**
 
 ```bash
-/mnt/c/Windows/System32/reg.exe query "HKLM\SOFTWARE\Windhawk\Settings" 2>&1 \
-  | tr -d '\r' | grep -i "Exclusion"
+/mnt/c/Windows/System32/reg.exe query "HKLM\SOFTWARE\Windhawk\Engine\Settings" \
+  /v Exclude 2>&1 | tr -d '\r' 
 ```
 
 Expected now: **no output** (no exclusion value has been set). This is the failing state.
@@ -89,8 +89,8 @@ Save, and let Windhawk restart its engine when prompted.
 - [ ] **Step 3: Re-run the verification command — expect success**
 
 ```bash
-/mnt/c/Windows/System32/reg.exe query "HKLM\SOFTWARE\Windhawk\Settings" 2>&1 \
-  | tr -d '\r' | grep -i "Exclusion"
+/mnt/c/Windows/System32/reg.exe query "HKLM\SOFTWARE\Windhawk\Engine\Settings" \
+  /v Exclude 2>&1 | tr -d '\r' 
 ```
 
 Expected: a value is present containing the six paths. If the value name differs from a guessed name, that is fine — the check is that the paths appear.
@@ -128,8 +128,8 @@ list, additive to Windhawk's built-in exclusions:
 
 ## Verify
 
-    /mnt/c/Windows/System32/reg.exe query "HKLM\SOFTWARE\Windhawk\Settings" \
-      | tr -d '\r' | grep -i Exclusion
+    /mnt/c/Windows/System32/reg.exe query \
+      "HKLM\SOFTWARE\Windhawk\Engine\Settings" /v Exclude | tr -d '\r' 
 
 ## Maintenance
 
