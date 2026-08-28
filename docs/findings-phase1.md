@@ -399,3 +399,45 @@ the SlideWindow loop. Finding and gating it is the only remaining avenue, and it
 means interfering with the mechanism that keeps the taskbar where it belongs --
 which is a considerably riskier thing to get wrong than anything attempted so
 far.
+
+## Final result: the visual is composited, not positioned
+
+Driving the movement from a separate thread settles it. 81 SetWindowPos calls
+from the mod, `(0,0) -> (-46,0)` over 600 ms, with the taskbar's UI thread never
+blocked because SlideWindow was not called at all. Still an instant vanish.
+
+Everything Win32 can observe or control has now been eliminated:
+
+| Hypothesis | Verdict |
+|---|---|
+| Animation skipped | Runs for its full configured duration |
+| `animate` flag / durations / `SPI_GETMENUANIMATION` / `vtable+0x360` gate | Identical between edges |
+| Compositor animation functions never fire | Wrong target: they build the object once |
+| Duration is zero off-bottom | Identical, 400 / 200 |
+| Window already at target | Rects differ by 46 px |
+| Another code path corrects the position | No: sole mover is the animation loop |
+| Window region or layered alpha | `rgn=0`, `layered=0`, `alpha=255` |
+| Flag ordering | Both orders fail, for opposite reasons |
+| `TaskbarHost::SetAutoHide` drops the content | Fires ~2 s after the slide |
+| UI thread blocked, preventing repaint | Animated from a free thread: still invisible |
+
+The window moves; the pixels do not follow. The taskbar renders through a
+Composition island -- `Windows.UI.Composition.DesktopWindowContentBridge`,
+visible as child 0 in the probe dumps -- and a composition visual's position is
+owned by the compositor, not by the HWND rect. Moving the window does not move
+the composed surface, so no intermediate position is ever presented.
+
+That is consistent with every measurement, including the ones that misled
+earlier: the bottom edge animates because Windows moves the *visual*, not just
+the window.
+
+### What reopening this would require
+
+Driving the composition visual directly, in the same layer as
+`SharedAnimations::TaskbarCollapseAnimation`. That is a substantially different
+project from anything here: it means obtaining the taskbar's visual tree from
+outside, and animating it in step with the window. `ViewCoordinator` is already
+ruled out as an entry point -- its hooks bound and never fired.
+
+Nothing at the Win32 layer will change this, and that is now demonstrated rather
+than assumed.

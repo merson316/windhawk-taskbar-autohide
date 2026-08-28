@@ -14,24 +14,21 @@ The reveal trigger and stay-visible test are already written generically against
 rect for the left edge is `(-46,0)-(2,1440)` on a the primary display display -- a 2px
 sliver. Confirm the equivalent on the other edges rather than assuming symmetry.
 
-## 2. Show and hide animation - CLOSED, blocked by design
+## 2. Show and hide animation - exhausted at the Win32 layer
 
-The window slide itself works off-bottom and is configurable. What cannot be
-done through this path is making it *visible*, and that is now demonstrated
-rather than assumed:
+The window animates correctly off-bottom: full duration, smooth interpolation,
+no interference. It is invisible because the taskbar's pixels are drawn by a
+Composition island whose visual position the compositor owns, so moving the HWND
+never moves what is on screen.
 
-- Setting the hidden flag before the slide drops the rendered content, so an
-  empty window animates.
-- Setting it after the slide leaves the window unable to stay off-screen --
-  measured, it completes 13 steps toward the hidden rect and finishes back at
-  the docked rect, because Windows enforces the position the flags imply.
+Eleven hypotheses were tested and eliminated, including three of my own
+confident explanations. The table is in `docs/findings-phase1.md`. The decisive
+test was animating from a separate thread: 81 window moves over 600 ms with the
+UI thread free, still invisible.
 
-The flag is both required for the move and fatal to the visuals. Reopening this
-means keeping the content drawn while the flag says hidden, which is the XAML
-layer in `Taskbar.View.dll`, not `SlideWindow`. `ViewCoordinator` is ruled out.
-
-`src/taskbar-autohide-anim-experiment.wh.cpp` preserves the second test. See
-`docs/findings-phase1.md`.
+Reopening means driving the composition visual directly, alongside
+`SharedAnimations::TaskbarCollapseAnimation`. That is a different project, not a
+continuation of this one. `ViewCoordinator` is ruled out as an entry point.
 
 ## 3. Secondary monitor support
 
