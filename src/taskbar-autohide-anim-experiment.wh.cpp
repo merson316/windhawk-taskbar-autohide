@@ -732,9 +732,18 @@ void WatcherTick() {
                             half.right = half.left + w; break;
             default: return;
         }
-        ExpLog(L"PROBE: parking half off-screen at (%ld,%ld)-(%ld,%ld)",
-               half.left, half.top, half.right, half.bottom);
+        // The hidden flag is what allows the window to stay off its docked
+        // position: without it Windows snaps it straight back, as the previous
+        // probe showed. So set it, then park half off-screen, so the taskbar
+        // holds a position where half of it is still on screen. If nothing is
+        // visible there, the flag suppresses drawing; if half a taskbar is
+        // visible, it renders fine away from docked.
+        ExpLog(L"PROBE: flag 0x%X then parking half off-screen at "
+               L"(%ld,%ld)-(%ld,%ld)",
+               stored | ABS_ALWAYSONTOP, half.left, half.top, half.right,
+               half.bottom);
         g_inWatcherCall = true;
+        TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
         TrayUI_SlideWindow_Original(
             g_trayUI, g_trayWnd, &half,
             MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
