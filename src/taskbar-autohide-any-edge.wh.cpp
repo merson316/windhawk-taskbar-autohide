@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lshell32
+// @compilerOptions -lcomctl32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -51,11 +51,10 @@ or the other, not both, since they hook the same function.
   animation that is never triggered off-bottom.
 - Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
   class.
-- Auto-hide is not applied on an edge that has another display beyond it. The
-  hidden position would be on that display, and every way of preventing that --
-  sliding, resizing, hiding the window, clipping it -- misbehaves, because
-  Windows owns both the position and the rendering there. The taskbar simply
-  stays visible on such an edge.
+- If a second display sits beyond the docked edge, the taskbar shrinks into
+  that edge rather than sliding out of view, since there is no off-screen space
+  to slide into. Revealing it there also needs a deliberate pause, so that
+  moving between monitors does not summon it -- see the reveal dwell setting.
 - Requires Windows 11 build 26200 or newer.
 */
 // ==/WindhawkModReadme==
@@ -148,10 +147,6 @@ void DbgLog(PCWSTR fmt, ...);
 // GetDockedRect, Unhide and SlideWindow. GetAutoHideFlags is reached on a base
 // 8 bytes lower, so it sees these at 0x118 and 0x44. Both are validated at load
 // against a byte signature inside GetAutoHideFlags.
-// Set to the edge currently declined because a display sits beyond it; the
-// hooks below consult it so that edge is left entirely alone.
-extern volatile LONG g_declinedEdge;
-
 #define TRAYUI_EDGE_OFFSET  0x110
 #define TRAYUI_FLAGS_OFFSET 0x3c
 #define GETFLAGS_EDGE_OFFSET  0x118
@@ -487,8 +482,7 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     }
 
     UINT edge = *(UINT*)((BYTE*)pThis + GETFLAGS_EDGE_OFFSET);
-    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge) ||
-        InterlockedCompareExchange(&g_declinedEdge, -1, -1) == (LONG)edge) {
+    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return ret;
     }
 
@@ -511,7 +505,6 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     UINT effective = flags;
 
     if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-        InterlockedCompareExchange(&g_declinedEdge, -1, -1) != (LONG)edge &&
         !g_inUnhide && !CursorAtRevealStrip(edge)) {
         effective = flags | ABS_ALWAYSONTOP;
     }
@@ -689,28 +682,6 @@ RECT g_clipRect{};
 // Set when the taskbar was hidden with ShowWindow because there was no
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
-
-void RestoreTaskbarIfHidden();   // defined with the teardown helpers
-
-// Set to the edge currently being declined because a display sits beyond it.
-// The hooks must stand down as well, or Windows still moves the taskbar to its
-// hidden position -- which is on that display.
-volatile LONG g_declinedEdge = -1;
-
-// Set when auto-hide was switched off in order to decline an edge, so it can be
-// switched back on when the taskbar moves somewhere it can hide.
-volatile LONG g_suppressedAutoHide = 0;
-
-// Poking the flags directly does not make the shell recompute the work area --
-// windows still sit under a taskbar that never hides. ABM_SETSTATE is the
-// documented way to set auto-hide, and is what toggling the setting drives, so
-// it produces the notifications the shell acts on.
-void SetTaskbarAutoHide(bool enable) {
-    APPBARDATA abd{};
-    abd.cbSize = sizeof(abd);
-    abd.lParam = enable ? (ABS_AUTOHIDE | ABS_ALWAYSONTOP) : ABS_ALWAYSONTOP;
-    SHAppBarMessage(ABM_SETSTATE, &abd);
-}
 RECT g_dockedBeforeHide{};
 
 void RunHideAnimation() {
@@ -738,9 +709,10 @@ void RunHideAnimation() {
         // neighbouring display, and the taskbar's content renders past any clip
         // we apply, so animating would just play the slide over there. Hide it
         // outright instead.
-        // Should not be reachable: such an edge is declined before a hide is
-        // ever requested. Bail rather than hide onto the neighbouring display.
-        DbgLog(L"hide anim: unexpected spill, declining");
+        DbgLog(L"hide anim: no off-screen space, hiding window without a slide");
+        InterlockedExchange(&g_clipHold, 0);
+        InterlockedExchange(&g_windowHidden, 1);
+        ShowWindow(g_trayWnd, SW_HIDE);
         InterlockedExchange(&g_animOverride, 0);
         return;
     }
@@ -797,84 +769,6 @@ void WatcherTick() {
         return;
     }
 
-    // A display beyond the docked edge leaves nowhere to hide into: the hidden
-    // position is on that display, and Windows owns both the position and the
-    // rendering there. Sliding, resizing, hiding the window and clipping it were
-    // all tried and all misbehave. Leave the taskbar alone on such an edge.
-    {
-        RECT probeDocked{};
-        TrayUI_GetDockedRect_Original(g_trayUI, &probeDocked, 0);
-        if (HiddenRectSpillsOntoAnotherDisplay(probeDocked, edge)) {
-            static ULONGLONG lastLog = 0;
-            const ULONGLONG now = GetTickCount64();
-            // Entering the declined state: if the taskbar is already flagged
-            // hidden it is parked at its hidden position, which is on the
-            // neighbouring display. Standing down is not enough -- clear the
-            // flag once so Windows puts it back where it belongs.
-            if (InterlockedExchange(&g_declinedEdge, (LONG)edge) != (LONG)edge) {
-                // Declining stops the next hide; it does not undo one that
-                // already happened. Arriving on a declined edge while hidden
-                // leaves the taskbar parked at its hidden position, which on
-                // this edge is the neighbouring display. Restore it first --
-                // the restore reads the flags cleared just below.
-                RestoreTaskbarIfHidden();
-
-                UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
-
-                // Turning auto-hide off is what actually gives the work area
-                // back: Windows reserves space for a taskbar that never hides,
-                // and releases it for one that does. Reporting differently is
-                // not enough -- windows still end up underneath.
-                if (f & (ABS_AUTOHIDE | ABS_ALWAYSONTOP)) {
-                    DbgLog(L"declining edge %u: turning auto-hide off (0x%X) so "
-                           L"the taskbar stays put and keeps its space",
-                           edge, f);
-                    if (f & ABS_AUTOHIDE) {
-                        InterlockedExchange(&g_suppressedAutoHide, 1);
-                    }
-                    TrayUI_SetAutoHideFlags_Original(
-                        g_trayUI,
-                        f & ~(UINT)(ABS_AUTOHIDE | ABS_ALWAYSONTOP));
-                    SetTaskbarAutoHide(false);
-                }
-
-                // The taskbar is permanently visible on this edge, so the work
-                // area has to be reserved for it. Auto-hide being enabled in
-                // Settings released it, and nothing gives it back while the
-                // taskbar never hides -- windows end up underneath.
-                if (g_trayWnd) {
-                    RECT wa{};
-                    SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
-                    DbgLog(L"declining edge %u: work area is (%ld,%ld)-(%ld,%ld)"
-                           L", asking for a re-layout",
-                           edge, wa.left, wa.top, wa.right, wa.bottom);
-                    PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA,
-                                 0);
-                }
-            }
-            if (now - lastLog > 10000) {
-                lastLog = now;
-                DbgLog(L"edge %u has a display beyond it; not managing auto-hide",
-                       edge);
-            }
-            return;
-        }
-        if (InterlockedCompareExchange(&g_declinedEdge, -1, (LONG)edge) ==
-            (LONG)edge) {
-            DbgLog(L"edge %u no longer has a display beyond it; managing again",
-                   edge);
-
-            // Put auto-hide back if declining the previous edge switched it off.
-            if (InterlockedCompareExchange(&g_suppressedAutoHide, 0, 1) == 1) {
-                UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
-                DbgLog(L"restoring auto-hide after leaving a declined edge");
-                TrayUI_SetAutoHideFlags_Original(g_trayUI,
-                                                 f | (UINT)ABS_AUTOHIDE);
-                SetTaskbarAutoHide(true);
-            }
-        }
-    }
-
     UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
     if (!(stored & ABS_AUTOHIDE)) {
         return;
@@ -891,14 +785,7 @@ void WatcherTick() {
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
 
-        if (InterlockedCompareExchange(&g_suppressedAutoHide, 0, 1) == 1 &&
-        g_trayUI && g_offsetsVerified) {
-        UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
-        TrayUI_SetAutoHideFlags_Original(g_trayUI, f | (UINT)ABS_AUTOHIDE);
-        SetTaskbarAutoHide(true);
-    }
-
-    if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
+        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
             // Was hidden outright rather than moved: put it back before asking
             // Windows to unhide, so it reappears at full size in place.
             DbgLog(L"reveal: restoring hidden window to (%ld,%ld) %ldx%ld",
