@@ -41,6 +41,11 @@ Windows 11 build 26200 or newer, x86-64. Developed and tested against
 
 ## Installation
 
+```
+git clone https://github.com/merson316/windhawk-taskbar-autohide.git
+```
+
+
 Windhawk → Create a new mod → replace the contents with
 [`src/taskbar-autohide-any-edge.wh.cpp`](src/taskbar-autohide-any-edge.wh.cpp) →
 Compile → Enable.
