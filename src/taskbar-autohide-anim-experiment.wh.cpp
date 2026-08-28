@@ -591,10 +591,17 @@ void ApplyDurationOverrides(void* pThis) {
 // Step it from the watch thread instead and leave the UI thread free.
 
 volatile LONG g_animRequested = 0;
+
+// Set while our animation is running. The taskbar clamps requested positions in
+// its WM_WINDOWPOSCHANGING handler, which is why intermediate positions never
+// appear: they are corrected inside the SetWindowPos call itself, with no
+// second API call to observe.
+volatile LONG g_animOverride = 0;
 RECT g_animFrom{}, g_animTo{};
 int g_animDurationMs = 400;
 
 void RunSelfAnimation() {
+    InterlockedExchange(&g_animOverride, 1);
     RECT from = g_animFrom, to = g_animTo;
     int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
 
@@ -614,6 +621,7 @@ void RunSelfAnimation() {
 
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    InterlockedExchange(&g_animOverride, 0);
     ExpLog(L"self-animation done: (%ld,%ld) -> (%ld,%ld) over %d ms",
            from.left, from.top, to.left, to.top, ms);
 }
@@ -934,6 +942,31 @@ void WatcherTick() {
 
 LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
+    if (uMsg == WM_WINDOWPOSCHANGING && lParam) {
+        WINDOWPOS* wp = (WINDOWPOS*)lParam;
+        const int reqX = wp->x, reqY = wp->y;
+
+        LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+
+        if (wp->x != reqX || wp->y != reqY) {
+            static int logged = 0;
+            if (logged < 20) {
+                logged++;
+                ExpLog(L"    clamp: requested (%d,%d) -> forced (%d,%d)%s",
+                       reqX, reqY, wp->x, wp->y,
+                       InterlockedCompareExchange(&g_animOverride, 0, 0)
+                           ? L"  [restoring]"
+                           : L"");
+            }
+            if (InterlockedCompareExchange(&g_animOverride, 0, 0)) {
+                // Put our position back, so the intermediate frame survives.
+                wp->x = reqX;
+                wp->y = reqY;
+            }
+        }
+        return r;
+    }
+
     if (g_watchMsg && uMsg == g_watchMsg) {
         WatcherTick();
         return 0;
