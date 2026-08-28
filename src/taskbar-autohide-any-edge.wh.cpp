@@ -256,6 +256,7 @@ TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 
 // Defined further down, alongside the unhide handling.
 bool CursorAtDockedEdge(UINT edge);
+void NudgeTaskbarRelayout(bool cursorAtEdge);
 
 const size_t kTrayUiFlagsOffset = 0x44;
 const size_t kTrayUiEdgeOffset = 0x118;
@@ -293,7 +294,15 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     // detection that normally does so does not run. But GetDockedRect chooses
     // the hidden rect purely on (flags & 3) == 3, so clearing the hidden bit
     // while the cursor is at the edge is itself the reveal.
-    if ((stored & 3) == 3 && CursorAtDockedEdge(edge)) {
+    //
+    // Answering correctly is not enough on its own: nothing re-reads the rect
+    // unless a layout pass happens, which is why the taskbar stayed parked at
+    // the hidden rect while remaining clickable through its 2px sliver. Nudge
+    // one on each transition.
+    bool atEdge = CursorAtDockedEdge(edge);
+    NudgeTaskbarRelayout(atEdge);
+
+    if ((stored & 3) == 3 && atEdge) {
         return stored & ~2u;
     }
 
@@ -353,6 +362,34 @@ bool TrayMonitorRect(RECT* out) {
     }
     *out = g_trayMonitorRect;
     return true;
+}
+
+// Ask the shell to re-read its own layout. WM_SETTINGCHANGE/SPI_SETWORKAREA is
+// a public, side-effect-light way to do that from any thread, and avoids
+// calling any TrayUI member from outside its own call flow -- which is what
+// took Explorer down when the V1 driver tried it.
+bool g_lastCursorAtEdge = false;
+ULONGLONG g_lastNudgeAt = 0;
+
+void NudgeTaskbarRelayout(bool cursorAtEdge) {
+    if (cursorAtEdge == g_lastCursorAtEdge) {
+        return;   // only on transition
+    }
+    g_lastCursorAtEdge = cursorAtEdge;
+
+    ULONGLONG now = GetTickCount64();
+    if (now - g_lastNudgeAt < 150) {
+        return;   // debounce
+    }
+    g_lastNudgeAt = now;
+
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) {
+        return;
+    }
+
+    DiagLog(L"nudge relayout: cursorAtEdge=%d", (int)cursorAtEdge);
+    PostMessageW(tray, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
 }
 
 bool CursorAtDockedEdge(UINT edge) {
