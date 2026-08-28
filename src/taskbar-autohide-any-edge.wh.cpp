@@ -107,6 +107,11 @@ or the other, not both, since they hook the same function.
 
     Raise it if the taskbar keeps reappearing during a single notification.
     Lower it if two genuinely separate notifications get merged into one.
+- debugLog: false
+  $name: Write a debug log
+  $description: >-
+    Writes diagnostics to %LOCALAPPDATA%\windhawk-autohide-fix.log. Off by
+    default; only useful when investigating a problem.
 - revealDwellMs: 120
   $name: Reveal dwell (ms)
   $description: >-
@@ -129,6 +134,10 @@ or the other, not both, since they hook the same function.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
+#include <stdarg.h>
+#include <string>
+
+void DbgLog(PCWSTR fmt, ...);
 #include <utility>
 
 // ABE_LEFT/TOP/RIGHT/BOTTOM and ABS_AUTOHIDE/ABS_ALWAYSONTOP come from
@@ -162,6 +171,7 @@ struct Settings {
     bool edgeRight = true;
     int revealTolerance = 8;
     int revealDwellMs = 120;
+    bool debugLog = false;
     int notificationHoldMs = 1500;
     int notificationBurstGapMs = 5000;
     int hideDurationMs = 0;
@@ -202,6 +212,7 @@ void LoadSettings() {
         g_settings.notificationHoldMs = 30000;
     }
 
+    g_settings.debugLog = Wh_GetIntSetting(L"debugLog") != 0;
     g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
     if (g_settings.revealDwellMs < 0) {
         g_settings.revealDwellMs = 0;
@@ -212,7 +223,8 @@ void LoadSettings() {
     g_settings.notificationBurstGapMs =
         Wh_GetIntSetting(L"notificationBurstGapMs");
     if (g_settings.notificationBurstGapMs < 0) {
-        g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
+        g_settings.debugLog = Wh_GetIntSetting(L"debugLog") != 0;
+    g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
     if (g_settings.revealDwellMs < 0) {
         g_settings.revealDwellMs = 0;
     } else if (g_settings.revealDwellMs > 2000) {
@@ -221,7 +233,8 @@ void LoadSettings() {
 
     g_settings.notificationBurstGapMs = 0;
     } else if (g_settings.notificationBurstGapMs > 60000) {
-        g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
+        g_settings.debugLog = Wh_GetIntSetting(L"debugLog") != 0;
+    g_settings.revealDwellMs = Wh_GetIntSetting(L"revealDwellMs");
     if (g_settings.revealDwellMs < 0) {
         g_settings.revealDwellMs = 0;
     } else if (g_settings.revealDwellMs > 2000) {
@@ -234,6 +247,53 @@ void LoadSettings() {
     g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
     g_settings.showDurationMs = ClampDuration(Wh_GetIntSetting(L"showDurationMs"));
 }
+
+// Optional file log, off unless the debugLog setting is on. Windhawk's own
+// logging needs its verbosity raised and cannot be read from outside, which
+// makes diagnosing a live problem awkward.
+HANDLE g_dbgFile = INVALID_HANDLE_VALUE;
+
+void DbgLog(PCWSTR fmt, ...) {
+    if (!g_settings.debugLog) {
+        return;
+    }
+    if (g_dbgFile == INVALID_HANDLE_VALUE) {
+        WCHAR base[MAX_PATH];
+        if (!GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH)) {
+            return;
+        }
+        std::wstring path(base);
+        path += L"\\windhawk-autohide-fix.log";
+        g_dbgFile = CreateFileW(path.c_str(), FILE_APPEND_DATA,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                    FILE_SHARE_DELETE,
+                                nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                                nullptr);
+        if (g_dbgFile == INVALID_HANDLE_VALUE) {
+            return;
+        }
+    }
+
+    WCHAR line[512];
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int off = swprintf(line, ARRAYSIZE(line), L"%02u:%02u:%02u.%03u ", st.wHour,
+                       st.wMinute, st.wSecond, st.wMilliseconds);
+    va_list ap;
+    va_start(ap, fmt);
+    vswprintf(line + off, ARRAYSIZE(line) - off - 3, fmt, ap);
+    va_end(ap);
+    size_t len = wcslen(line);
+    line[len] = L'\r'; line[len + 1] = L'\n'; line[len + 2] = L'\0';
+    char utf8[1024];
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
+                                    nullptr, nullptr);
+    if (bytes > 1) {
+        DWORD written = 0;
+        WriteFile(g_dbgFile, utf8, (DWORD)(bytes - 1), &written, nullptr);
+    }
+}
+
 
 bool EdgeEnabled(UINT edge) {
     switch (edge) {
@@ -629,8 +689,15 @@ void RunHideAnimation() {
     // its own monitor as it goes, so it shrinks into the edge instead of
     // sliding onto the neighbouring screen.
     RECT mon{};
-    const bool clip = TrayMonitorRect(&mon) &&
-                      HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
+    const bool haveMon = TrayMonitorRect(&mon);
+    const bool spills = HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
+    const bool clip = haveMon && spills;
+
+    DbgLog(L"hide anim: edge=%u from(%ld,%ld)-(%ld,%ld) to(%ld,%ld)-(%ld,%ld) "
+           L"monitor(%ld,%ld)-(%ld,%ld) haveMon=%d spills=%d clip=%d",
+           g_animEdge, from.left, from.top, from.right, from.bottom, to.left,
+           to.top, to.right, to.bottom, mon.left, mon.top, mon.right,
+           mon.bottom, (int)haveMon, (int)spills, (int)clip);
 
     const LONG w = from.right - from.left;
     const LONG h = from.bottom - from.top;
@@ -668,6 +735,7 @@ void RunHideAnimation() {
         LONG fx = to.left, fy = to.top, fw = w, fh = h;
         if (to.left + w > mon.right) { fx = mon.right - sliver; fw = sliver; }
         if (to.top + h > mon.bottom) { fy = mon.bottom - sliver; fh = sliver; }
+        DbgLog(L"hide anim: clipped sliver (%ld,%ld) %ldx%ld", fx, fy, fw, fh);
         g_clipRect = RECT{fx, fy, fx + fw, fy + fh};
         InterlockedExchange(&g_clipHold, 1);
         SetWindowPos(g_trayWnd, nullptr, fx, fy, fw, fh,
