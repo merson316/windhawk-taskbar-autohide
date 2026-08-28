@@ -887,7 +887,42 @@ void WatcherTick() {
     if (stored & ABS_ALWAYSONTOP) {
         // Hidden. Reveal once the pointer reaches the trigger strip; Unhide
         // performs the slide itself.
+        // Believed hidden. Check that against the window before trusting it:
+        // if most of the window is on screen it is plainly visible and the flag
+        // is stale, which otherwise deadlocks here forever, silently.
+        RECT actual{}, mon{};
+        if (g_trayWnd && GetWindowRect(g_trayWnd, &actual) &&
+            TrayMonitorRect(&mon)) {
+            RECT overlap{};
+            const LONG w = actual.right - actual.left;
+            const LONG h = actual.bottom - actual.top;
+            LONG ow = 0, oh = 0;
+            if (IntersectRect(&overlap, &actual, &mon)) {
+                ow = overlap.right - overlap.left;
+                oh = overlap.bottom - overlap.top;
+            }
+            if (w > 0 && h > 0 && ow * 2 > w && oh * 2 > h) {
+                DbgLog(L"state mismatch: flagged hidden but window is on screen "
+                       L"at (%ld,%ld)-(%ld,%ld); clearing 0x%X",
+                       actual.left, actual.top, actual.right, actual.bottom,
+                       stored);
+                TrayUI_SetAutoHideFlags_Original(
+                    g_trayUI, stored & ~(UINT)ABS_ALWAYSONTOP);
+                g_leaveTicks = 0;
+                return;
+            }
+        }
+
         if (!CursorAtRevealStrip(edge) && !CursorOverTaskbar(g_trayUI)) {
+            static ULONGLONG lastLog = 0;
+            const ULONGLONG now = GetTickCount64();
+            if (now - lastLog > 3000) {
+                lastLog = now;
+                DbgLog(L"hidden, waiting: window(%ld,%ld)-(%ld,%ld) stored=0x%X "
+                       L"edge=%u",
+                       actual.left, actual.top, actual.right, actual.bottom,
+                       stored, edge);
+            }
             g_leaveTicks = 0;
             return;
         }
