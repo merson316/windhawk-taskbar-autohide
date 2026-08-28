@@ -301,23 +301,9 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
 
     UINT stored = *(UINT*)((BYTE*)pThis + kTrayUiFlagsOffset);
 
-    // Windows never issues an unhide request off-bottom -- the cursor-at-edge
-    // detection that normally does so does not run. But GetDockedRect chooses
-    // the hidden rect purely on (flags & 3) == 3, so clearing the hidden bit
-    // while the cursor is at the edge is itself the reveal.
-    //
-    // Answering correctly is not enough on its own: nothing re-reads the rect
-    // unless a layout pass happens, which is why the taskbar stayed parked at
-    // the hidden rect while remaining clickable through its 2px sliver. Nudge
-    // one on each transition.
-    // Do NOT clear the hidden bit on hover. Unhide inspects this value to
-    // decide whether there is anything to reveal: reporting "already shown"
-    // made it a no-op, which is why hovering produced Unhide(request=8) and
-    // (request=18) that slid nothing, while the one successful reveal happened
-    // when the cursor had left and the true hidden state was reported.
-    //
-    // Report the truth and let Unhide clear the bit itself via
-    // SetAutoHideFlags(0x1), which the in-unhide passthrough leaves untouched.
+    // Detect cursor transitions here because this runs constantly; the action
+    // is performed on the next layout pass in GetDockedRect, which owns the
+    // correct `this` base.
     bool atEdge = CursorAtDockedEdge(edge);
 
     if (atEdge != g_lastCursorAtEdge) {
@@ -329,13 +315,6 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     }
 
     NudgeTaskbarRelayout(atEdge);
-
-    // The getter reports the stored value and nothing else. Synthesising a
-    // different hidden state here created two competing sources of truth: the
-    // stored flags said "shown" while this said "hidden", so the layout undid
-    // every reveal and the self-unhide never re-armed. Transitions are driven
-    // in GetDockedRect instead, against the stored state.
-    (void)atEdge;
 
     if (stored != ret) {
         DiagLog(L"GetAutoHideFlags: stored 0x%X, masked to 0x%X [edge=%u %s]",
@@ -449,21 +428,33 @@ bool CursorAtDockedEdge(UINT edge) {
         return false;
     }
 
-    if (pt.x < m.left || pt.x > m.right || pt.y < m.top || pt.y > m.bottom) {
-        return false;   // not on the taskbar's monitor
-    }
-
-    if (pt.x < m.left || pt.x > m.right || pt.y < m.top || pt.y > m.bottom) {
-        return false;   // not on the taskbar's monitor
-    }
+    bool onMonitor = !(pt.x < m.left || pt.x > m.right || pt.y < m.top ||
+                       pt.y > m.bottom);
 
     const LONG tol = 4;
-    switch (edge) {
-        case ABE_LEFT:  return pt.x <= m.left + tol;
-        case ABE_TOP:   return pt.y <= m.top + tol;
-        case ABE_RIGHT: return pt.x >= m.right - tol;
-        default:        return false;
+    bool result = false;
+    if (onMonitor) {
+        switch (edge) {
+            case ABE_LEFT:  result = pt.x <= m.left + tol; break;
+            case ABE_TOP:   result = pt.y <= m.top + tol; break;
+            case ABE_RIGHT: result = pt.x >= m.right - tol; break;
+            default:        result = false; break;
+        }
     }
+
+    // Throttled: this runs on every GetAutoHideFlags call. Every conclusion
+    // about the cursor so far has been inferred rather than measured.
+    static ULONGLONG lastLog = 0;
+    ULONGLONG now = GetTickCount64();
+    if (now - lastLog > 1000) {
+        lastLog = now;
+        DiagLog(L"cursor(%ld,%ld) monitor(%ld,%ld)-(%ld,%ld) edge=%u "
+                L"onMon=%d result=%d",
+                pt.x, pt.y, m.left, m.top, m.right, m.bottom, edge,
+                (int)onMonitor, (int)result);
+    }
+
+    return result;
 }
 
 using TrayUI_SetAutoHideFlags_t = void(WINAPI*)(void* pThis, UINT flags);
