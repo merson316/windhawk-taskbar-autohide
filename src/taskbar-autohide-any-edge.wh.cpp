@@ -254,6 +254,9 @@ TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 // earlier attempt hid the taskbar but never released the work area or armed
 // the unhide.
 
+// Defined further down, alongside the unhide handling.
+bool CursorAtDockedEdge(UINT edge);
+
 const size_t kTrayUiFlagsOffset = 0x44;
 const size_t kTrayUiEdgeOffset = 0x118;
 
@@ -285,6 +288,15 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     }
 
     UINT stored = *(UINT*)((BYTE*)pThis + kTrayUiFlagsOffset);
+
+    // Windows never issues an unhide request off-bottom -- the cursor-at-edge
+    // detection that normally does so does not run. But GetDockedRect chooses
+    // the hidden rect purely on (flags & 3) == 3, so clearing the hidden bit
+    // while the cursor is at the edge is itself the reveal.
+    if ((stored & 3) == 3 && CursorAtDockedEdge(edge)) {
+        return stored & ~2u;
+    }
+
     if (stored != ret) {
         DiagLog(L"GetAutoHideFlags: stored 0x%X, masked to 0x%X [edge=%u %s]",
                 stored, ret, edge, EdgeName(edge));
@@ -318,25 +330,46 @@ const int kUnhideRequestStateChanged = 9;
 // for a genuine hover reveal, so the code alone cannot tell them apart. The
 // cursor can: a real reveal has it against the docked edge. Checked in-process
 // with GetCursorPos -- no global input hooks.
+RECT g_trayMonitorRect{};
+ULONGLONG g_trayMonitorRectAt = 0;
+
+// GetAutoHideFlags is extremely hot, so cache the monitor rect and refresh it
+// only occasionally. FindWindow/GetMonitorInfo on every call would not do.
+bool TrayMonitorRect(RECT* out) {
+    ULONGLONG now = GetTickCount64();
+    if (now - g_trayMonitorRectAt > 2000 || g_trayMonitorRect.right == 0) {
+        HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+        if (!tray) {
+            return false;
+        }
+        MONITORINFO mi{};
+        mi.cbSize = sizeof(mi);
+        if (!GetMonitorInfoW(MonitorFromWindow(tray, MONITOR_DEFAULTTOPRIMARY),
+                             &mi)) {
+            return false;
+        }
+        g_trayMonitorRect = mi.rcMonitor;
+        g_trayMonitorRectAt = now;
+    }
+    *out = g_trayMonitorRect;
+    return true;
+}
+
 bool CursorAtDockedEdge(UINT edge) {
     POINT pt;
     if (!GetCursorPos(&pt)) {
         return false;
     }
 
-    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!tray) {
+    RECT m{};
+    if (!TrayMonitorRect(&m)) {
         return false;
     }
 
-    MONITORINFO mi{};
-    mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(MonitorFromWindow(tray, MONITOR_DEFAULTTOPRIMARY),
-                         &mi)) {
-        return false;
+    if (pt.x < m.left || pt.x > m.right || pt.y < m.top || pt.y > m.bottom) {
+        return false;   // not on the taskbar's monitor
     }
 
-    const RECT m = mi.rcMonitor;
     if (pt.x < m.left || pt.x > m.right || pt.y < m.top || pt.y > m.bottom) {
         return false;   // not on the taskbar's monitor
     }
@@ -374,7 +407,8 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     // edge sits at 0x118 there but 0x110 in GetDockedRect. Reusing the getter's
     // offset here read the wrong field entirely.
     UINT effective = flags;
-    if ((flags & 1) && edge < ABE_BOTTOM && !g_inUnhide) {
+    if ((flags & 1) && edge < ABE_BOTTOM && !g_inUnhide &&
+        !CursorAtDockedEdge(edge)) {
         effective = flags | 2;
     }
 
