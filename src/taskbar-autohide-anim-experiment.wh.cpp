@@ -260,11 +260,9 @@ void LoadSettings() {
         Wh_GetIntSetting(L"notificationBurstGapMs");
     if (g_settings.notificationBurstGapMs < 0) {
         g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
-    g_settings.selfAnimate = Wh_GetIntSetting(L"selfAnimate") != 0;
     g_settings.notificationBurstGapMs = 0;
     } else if (g_settings.notificationBurstGapMs > 60000) {
         g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
-    g_settings.selfAnimate = Wh_GetIntSetting(L"selfAnimate") != 0;
     g_settings.notificationBurstGapMs = 60000;
     }
 
@@ -911,13 +909,29 @@ void WatcherTick() {
     if (TrayUI_SlideWindow_Original && g_trayWnd) {
         RECT hidden{};
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
-        ApplyDurationOverrides(g_trayUI);
-        ExpLog(L"hide: sliding to (%ld,%ld)-(%ld,%ld)", hidden.left, hidden.top,
-               hidden.right, hidden.bottom);
-        TrayUI_SlideWindow_Original(
-            g_trayUI, g_trayWnd, &hidden,
-            MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
-            true);
+
+        if (g_settings.selfAnimate) {
+            // Hand the movement to the watch thread, leaving this one -- the
+            // taskbar's UI thread -- free to repaint while the window moves.
+            GetWindowRect(g_trayWnd, &g_animFrom);
+            g_animTo = hidden;
+            g_animDurationMs =
+                g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
+            ExpLog(L"hide: self-animating (%ld,%ld) -> (%ld,%ld) over %d ms",
+                   g_animFrom.left, g_animFrom.top, hidden.left, hidden.top,
+                   g_animDurationMs);
+            InterlockedExchange(&g_animRequested, 1);
+        } else {
+            ApplyDurationOverrides(g_trayUI);
+            ExpLog(L"hide: sliding to (%ld,%ld)-(%ld,%ld)", hidden.left,
+                   hidden.top, hidden.right, hidden.bottom);
+            g_inOurSlide = true;
+            TrayUI_SlideWindow_Original(
+                g_trayUI, g_trayWnd, &hidden,
+                MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
+                true);
+            g_inOurSlide = false;
+        }
     }
 
     g_deferContentHide = false;
