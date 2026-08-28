@@ -509,8 +509,12 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     UINT edge = CurrentStuckPlace(pThis);
     UINT effective = flags;
 
+    // Adding the hidden bit here is what makes hiding work at all, but it must
+    // not be added while the taskbar is plainly on screen: after an edge change
+    // Windows re-applies the flags, and marking it hidden then leaves the
+    // watcher waiting for a reveal that is already showing.
     if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-        !g_inUnhide && !CursorAtRevealStrip(edge)) {
+        !g_inUnhide && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
         effective = flags | ABS_ALWAYSONTOP;
     }
 
