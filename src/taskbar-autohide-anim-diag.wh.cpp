@@ -135,6 +135,42 @@ void** WINAPI Expand_Hook(void* pThis, void* sret) {
     return Expand_Original(pThis, sret);
 }
 
+// --------------------------------------------------- SlideWindow durations
+
+// SlideWindow gates its animation on three things:
+//
+//     test %r14d,%r14d           ; 1. duration > 0
+//     jle  <skip>
+//     call <vtable+0x360>        ; 2. must return non-zero
+//     je   <skip>
+//     SystemParametersInfo(SPI_GETMENUANIMATION)
+//     je   <skip>                ; 3. system animation setting on
+//
+// r14d comes from this+0x168 when hiding and this+0x16c when showing. The
+// bottom edge animates, so gates 2 and 3 pass; log the durations to see whether
+// gate 1 is what differs off-bottom.
+#define SLIDE_HIDE_DURATION_OFFSET 0x168
+#define SLIDE_SHOW_DURATION_OFFSET 0x16c
+
+using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
+                                           const RECT* rect, HMONITOR monitor,
+                                           bool show, bool animate);
+TrayUI_SlideWindow_t SlideWindow_Original;
+void WINAPI SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
+                             HMONITOR monitor, bool show, bool animate) {
+    int hideMs = pThis ? *(int*)((BYTE*)pThis + SLIDE_HIDE_DURATION_OFFSET) : -1;
+    int showMs = pThis ? *(int*)((BYTE*)pThis + SLIDE_SHOW_DURATION_OFFSET) : -1;
+
+    BOOL sysAnim = TRUE;
+    SystemParametersInfoW(0x1002 /* SPI_GETMENUANIMATION */, 0, &sysAnim, 0);
+
+    Log(L"SlideWindow show=%d animate=%d durations hide=%d show=%d "
+        L"sysAnim=%d [workarea edge=%u]",
+        (int)show, (int)animate, hideMs, showMs, (int)sysAnim, CurrentEdge());
+
+    SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 BOOL Wh_ModInit() {
@@ -169,9 +205,22 @@ BOOL Wh_ModInit() {
         return FALSE;
     }
 
-    Log(L"hooks: collapse=%p collapseDelayed=%p expand=%p",
+    Log(L"anim hooks: collapse=%p collapseDelayed=%p expand=%p",
         (void*)Collapse_Original, (void*)CollapseDelayed_Original,
         (void*)Expand_Original);
+
+    HMODULE taskbar =
+        LoadLibraryExW(L"taskbar.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (taskbar) {
+        WindhawkUtils::SYMBOL_HOOK slideHook[] = {
+            {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
+              LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
+             &SlideWindow_Original, SlideWindow_Hook, true},
+        };
+        WindhawkUtils::HookSymbols(taskbar, slideHook, ARRAYSIZE(slideHook));
+        Log(L"slide hook: %p", (void*)SlideWindow_Original);
+    }
+
     return TRUE;
 }
 
