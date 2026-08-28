@@ -688,6 +688,10 @@ RECT g_clipRect{};
 // off-screen space to slide into.
 volatile LONG g_windowHidden = 0;
 volatile LONG g_regionSet = 0;
+
+// Counts ticks actually delivered to the subclass, so a post that succeeds but
+// never arrives can be told from one that fails outright.
+volatile LONG g_ticksReceived = 0;
 RECT g_dockedBeforeHide{};
 
 // Clip the window to its own monitor. Unlike resizing, a window region also
@@ -992,6 +996,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (g_watchMsg && uMsg == g_watchMsg) {
+        InterlockedIncrement(&g_ticksReceived);
         WatcherTick();
         return 0;
     }
@@ -1056,7 +1061,16 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
         }
 
         if (g_trayWnd && g_watchMsg) {
-            PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
+            BOOL posted = PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
+            static ULONGLONG lastLog = 0;
+            const ULONGLONG now = GetTickCount64();
+            if (now - lastLog > 2000) {
+                lastLog = now;
+                DbgLog(L"tick: posted=%d err=%lu hwnd=%p received=%d",
+                       (int)posted, posted ? 0 : GetLastError(),
+                       (void*)g_trayWnd,
+                       (int)InterlockedExchange(&g_ticksReceived, 0));
+            }
         }
         Sleep(WATCH_TICK_MS);
     }
