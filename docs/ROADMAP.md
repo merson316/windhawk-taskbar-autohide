@@ -14,25 +14,17 @@ The reveal trigger and stay-visible test are already written generically against
 rect for the left edge is `(-46,0)-(2,1440)` on a the primary display display -- a 2px
 sliver. Confirm the equivalent on the other edges rather than assuming symmetry.
 
-## 2. Show and hide animation
+## 2. Show and hide animation - RESOLVED, no defect
 
-The taskbar currently moves without the Windows 11 easing. `SlideWindow` is
-passed `animate=1` in both directions, so the flag is not the problem: the
-smooth transition is a XAML compositor animation
-(`SharedAnimations::TaskbarCollapseAnimation` / `TaskbarExpandAnimation` in
-`Taskbar.View.dll`) that is never triggered off-bottom.
+Investigated and closed. The slide animation already runs correctly off-bottom:
+identical duration, step count, spacing, flags and interpolation to the bottom
+edge. The perceived difference is geometric -- a vertical taskbar sweeps 48 px
+of screen area where a horizontal one sweeps 3440 px, so the same motion reads
+as much faster.
 
-Starting points:
-
-- Those two animation functions are the ones `taskbar-auto-hide-speed` hooks, so
-  the pattern for reaching them is already proven.
-- `ViewCoordinator` was investigated and ruled out -- its hooks bound and never
-  fired, because that class implements collapse-to-smaller-size, not auto-hide.
-  Do not re-tread it.
-- Find what invokes the collapse animation on the bottom edge first, then work
-  out why that path is not reached elsewhere. Instrument before theorising: most
-  of the time lost on this project went to plausible theories that a five-line
-  disassembly would have killed immediately.
+`hideDurationMs` / `showDurationMs` settings were added to lengthen it to taste.
+See `docs/findings-phase1.md` for the measurements and the five hypotheses that
+were ruled out.
 
 ## 3. Secondary monitor support
 

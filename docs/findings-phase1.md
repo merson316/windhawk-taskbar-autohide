@@ -173,3 +173,55 @@ at `0x118` from a base-B pointer.
   that is never triggered off-bottom.
 - Top and right edges are implemented but untested.
 - Secondary taskbars remain out of scope.
+
+---
+
+# Animation investigation (2026-08-28)
+
+**Outcome: no defect. The slide animation already works off-bottom.**
+
+Measured on the left edge against a bottom-edge control, with
+`taskbar-auto-hide-speed` disabled:
+
+| | Left | Bottom |
+|---|---|---|
+| Slide duration | 406 / 421 / 406 ms hide, 219 ms show | 407 / 422 / 422 ms hide, 219 ms show |
+| SetWindowPos steps | 13 hide, 7-8 show | 13 hide, 7 show |
+| Step spacing | ~31 ms | ~31 ms |
+| Step flags | `0x15` (NOSIZE\|NOZORDER\|NOACTIVATE) | `0x15` |
+| Interpolation | smooth, x -3 -> -43 | smooth, y 1431 -> 1410 |
+| `animate` argument | 1 | 1 |
+| Durations at this+0x168 / +0x16c | 400 / 200 | 400 / 200 |
+| `SPI_GETMENUANIMATION` | 1 | 1 |
+| Animation gate (vtable+0x360) | 1 | 1 |
+
+The perceived difference is geometric: both edges travel 46 px in the same time,
+but a horizontal taskbar sweeps 3440 px of screen width while a vertical one
+sweeps 48 px. The same motion over far less area reads as much faster and is
+easy to mistake for an instant vanish.
+
+A `hideDurationMs` / `showDurationMs` setting was added so the vertical slide can
+be lengthened to taste. It writes this+0x168 / +0x16c, guarded by a signature
+over the two load instructions inside `SlideWindow`, which encode both offsets.
+
+## Hypotheses killed, in order
+
+1. **Compositor animations never fire off-bottom.** Wrong target:
+   `TaskbarCollapseAnimation` and friends construct the animation object once
+   and are not called per transition, so their silence meant nothing.
+2. **The duration is zero off-bottom.** Identical, 400 / 200 on both edges.
+3. **The window is already at the target, so there is nothing to animate.**
+   Rects differ by 46 px, `same=0` on every slide.
+4. **The `vtable+0x360` gate returns zero off-bottom.** Returns 1 on both.
+5. **The animation is skipped despite the gates.** Slide duration matches the
+   configured animation time exactly, so the loop runs to completion.
+
+Each was killed in a single test cycle, because every run had a bottom-edge
+control to compare against. That is the practice worth keeping.
+
+## Notes for future work here
+
+`SlideWindow`'s animation is a synchronous timed loop on the calling thread:
+`GetCurrentThread` / `GetThreadPriority` / `SetThreadPriority` to raise
+priority, then `GetTickCount` with `SetWindowPos` steps. It is not a compositor
+animation, so DWM-level approaches do not apply.

@@ -45,6 +45,16 @@ The bottom edge is left untouched.
   $name: Enable on the top edge
 - edgeRight: true
   $name: Enable on the right edge
+- hideDurationMs: 0
+  $name: Hide animation duration (ms)
+  $description: >-
+    0 keeps the Windows default (400 ms). A vertical taskbar covers far less
+    screen area than a horizontal one, so the same duration reads as much
+    faster; raise this if the slide is hard to follow.
+- showDurationMs: 0
+  $name: Reveal animation duration (ms)
+  $description: >-
+    0 keeps the Windows default (200 ms).
 - revealTolerance: 4
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -80,6 +90,8 @@ struct Settings {
     bool edgeTop = true;
     bool edgeRight = true;
     int revealTolerance = 4;
+    int hideDurationMs = 0;
+    int showDurationMs = 0;
 } g_settings;
 
 void LoadSettings() {
@@ -89,6 +101,15 @@ void LoadSettings() {
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
     if (g_settings.revealTolerance < 1 || g_settings.revealTolerance > 64) {
         g_settings.revealTolerance = 4;
+    }
+
+    g_settings.hideDurationMs = Wh_GetIntSetting(L"hideDurationMs");
+    g_settings.showDurationMs = Wh_GetIntSetting(L"showDurationMs");
+    if (g_settings.hideDurationMs < 0 || g_settings.hideDurationMs > 5000) {
+        g_settings.hideDurationMs = 0;
+    }
+    if (g_settings.showDurationMs < 0 || g_settings.showDurationMs > 5000) {
+        g_settings.showDurationMs = 0;
     }
 }
 
@@ -298,6 +319,52 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     g_inUnhide = prev;
 }
 
+// -------------------------------------------------- slide animation duration
+
+// SlideWindow animates with a synchronous timed loop, taking its duration from
+// this+0x168 when hiding and this+0x16c when showing (400 ms and 200 ms by
+// default). The animation itself works correctly off-bottom -- measured step
+// counts, spacing and flags match the bottom edge exactly -- but a vertical
+// taskbar sweeps far less screen area for the same travel, so it reads as much
+// faster. These offsets let that be tuned.
+//
+// Verified against the two load instructions inside SlideWindow, which encode
+// both offsets, so a changed function disables the feature rather than writing
+// to arbitrary memory.
+#define SLIDE_HIDE_DURATION_OFFSET 0x168
+#define SLIDE_SHOW_DURATION_OFFSET 0x16c
+
+const size_t kShowDurSigOffset = 0xA6;
+const BYTE kShowDurSig[] = {0x44, 0x8B, 0xB3, 0x6C, 0x01, 0x00, 0x00};
+const size_t kHideDurSigOffset = 0x123;
+const BYTE kHideDurSig[] = {0x44, 0x8B, 0xB3, 0x68, 0x01, 0x00, 0x00};
+
+bool g_durationOffsetsVerified = false;
+
+void ApplyDurationOverrides(void* pThis) {
+    if (!g_durationOffsetsVerified || !pThis) {
+        return;
+    }
+    if (g_settings.hideDurationMs > 0) {
+        *(int*)((BYTE*)pThis + SLIDE_HIDE_DURATION_OFFSET) =
+            g_settings.hideDurationMs;
+    }
+    if (g_settings.showDurationMs > 0) {
+        *(int*)((BYTE*)pThis + SLIDE_SHOW_DURATION_OFFSET) =
+            g_settings.showDurationMs;
+    }
+}
+
+#define TrayUI_SlideWindow_Hooked TrayUI_SlideWindow_Original
+void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
+                                    HMONITOR monitor, bool show, bool animate) {
+    UINT edge = CurrentStuckPlace(pThis);
+    if (edge < ABE_BOTTOM && EdgeEnabled(edge)) {
+        ApplyDurationOverrides(pThis);
+    }
+    TrayUI_SlideWindow_Hooked(pThis, hWnd, rect, monitor, show, animate);
+}
+
 // ------------------------------------------------------------ pointer watcher
 
 // Windows' cursor-at-edge detection does not run off-bottom, and none of the
@@ -444,7 +511,7 @@ BOOL Wh_ModInit() {
 
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
-         &TrayUI_SlideWindow_Original, nullptr, true},
+         &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
@@ -471,6 +538,15 @@ BOOL Wh_ModInit() {
             Wh_Log(L"required symbol %s unresolved, mod inactive", r.name);
             return FALSE;
         }
+    }
+
+    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Original;
+    g_durationOffsetsVerified =
+        memcmp(slide + kShowDurSigOffset, kShowDurSig, sizeof(kShowDurSig)) ==
+            0 &&
+        memcmp(slide + kHideDurSigOffset, kHideDurSig, sizeof(kHideDurSig)) == 0;
+    if (!g_durationOffsetsVerified) {
+        Wh_Log(L"slide duration offsets unverified, durations left alone");
     }
 
     const BYTE* sig = (const BYTE*)TrayUI_GetAutoHideFlags_Original + kSigOffset;
