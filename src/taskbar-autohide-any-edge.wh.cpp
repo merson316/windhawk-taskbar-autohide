@@ -693,6 +693,85 @@ void WINAPI TrayUI_AutoHideCollision_Hook(void* pThis) {
     DiagLog(L"_AutoHideCollision LEAVE");
 }
 
+// ------------------------------------------------------- XAML view layer
+
+// Moving the taskbar window is not enough: its pixels are drawn by the XAML
+// layer in Taskbar.View.dll, which keeps its own expanded/collapsed state. A
+// self-issued Unhide(2,1) moved the window to the docked rect and held it there
+// for two seconds with nothing visible, while a click reveals it reliably --
+// because activation drives the XAML expand and our flag changes do not.
+//
+// ViewCoordinator owns that state. ShouldTaskbarBeExpanded is the predicate
+// behind UpdateIsExpandedAfterHoverDelay, i.e. the hover reveal.
+
+using ViewCoordinator_ShouldTaskbarBeExpanded_t = bool(WINAPI*)(void* pThis,
+                                                                UINT64 id,
+                                                                bool arg);
+ViewCoordinator_ShouldTaskbarBeExpanded_t
+    ViewCoordinator_ShouldTaskbarBeExpanded_Original;
+bool WINAPI ViewCoordinator_ShouldTaskbarBeExpanded_Hook(void* pThis, UINT64 id,
+                                                         bool arg) {
+    bool ret = ViewCoordinator_ShouldTaskbarBeExpanded_Original(pThis, id, arg);
+
+    UINT edge = (UINT)g_currentEdge;
+    if (edge < ABE_BOTTOM && !ret && CursorAtDockedEdge(edge)) {
+        DiagLog(L"ShouldTaskbarBeExpanded: false with cursor at edge -> true");
+        return true;
+    }
+
+    return ret;
+}
+
+using ViewCoordinator_ExpandTaskbar_t = void(WINAPI*)(void* pThis, UINT64 id);
+ViewCoordinator_ExpandTaskbar_t ViewCoordinator_ExpandTaskbar_Original;
+void WINAPI ViewCoordinator_ExpandTaskbar_Hook(void* pThis, UINT64 id) {
+    DiagLog(L"ExpandTaskbar");
+    ViewCoordinator_ExpandTaskbar_Original(pThis, id);
+}
+
+using ViewCoordinator_CollapseTaskbar_t = void(WINAPI*)(void* pThis, UINT64 id);
+ViewCoordinator_CollapseTaskbar_t ViewCoordinator_CollapseTaskbar_Original;
+void WINAPI ViewCoordinator_CollapseTaskbar_Hook(void* pThis, UINT64 id) {
+    DiagLog(L"CollapseTaskbar");
+    ViewCoordinator_CollapseTaskbar_Original(pThis, id);
+}
+
+bool HookTaskbarViewSymbols() {
+    HMODULE view = GetModuleHandleW(L"Taskbar.View.dll");
+    if (!view) {
+        view = GetModuleHandleW(L"ExplorerExtensions.dll");
+    }
+    if (!view) {
+        DiagLog(L"Taskbar.View.dll not loaded, XAML hooks skipped");
+        return false;
+    }
+
+    WindhawkUtils::SYMBOL_HOOK hooks[] = {
+        {{LR"(public: bool __cdecl winrt::Taskbar::implementation::ViewCoordinator::ShouldTaskbarBeExpanded(unsigned __int64,bool))",
+          LR"(public: bool __cdecl winrt::Taskbar::implementation::ViewCoordinator::ShouldTaskbarBeExpanded(unsigned __int64,bool) )"},
+         &ViewCoordinator_ShouldTaskbarBeExpanded_Original,
+         ViewCoordinator_ShouldTaskbarBeExpanded_Hook, true},
+
+        {{LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::ExpandTaskbar(unsigned __int64))",
+          LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::ExpandTaskbar(unsigned __int64) )"},
+         &ViewCoordinator_ExpandTaskbar_Original,
+         ViewCoordinator_ExpandTaskbar_Hook, true},
+
+        {{LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::CollapseTaskbar(unsigned __int64))",
+          LR"(public: void __cdecl winrt::Taskbar::implementation::ViewCoordinator::CollapseTaskbar(unsigned __int64) )"},
+         &ViewCoordinator_CollapseTaskbar_Original,
+         ViewCoordinator_CollapseTaskbar_Hook, true},
+    };
+
+    bool ok = WindhawkUtils::HookSymbols(view, hooks, ARRAYSIZE(hooks));
+    DiagLog(L"XAML hooks: HookSymbols=%d ShouldTaskbarBeExpanded=%p "
+            L"Expand=%p Collapse=%p",
+            (int)ok, (void*)ViewCoordinator_ShouldTaskbarBeExpanded_Original,
+            (void*)ViewCoordinator_ExpandTaskbar_Original,
+            (void*)ViewCoordinator_CollapseTaskbar_Original);
+    return ok;
+}
+
 // ------------------------------------------------------------------ lifecycle
 
 HMODULE g_taskbarModule = nullptr;
@@ -828,6 +907,8 @@ BOOL Wh_ModInit() {
 
     DiagLog(L"seeded edge from work area: %u %s", (UINT)g_currentEdge,
             EdgeName((UINT)g_currentEdge));
+
+    HookTaskbarViewSymbols();
 
     DiagLog(L"hooks installed: %d/%d resolved", resolvedCount,
             (int)ARRAYSIZE(checks));
