@@ -845,6 +845,18 @@ void WatcherTick() {
         g_clipRect = RECT{};
         g_leaveTicks = 0;
         g_dwellStart = 0;
+
+        // The taskbar is visible after a move, so the state must say so. Left
+        // set, the hidden bit makes the watcher wait for a reveal that is
+        // already showing -- it never hides again, and says nothing, because
+        // that branch is the one path with no logging.
+        UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+        if (f & ABS_ALWAYSONTOP) {
+            DbgLog(L"edge change: clearing stale hidden bit 0x%X", f);
+            TrayUI_SetAutoHideFlags_Original(g_trayUI,
+                                             f & ~(UINT)ABS_ALWAYSONTOP);
+        }
+
         return;   // resume next tick with clean state
     }
 
