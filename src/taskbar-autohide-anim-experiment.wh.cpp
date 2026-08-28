@@ -100,6 +100,18 @@ or the other, not both, since they hook the same function.
 
     Raise it if the taskbar keeps reappearing during a single notification.
     Lower it if two genuinely separate notifications get merged into one.
+- halfHideProbe: false
+  $name: PROBE - park the taskbar half off-screen
+  $description: >-
+    Diagnostic. Instead of hiding, slides the taskbar until half of it is off
+    screen and leaves it there, without setting the hidden flag.
+
+    If you can see the half that remains, the taskbar renders fine at arbitrary
+    positions and the slide should be visible. If it vanishes entirely, the
+    content is not drawn once the window leaves its docked position, which is
+    the real reason the animation cannot be seen.
+
+    Move the pointer to the edge to bring it back.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -188,6 +200,7 @@ struct Settings {
     bool edgeRight = true;
     int revealTolerance = 8;
     int notificationHoldMs = 1500;
+    bool halfHideProbe = false;
     int notificationBurstGapMs = 5000;
     int hideDurationMs = 0;
     int showDurationMs = 0;
@@ -231,12 +244,15 @@ void LoadSettings() {
         g_settings.notificationHoldMs = 30000;
     }
 
+    g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
     g_settings.notificationBurstGapMs =
         Wh_GetIntSetting(L"notificationBurstGapMs");
     if (g_settings.notificationBurstGapMs < 0) {
-        g_settings.notificationBurstGapMs = 0;
+        g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
+    g_settings.notificationBurstGapMs = 0;
     } else if (g_settings.notificationBurstGapMs > 60000) {
-        g_settings.notificationBurstGapMs = 60000;
+        g_settings.halfHideProbe = Wh_GetIntSetting(L"halfHideProbe") != 0;
+    g_settings.notificationBurstGapMs = 60000;
     }
 
     g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
@@ -701,6 +717,32 @@ void WatcherTick() {
     // Unhide slides itself, but nothing performs the hide slide off-bottom, so
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
+    if (g_settings.halfHideProbe) {
+        // Park it half off-screen, flag untouched, and stop. Purely to see
+        // whether the taskbar still draws away from its docked position.
+        RECT half = docked;
+        const LONG w = docked.right - docked.left;
+        const LONG h = docked.bottom - docked.top;
+        switch (edge) {
+            case ABE_LEFT:  half.left = docked.left - w / 2;
+                            half.right = half.left + w; break;
+            case ABE_TOP:   half.top = docked.top - h / 2;
+                            half.bottom = half.top + h; break;
+            case ABE_RIGHT: half.left = docked.left + w / 2;
+                            half.right = half.left + w; break;
+            default: return;
+        }
+        ExpLog(L"PROBE: parking half off-screen at (%ld,%ld)-(%ld,%ld)",
+               half.left, half.top, half.right, half.bottom);
+        g_inWatcherCall = true;
+        TrayUI_SlideWindow_Original(
+            g_trayUI, g_trayWnd, &half,
+            MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY), false,
+            true);
+        g_inWatcherCall = false;
+        return;
+    }
+
     g_inWatcherCall = true;
     ExpLog(L"hide: setting flags 0x%X", stored | ABS_ALWAYSONTOP);
 
