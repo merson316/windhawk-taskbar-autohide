@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32
+// @compilerOptions -lcomctl32 -lshell32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -698,6 +698,17 @@ volatile LONG g_declinedEdge = -1;
 // Set when auto-hide was switched off in order to decline an edge, so it can be
 // switched back on when the taskbar moves somewhere it can hide.
 volatile LONG g_suppressedAutoHide = 0;
+
+// Poking the flags directly does not make the shell recompute the work area --
+// windows still sit under a taskbar that never hides. ABM_SETSTATE is the
+// documented way to set auto-hide, and is what toggling the setting drives, so
+// it produces the notifications the shell acts on.
+void SetTaskbarAutoHide(bool enable) {
+    APPBARDATA abd{};
+    abd.cbSize = sizeof(abd);
+    abd.lParam = enable ? (ABS_AUTOHIDE | ABS_ALWAYSONTOP) : ABS_ALWAYSONTOP;
+    SHAppBarMessage(ABM_SETSTATE, &abd);
+}
 RECT g_dockedBeforeHide{};
 
 void RunHideAnimation() {
@@ -815,6 +826,7 @@ void WatcherTick() {
                     TrayUI_SetAutoHideFlags_Original(
                         g_trayUI,
                         f & ~(UINT)(ABS_AUTOHIDE | ABS_ALWAYSONTOP));
+                    SetTaskbarAutoHide(false);
                 }
 
                 // The taskbar is permanently visible on this edge, so the work
@@ -849,6 +861,7 @@ void WatcherTick() {
                 DbgLog(L"restoring auto-hide after leaving a declined edge");
                 TrayUI_SetAutoHideFlags_Original(g_trayUI,
                                                  f | (UINT)ABS_AUTOHIDE);
+                SetTaskbarAutoHide(true);
             }
         }
     }
@@ -873,6 +886,7 @@ void WatcherTick() {
         g_trayUI && g_offsetsVerified) {
         UINT f = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
         TrayUI_SetAutoHideFlags_Original(g_trayUI, f | (UINT)ABS_AUTOHIDE);
+        SetTaskbarAutoHide(true);
     }
 
     if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
