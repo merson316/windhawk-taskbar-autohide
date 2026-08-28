@@ -355,3 +355,47 @@ auto-hide.
 
 The experimental mod is kept at `src/taskbar-autohide-anim-experiment.wh.cpp` as
 the record of this test.
+
+## Why the hide slide is invisible: position enforcement
+
+Measured with a probe that sets a position and immediately reads it back.
+
+| Hidden flag | Requested | Window ends at |
+|---|---|---|
+| clear | `(-24,0)-(24,1440)` | `(0,0)-(48,1440)` (docked) |
+| set | `(-24,0)-(24,1440)` | `(-46,0)-(2,1440)` (hidden) |
+
+Windows continuously enforces one of exactly two positions, chosen by the flag,
+and tolerates no intermediate. Any position the mod sets is corrected to the
+endpoint the flag implies.
+
+That is the whole explanation. `SlideWindow` genuinely steps through
+`-3, -7, -10 ...` over the full duration -- 13 SetWindowPos calls, ~31 ms apart,
+all confirmed -- but each intermediate position is snapped to the endpoint
+before it can be drawn, so the result reads as an instant jump. The duration
+setting cannot help, because the duration was never the problem.
+
+The bottom edge animates because Windows' own slide is not fighting Windows' own
+enforcement.
+
+Ruled out along the way, each by measurement rather than reasoning:
+
+- The animation being skipped: it runs for its full configured duration.
+- The `animate` flag, the duration members, `SPI_GETMENUANIMATION`, and the
+  `vtable+0x360` gate: all identical between edges.
+- `TaskbarHost::SetAutoHide` dropping the content: it is called about two
+  seconds after the slide, far outside it.
+- A window region or layered alpha hiding the content: `rgn=0`,
+  `layered=0`, `alpha=255`.
+- The ordering of the flag relative to the slide: both orderings fail, for
+  opposite reasons, and neither is the cause.
+
+### What would be required
+
+Suppressing the enforcement for the duration of the slide, so intermediate
+positions survive long enough to be composited. The enforcement has not been
+located; it is not a window region, and it corrects the position from outside
+the SlideWindow loop. Finding and gating it is the only remaining avenue, and it
+means interfering with the mechanism that keeps the taskbar where it belongs --
+which is a considerably riskier thing to get wrong than anything attempted so
+far.
