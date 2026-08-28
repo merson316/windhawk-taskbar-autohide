@@ -256,6 +256,7 @@ TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 
 // Defined further down, alongside the unhide handling.
 bool CursorAtDockedEdge(UINT edge);
+void LogTrayWindowRect(PCWSTR when);
 
 // Cursor transitions are detected in GetAutoHideFlags, which runs constantly,
 // but acted on in GetDockedRect, which is the only place with the right `this`
@@ -401,6 +402,20 @@ bool TrayMonitorRect(RECT* out) {
 bool g_lastCursorAtEdge = false;
 ULONGLONG g_lastNudgeAt = 0;
 
+// Everything so far has inferred the window's position from SlideWindow being
+// called. Measure it instead.
+void LogTrayWindowRect(PCWSTR when) {
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) {
+        DiagLog(L"trayrect[%s]: no window", when);
+        return;
+    }
+    RECT r{};
+    GetWindowRect(tray, &r);
+    DiagLog(L"trayrect[%s]: (%ld,%ld)-(%ld,%ld) visible=%d", when, r.left,
+            r.top, r.right, r.bottom, (int)IsWindowVisible(tray));
+}
+
 void NudgeTaskbarRelayout(bool cursorAtEdge) {
     if (cursorAtEdge == g_lastCursorAtEdge) {
         return;   // only on transition
@@ -419,6 +434,7 @@ void NudgeTaskbarRelayout(bool cursorAtEdge) {
     }
 
     DiagLog(L"nudge relayout: cursorAtEdge=%d", (int)cursorAtEdge);
+    LogTrayWindowRect(cursorAtEdge ? L"cursor-arrived" : L"cursor-left");
     PostMessageW(tray, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
 }
 
@@ -582,15 +598,19 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int param) {
 
             if (pending == kPendingReveal && (stored & 3) == 3) {
                 DiagLog(L"self-unhide: revealing, Unhide(2,1)");
+                LogTrayWindowRect(L"before-unhide");
                 g_inSelfUnhide = true;
                 TrayUI_Unhide_Original(pThis, 2, 1);
                 g_inSelfUnhide = false;
+                LogTrayWindowRect(L"after-unhide");
             } else if (pending == kPendingHide && (stored & 1) &&
                        !(stored & 2)) {
                 DiagLog(L"self-hide: storing 0x%X", stored | 2);
+                LogTrayWindowRect(L"before-hide");
                 g_inSelfUnhide = true;
                 TrayUI_SetAutoHideFlags_Original(pThis, stored | 2);
                 g_inSelfUnhide = false;
+                LogTrayWindowRect(L"after-hide");
             }
         }
     }
@@ -638,6 +658,7 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
             rect ? rect->left : 0, rect ? rect->top : 0,
             rect ? rect->right : 0, rect ? rect->bottom : 0);
     TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+    LogTrayWindowRect(show ? L"after-slide-show" : L"after-slide-hide");
     DiagLog(L"*** SlideWindow LEAVE show=%d", (int)show);
 }
 
