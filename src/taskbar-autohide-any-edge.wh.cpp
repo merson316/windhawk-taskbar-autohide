@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.5.0
+// @version         1.6.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -407,6 +407,12 @@ ULONGLONG g_dwellStart = 0;
 volatile LONG64 g_holdVisibleUntil = 0;
 volatile LONG64 g_lastNotifyUnhide = 0;
 
+// What kind of unhide opened the current burst. A flashing button repeats one
+// cause; anything else arriving mid-burst is a separate event and must not be
+// swallowed as a repeat -- pressing the Windows key twice in quick succession
+// dropped the second press entirely.
+volatile LONG g_burstRequest = -1;
+
 // A flashing taskbar button produces one unhide per flash. Unhides closer
 // together than notificationBurstGapMs belong to the same burst and are treated
 // as one notification, so the taskbar shows once, hides after the hold, and
@@ -564,17 +570,22 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         LONG64 now = (LONG64)GetTickCount64();
         LONG64 last = InterlockedExchange64(&g_lastNotifyUnhide, now);
 
-        if (now - last > g_settings.notificationBurstGapMs) {
-            // A new notification: show it for the configured hold.
+        if (now - last > g_settings.notificationBurstGapMs ||
+            InterlockedCompareExchange(&g_burstRequest, request, request) !=
+                request) {
+            // A new notification, or a different cause arriving mid-burst:
+            // show it for the configured hold.
+            InterlockedExchange(&g_burstRequest, request);
             InterlockedExchange64(&g_holdVisibleUntil,
                                   now + g_settings.notificationHoldMs);
         } else if (now >= InterlockedCompareExchange64(&g_holdVisibleUntil, 0,
                                                        0) &&
-                   edge <= ABE_BOTTOM && !CursorAtRevealStrip(edge)) {
-            // Same burst, already shown for its hold, and the pointer is not at
-            // the edge: keep it hidden rather than flashing it back up. Applies
-            // on every edge including the bottom, where Windows drives the
-            // hiding itself.
+                   edge <= ABE_BOTTOM && !CursorAtRevealStrip(edge) &&
+                   GetForegroundWindow() != g_trayWnd) {
+            // The same cause repeating, already shown for its hold, pointer
+            // away from the edge and nothing of the taskbar's in front: keep it
+            // hidden rather than flashing it back up. Applies on every edge
+            // including the bottom, where Windows drives the hiding itself.
             return;
         }
     }
@@ -825,9 +836,25 @@ void WatcherTick() {
         // Hidden. Reveal once the pointer reaches the trigger strip; Unhide
         // performs the slide itself.
         if (!CursorAtRevealStrip(edge) && !CursorOverTaskbar(g_trayUI)) {
+            g_dwellStart = 0;
             g_leaveTicks = 0;
             return;
         }
+
+        // Let the pointer settle first. At an 8 px tolerance every trip to the
+        // edge for a title bar or a close button would otherwise summon the
+        // taskbar. A pointer already over the taskbar has arrived deliberately
+        // and waits for nothing.
+        if (g_settings.revealDwellMs > 0 && !CursorOverTaskbar(g_trayUI)) {
+            const ULONGLONG now = GetTickCount64();
+            if (g_dwellStart == 0) {
+                g_dwellStart = now;
+            }
+            if (now - g_dwellStart < (ULONGLONG)g_settings.revealDwellMs) {
+                return;
+            }
+        }
+        g_dwellStart = 0;
 
         ApplyDurationOverrides(g_trayUI);
         InterlockedExchange(&g_clipHold, 0);
@@ -881,6 +908,8 @@ void WatcherTick() {
     // Unhide slides itself, but nothing performs the hide slide off-bottom, so
     // set the state and then issue the slide. With the flags now set,
     // GetDockedRect returns the hidden rect.
+    g_dwellStart = 0;
+
     g_inWatcherCall = true;
     TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
 
