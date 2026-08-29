@@ -148,8 +148,10 @@ reason instead of failing silently. The taskbar is left alone in that state.
   $description: >-
     How long the pointer must stay in the trigger strip before the taskbar
     appears. Raise it if the taskbar appears when you were only moving to the
-    next screen; 0 reveals instantly. A pointer already over the taskbar never
-    waits.
+    next screen. A pointer already over the taskbar never waits.
+
+    Set to 0 to turn the dwell off, revealing as soon as the pointer reaches
+    the strip.
 
     Default: 120.
 - revealTolerance: 8

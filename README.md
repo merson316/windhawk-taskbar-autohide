@@ -64,7 +64,7 @@ Compile → Enable.
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
 | Notifications - treat as one within | 5000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
-| Reveal dwell | 120 ms | How long the pointer must rest in the trigger strip before the taskbar appears. 0 reveals instantly. A pointer already over the taskbar never waits. |
+| Reveal dwell | 120 ms | How long the pointer must rest in the trigger strip before the taskbar appears. **0 turns the dwell off.** A pointer already over the taskbar never waits. |
 | Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
 
 ### Notification handling
