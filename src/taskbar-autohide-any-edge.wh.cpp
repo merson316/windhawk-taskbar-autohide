@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.10.3
+// @version         1.10.4
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -718,6 +718,9 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
     return TrayUI_GetDockedRect_Original(pThis, rect, arg);
 }
 
+// Defined with the animation state below; the unhide hook has to release it.
+extern volatile LONG g_clipHold;
+
 // Request 9 is Windows' "auto-hide state changed, ensure shown" reflex. It
 // fires as soon as the hidden state is set and would undo the hide, so drop it
 // unless the pointer is actually at the edge.
@@ -778,6 +781,14 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     }
 
     Diag(L"  PASSED to Windows");
+
+    // Any unhide that reaches Windows means the taskbar is to become visible.
+    // Release the off-screen pin first: it is cleared on the mod's own reveal
+    // path, but Windows reveals the taskbar too -- for Start, for a
+    // notification -- and the clamp would otherwise drag it straight back out
+    // of sight, so it could never return.
+    InterlockedExchange(&g_clipHold, 0);
+
     bool prev = g_inUnhide;
     g_inUnhide = true;
     TrayUI_Unhide_Original(pThis, flags, request);
