@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-probe
 // @name            Taskbar auto-hide probe (diagnostic)
 // @description     Reports what the shipping mod sees when it validates taskbar.dll
-// @version         1.3.0
+// @version         1.4.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -306,6 +306,36 @@ using TrayUI_SlideWindow_t = void(WINAPI*)(void*, HWND, const RECT*, HMONITOR,
                                            bool, bool);
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Address;
 
+using TrayUI_SetUnhideTimer_t = void(WINAPI*)(void*, LONG, LONG);
+TrayUI_SetUnhideTimer_t TrayUI_SetUnhideTimer_Address;
+
+// SetUnhideTimer takes a cursor point, so the delay Windows waits before
+// revealing is inside it -- the interval handed to SetTimer, which on x64 is
+// the third argument in r8d. Report every immediate loaded into r8d so the
+// value can be read off without a debugger.
+void ReportTimerIntervals(const BYTE* fn, size_t len) {
+    bool any = false;
+    for (size_t i = 0; i + 6 <= len; i++) {
+        // 41 B8 imm32 = mov r8d, imm32
+        if (fn[i] == 0x41 && fn[i + 1] == 0xB8) {
+            UINT imm = *(const UINT*)(fn + i + 2);
+            Report(L"  +%02X  mov r8d, %u", (UINT)i, imm);
+            any = true;
+        }
+        // B8 imm32 = mov eax, imm32, in case the interval is staged
+        if (fn[i] == 0xB8 && i > 0 && fn[i - 1] != 0x41) {
+            UINT imm = *(const UINT*)(fn + i + 1);
+            if (imm > 0 && imm <= 5000) {
+                Report(L"  +%02X  mov eax, %u", (UINT)i, imm);
+                any = true;
+            }
+        }
+    }
+    if (!any) {
+        Report(L"  no immediate candidates found");
+    }
+}
+
 BOOL Wh_ModInit() {
     WCHAR path[MAX_PATH];
     if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0,
@@ -366,6 +396,10 @@ BOOL Wh_ModInit() {
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
          &TrayUI_SlideWindow_Address, nullptr, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long))",
+          LR"(public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long) )"},
+         &TrayUI_SetUnhideTimer_Address, nullptr, true},
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
@@ -403,6 +437,19 @@ BOOL Wh_ModInit() {
     ReportDiskComparison(taskbar,
                          (DWORD)((const BYTE*)fn - (const BYTE*)taskbar), fn,
                          0x80);
+
+    Report(L"");
+    if (TrayUI_SetUnhideTimer_Address) {
+        const BYTE* t = (const BYTE*)TrayUI_SetUnhideTimer_Address;
+        Report(L"SetUnhideTimer   %p  rva 0x%X", (void*)t,
+               (UINT)(t - (const BYTE*)taskbar));
+        Report(L"reveal delay candidates:");
+        ReportTimerIntervals(t, 0x120);
+        Report(L"");
+        ReportBytes(L"SetUnhideTimer", t, 0x120);
+    } else {
+        Report(L"SetUnhideTimer did not resolve");
+    }
 
     Report(L"");
     ReportTaskbarState();
