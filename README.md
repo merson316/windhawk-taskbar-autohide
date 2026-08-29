@@ -142,8 +142,8 @@ behaviourally identical and keeps that thread alive.
 The dialog is raised through `WTSSendMessageW`, so the session owns it and
 nothing in the mod waits on the user. `MessageBoxW` parks its calling thread
 inside mod code until the button is clicked, and Windhawk holds the unload until
-every mod thread has exited -- so following the warning's own advice and
-disabling the mod hung the uninitialize until the dialog was dismissed by hand.
+every mod thread has exited: disabling the mod, which is what the warning asks
+for, would hang the uninitialize.
 
 Only the process that owns `Shell_TrayWnd` ever warns. Windhawk injects into
 every `explorer.exe`, including the separate processes folder windows can use,

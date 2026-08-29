@@ -149,17 +149,16 @@ UINT g_watchMsg = 0;
 HANDLE g_watchThread = nullptr;
 volatile LONG g_watchStop = 0;
 
-// How long the shell gets to finish coming up before a warning is allowed on
-// screen, and how long the taskbar window gets to appear before its absence is
-// treated as a failure rather than as boot still being in progress.
+// The shell gets the first to finish coming up before any warning is allowed on
+// screen, and the second for the taskbar window to appear before its absence
+// counts as a failure rather than as boot still being in progress.
 #define WARN_SETTLE_MS 5000
 #define WARN_NO_TASKBAR_MS 30000
 
 // Set when the mod cannot do its job. Kept rather than returning FALSE from
-// Wh_ModInit: Windhawk unloads a mod whose init failed, which would pull the
-// DLL out from under the thread that raises the warning. Staying loaded but
-// inert is behaviourally identical -- every action below is already gated on
-// the checks that set this -- and it keeps the watch thread alive to warn.
+// Wh_ModInit: Windhawk unloads a mod whose init failed, taking the DLL out from
+// under the thread that raises the warning. Every hook below stands down on
+// this, so staying loaded is inert.
 PCWSTR g_fatalReason = nullptr;
 volatile LONG g_warned = 0;
 
@@ -880,11 +879,9 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
 }
 
 // Shell_TrayWnd does not exist yet when the mod loads at boot: Windhawk injects
-// as explorer.exe starts, well before the shell creates the taskbar. Acquiring
-// the window once in Wh_ModInit therefore left the mod inert after every
-// restart -- the hooks were live, but with nothing subclassed and no tick
-// target, neither hide nor reveal ever ran. Keep trying from the watch thread,
-// which is also a thread other than the taskbar's, as
+// as explorer.exe starts, before the shell creates the taskbar. Looking it up
+// once leaves the hooks live but nothing subclassed, so nothing drives the hide.
+// Retry from the watch thread, which is off the taskbar's thread as
 // SetWindowSubclassFromAnyThread requires.
 void EnsureTrayWindow() {
     if (g_trayWnd && g_subclassed && IsWindow(g_trayWnd)) {
@@ -911,16 +908,9 @@ void EnsureTrayWindow() {
                        g_trayWnd, TrayWatchProc, 0) != FALSE;
 }
 
-// Every failure below leaves the taskbar behaving exactly as it does with no
-// mod installed, which is indistinguishable from the mod working on a machine
-// where nothing hides. Say so out loud instead. A message box rather than a
-// toast: toasts need WinRT and an AppUserModelID, and Windows routes balloon
-// tips through the notification centre, where Do Not Disturb can swallow them
-// silently -- the one outcome this exists to prevent.
 // Windhawk injects into every explorer.exe, and folder windows can run as
 // their own process. FindWindowW searches system-wide, so such a process finds
-// the real taskbar, cannot subclass it across the process boundary, and would
-// warn about a job that was never its own. Decide by ownership.
+// a taskbar it cannot subclass and has no business managing.
 bool ThisProcessOwnsTaskbar() {
     HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
     if (!tray) {
@@ -932,6 +922,8 @@ bool ThisProcessOwnsTaskbar() {
     return pid == GetCurrentProcessId();
 }
 
+// A failed mod leaves the taskbar behaving as it does with no mod installed,
+// which looks exactly like a machine where nothing happens to hide.
 void WarnOnce(PCWSTR reason) {
     if (InterlockedExchange(&g_warned, 1) != 0) {
         return;
@@ -945,11 +937,11 @@ void WarnOnce(PCWSTR reason) {
               L"Disable or remove the mod in Windhawk to stop this warning.",
               reason);
 
-    // The session takes ownership of the dialog, so nothing here waits on the
-    // user. MessageBoxW would park this thread inside mod code until the button
-    // was clicked, and Windhawk holds the unload until every mod thread has
-    // exited -- so the response the warning asks for, disabling the mod, hung
-    // the uninitialize instead. Lengths are bytes, not characters.
+    // The session owns the dialog, so nothing here waits on the user.
+    // MessageBoxW would park this thread inside mod code until the button was
+    // clicked, and Windhawk holds the unload until every mod thread has exited:
+    // disabling the mod, which is what the warning asks for, would hang it.
+    // Lengths are bytes.
     DWORD response = 0;
     WTSSendMessageW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, title,
                     (DWORD)(lstrlenW(title) * sizeof(WCHAR)), text,
@@ -985,7 +977,10 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
         if (g_trayWnd && g_watchMsg) {
             PostMessageW(g_trayWnd, g_watchMsg, 0, 0);
         }
-        Sleep(WATCH_TICK_MS);
+
+        // A stood-down mod stays loaded for the life of the shell with nothing
+        // to do but warn once. Do not wake 25 times a second to do it.
+        Sleep(g_fatalReason ? 1000 : WATCH_TICK_MS);
     }
     return 0;
 }
@@ -1009,7 +1004,7 @@ void Wh_ModSettingsChanged() {
 }
 
 // Returns nullptr when the mod is ready, or a reason fit to put in front of a
-// user. Every path out of here used to be a silent FALSE from Wh_ModInit.
+// user.
 PCWSTR SetUpHooks() {
     if (!IsSupportedBuild()) {
         static WCHAR reason[192];
@@ -1125,8 +1120,7 @@ BOOL Wh_ModInit() {
         EnsureTrayWindow();
     }
 
-    // Started even when the mod has stood down: it is what puts the warning on
-    // screen, and it is why the failures above no longer return FALSE.
+    // Started even when the mod has stood down: it raises the warning.
     g_watchMsg = RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeTick");
     if (!g_watchMsg) {
         Wh_Log(L"could not register the tick message");
