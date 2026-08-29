@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.10.2
+// @version         1.10.3
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -178,7 +178,9 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
+#include <shlobj.h>
 #include <wtsapi32.h>
+#include <stdarg.h>
 #include <string>
 
 #include <utility>
@@ -488,6 +490,42 @@ bool ForegroundIsShellHost(DWORD pid) {
     return match;
 }
 
+// TEMPORARY -- diagnosing why a Windows key press does not reveal the taskbar.
+void Diag(PCWSTR format, ...) {
+    WCHAR path[MAX_PATH];
+    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0,
+                                path))) {
+        return;
+    }
+    lstrcatW(path, L"\\windhawk-autohide-unhide.log");
+
+    HANDLE f = CreateFileW(path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE |
+                               FILE_SHARE_DELETE,
+                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    WCHAR line[1024];
+    va_list args;
+    va_start(args, format);
+    wvsprintfW(line, format, args);
+    va_end(args);
+    lstrcatW(line, L"\r\n");
+
+    char utf8[2048];
+    int len = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
+                                  nullptr, nullptr);
+    if (len > 1) {
+        DWORD written = 0;
+        SetFilePointer(f, 0, nullptr, FILE_END);
+        WriteFile(f, utf8, len - 1, &written, nullptr);
+    }
+    CloseHandle(f);
+}
+
 // Whether the user is interacting with the shell at all. Used to decide that a
 // repeat unhide is the user asking rather than a notification repeating, so it
 // is deliberately broad: the taskbar itself counts, and so does the desktop.
@@ -693,8 +731,22 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
 
     UINT edge = CurrentStuckPlace(pThis);
 
+    {
+        HWND fg = GetForegroundWindow();
+        WCHAR cls[64] = L"";
+        GetClassNameW(fg, cls, ARRAYSIZE(cls));
+        DWORD fgPid = 0;
+        GetWindowThreadProcessId(fg, &fgPid);
+        Diag(L"Unhide(flags=%d request=%d) edge=%u inWatcher=%d atStrip=%d "
+             L"shellFocus=%d fg=%p pid=%lu cls=%s",
+             flags, request, edge, (int)g_inWatcherCall,
+             (int)CursorAtRevealStrip(edge), (int)ShellHasFocus(), (void*)fg,
+             fgPid, cls);
+    }
+
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
         EdgeEnabled(edge) && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
+        Diag(L"  DROPPED: request 9 state-change reflex");
         return;
     }
 
@@ -707,6 +759,8 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
                 request) {
             // A new notification, or a different cause arriving mid-burst:
             // show it for the configured hold.
+            Diag(L"  new burst (gap %lld ms, burstRequest was %ld)", now - last,
+                 InterlockedCompareExchange(&g_burstRequest, request, request));
             InterlockedExchange(&g_burstRequest, request);
             InterlockedExchange64(&g_holdVisibleUntil,
                                   now + g_settings.notificationHoldMs);
@@ -718,10 +772,12 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
             // away from the edge and nothing of the taskbar's in front: keep it
             // hidden rather than flashing it back up. Applies on every edge
             // including the bottom, where Windows drives the hiding itself.
+            Diag(L"  DROPPED: same burst, hold elapsed");
             return;
         }
     }
 
+    Diag(L"  PASSED to Windows");
     bool prev = g_inUnhide;
     g_inUnhide = true;
     TrayUI_Unhide_Original(pThis, flags, request);
