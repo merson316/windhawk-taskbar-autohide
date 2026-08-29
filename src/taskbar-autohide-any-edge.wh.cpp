@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.6.0
+// @version         1.7.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -178,12 +178,13 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
 // Member offsets within TrayUI, relative to the base used by SetAutoHideFlags,
 // GetDockedRect, Unhide and SlideWindow. GetAutoHideFlags is reached on a base
-// 8 bytes lower, so it sees these at 0x118 and 0x44. Both are validated at load
-// against a byte signature inside GetAutoHideFlags.
-#define TRAYUI_EDGE_OFFSET  0x110
-#define TRAYUI_FLAGS_OFFSET 0x3c
-#define GETFLAGS_EDGE_OFFSET  0x118
-#define GETFLAGS_FLAGS_OFFSET 0x44
+// 8 bytes lower and so sees the same members 8 higher. All four are read out of
+// GetAutoHideFlags at load by ScanForOffsets; nothing may use them unless
+// g_offsetsVerified.
+UINT g_trayUiEdgeOffset = 0;
+UINT g_trayUiFlagsOffset = 0;
+UINT g_getFlagsEdgeOffset = 0;
+UINT g_getFlagsFlagsOffset = 0;
 
 // WM_TIMER is only delivered when the thread's queue is empty, so hovering the
 // taskbar -- which produces a stream of mouse messages -- starves it exactly
@@ -582,7 +583,7 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
         return ret;
     }
 
-    UINT edge = *(UINT*)((BYTE*)pThis + GETFLAGS_EDGE_OFFSET);
+    UINT edge = *(UINT*)((BYTE*)pThis + g_getFlagsEdgeOffset);
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return ret;
     }
@@ -594,7 +595,7 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
         g_trayUI = (BYTE*)pThis + 8;
     }
 
-    return *(UINT*)((BYTE*)pThis + GETFLAGS_FLAGS_OFFSET);
+    return *(UINT*)((BYTE*)pThis + g_getFlagsFlagsOffset);
 }
 
 // GetDockedRect returns the hidden rect only when both ABS_AUTOHIDE and
@@ -881,8 +882,8 @@ void WatcherTick() {
         return;
     }
 
-    UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
-    UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+    UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+    UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
 
     // Three of the four outcomes below are the mod working correctly while
     // appearing to do nothing, which is otherwise indistinguishable from a
@@ -1168,17 +1169,57 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
 
 // ------------------------------------------------------------------ lifecycle
 
-// The two member offsets are read out of GetAutoHideFlags, so confirm the
-// function still matches the form they were taken from before trusting them.
-// The sequence encodes both.
-const size_t kSigOffset = 0x19;
-const BYTE kSig[] = {
-    0x83, 0xBB, 0x18, 0x01, 0x00, 0x00, 0x03,  // cmpl $0x3,0x118(%rbx)
-    0x74, 0x04,                                // je   .return_real
-    0x33, 0xC0,                                // xor  %eax,%eax
-    0xEB, 0x03,                                // jmp
-    0x8B, 0x43, 0x44,                          // mov  0x44(%rbx),%eax
-};
+// GetAutoHideFlags encodes both member offsets, so read them out of it rather
+// than hardcoding them, and find the instructions by shape rather than at a
+// fixed offset. A recompiled prologue moves the sequence and a changed struct
+// moves the members; neither is a different Windows, and both used to stand the
+// mod down.
+//
+//   83 BB ?? ?? ?? ?? 03   cmp dword [rbx+edge], 3
+//   74 04                  je   .return_real
+//   33 C0                  xor  eax, eax
+//   EB 03                  jmp  .done
+//   8B 43 ??               mov  eax, [rbx+flags]
+bool ScanForOffsets(const BYTE* fn) {
+    // Bound the search at the int3 padding that follows the function. Scanning
+    // into the next one risks a false match that would be silently wrong.
+    size_t len = 0x100;
+    for (size_t i = 0; i + 4 <= 0x100; i++) {
+        if (fn[i] == 0xCC && fn[i + 1] == 0xCC && fn[i + 2] == 0xCC &&
+            fn[i + 3] == 0xCC) {
+            len = i;
+            break;
+        }
+    }
+
+    UINT edge = 0, flags = 0;
+    int matches = 0;
+
+    for (size_t i = 0; i + 16 <= len; i++) {
+        const BYTE* p = fn + i;
+        if (p[0] != 0x83 || p[1] != 0xBB || p[6] != 0x03 || p[7] != 0x74 ||
+            p[8] != 0x04 || p[9] != 0x33 || p[10] != 0xC0 || p[11] != 0xEB ||
+            p[12] != 0x03 || p[13] != 0x8B || p[14] != 0x43) {
+            continue;
+        }
+        edge = *(const UINT*)(p + 2);
+        flags = p[15];
+        matches++;
+    }
+
+    // Exactly one unambiguous match, and offsets that are plausible on both
+    // bases -- the watcher reads the same members from a base 8 bytes lower, so
+    // anything below 8 would underflow.
+    if (matches != 1 || edge < 8 || edge > 0x1000 || flags < 8) {
+        return false;
+    }
+
+    g_getFlagsEdgeOffset = edge;
+    g_getFlagsFlagsOffset = flags;
+    g_trayUiEdgeOffset = edge - 8;
+    g_trayUiFlagsOffset = flags - 8;
+    return true;
+}
 
 void Wh_ModSettingsChanged() {
     LoadSettings();
@@ -1225,9 +1266,13 @@ PCWSTR SetUpHooks() {
                L"mod.";
     }
 
-    const BYTE* sig = (const BYTE*)TrayUI_GetAutoHideFlags_Address + kSigOffset;
-    g_offsetsVerified = memcmp(sig, kSig, sizeof(kSig)) == 0;
-    if (!g_offsetsVerified) {
+    g_offsetsVerified =
+        ScanForOffsets((const BYTE*)TrayUI_GetAutoHideFlags_Address);
+    if (g_offsetsVerified) {
+        Wh_Log(L"member offsets read from GetAutoHideFlags: edge 0x%X, "
+               L"flags 0x%X",
+               g_getFlagsEdgeOffset, g_getFlagsFlagsOffset);
+    } else {
         return L"This build of taskbar.dll does not match what the mod was "
                L"built against, so it cannot safely read the taskbar's state. "
                L"A Windows update most likely changed it, and the mod needs "
@@ -1351,12 +1396,12 @@ void RestoreTaskbarIfHidden() {
         return;
     }
 
-    UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
+    UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
     if (edge >= ABE_BOTTOM) {
         return;
     }
 
-    UINT* flags = (UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+    UINT* flags = (UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
     if (!(*flags & ABS_AUTOHIDE) || !(*flags & ABS_ALWAYSONTOP)) {
         return;   // not hidden
     }

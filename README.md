@@ -129,10 +129,11 @@ docked right, Windows auto-hide on -- a display sits beyond this edge, so it is 
   configurable.
 - **Primary taskbar only.** Secondary taskbars use a separate `CSecondaryTray`
   class and are not handled.
-- **Tied to `Taskbar.dll` internals.** The two member offsets are validated
-  against a byte signature inside `GetAutoHideFlags`; if a Windows update
-  changes that function, the mod goes inert rather than misbehaving, and warns
-  that it has.
+- **Tied to `Taskbar.dll` internals.** The two member offsets are read out of
+  `GetAutoHideFlags` at load, by finding the instruction sequence that encodes
+  them rather than requiring it at a fixed offset. A recompiled prologue or a
+  moved struct member is therefore survivable; a rewritten function is not, and
+  the mod goes inert and warns rather than trusting offsets it cannot confirm.
 - **An edge with another display beyond it cannot hide.** The hidden position
   is real screen space on the neighbouring monitor, so the taskbar would slide
   into view there instead of out of sight. Detected automatically and skipped:
