@@ -2,11 +2,12 @@
 // @id              taskbar-autohide-probe
 // @name            Taskbar auto-hide probe (diagnostic)
 // @description     Reports what the shipping mod sees when it validates taskbar.dll
-// @version         1.0.0
+// @version         1.1.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
+// @compilerOptions -lshlwapi
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -28,6 +29,8 @@ module addresses and machine code from a system DLL.
 #include <windhawk_utils.h>
 
 #include <shlobj.h>
+#include <tlhelp32.h>
+#include <shlwapi.h>
 
 // The shipping mod's expectations, reproduced so the report says whether they
 // hold rather than only what the bytes are.
@@ -105,6 +108,68 @@ void ScanForShape(const BYTE* fn, size_t len) {
         return;
     }
     Report(L"shape NOT found in the first %u bytes", (UINT)len);
+}
+
+// Which other Windhawk mods are live in this explorer.exe. A mod that hooked
+// the same function first is the leading explanation for identical bytes on
+// disk producing a failed check in memory.
+void ReportLoadedMods() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
+    if (snap == INVALID_HANDLE_VALUE) {
+        Report(L"could not enumerate loaded modules");
+        return;
+    }
+
+    MODULEENTRY32W me{};
+    me.dwSize = sizeof(me);
+    if (Module32FirstW(snap, &me)) {
+        do {
+            if (StrStrIW(me.szExePath, L"\\Windhawk\\")) {
+                Report(L"  %s", me.szModule);
+            }
+        } while (Module32NextW(snap, &me));
+    }
+    CloseHandle(snap);
+}
+
+// The bytes as loaded, against the bytes on disk. Any difference means
+// something patched the function in memory before we looked at it, which is
+// the one explanation consistent with a matching file hash.
+void ReportDiskComparison(HMODULE loaded, DWORD rva, const BYTE* live,
+                          size_t count) {
+    HMODULE data = LoadLibraryExW(L"taskbar.dll", nullptr,
+                                  LOAD_LIBRARY_AS_DATAFILE);
+    if (!data) {
+        Report(L"could not map taskbar.dll as data");
+        return;
+    }
+
+    // LOAD_LIBRARY_AS_DATAFILE returns the base with its low bits flagged.
+    const BYTE* base = (const BYTE*)((ULONG_PTR)data & ~(ULONG_PTR)3);
+    auto* dos = (const IMAGE_DOS_HEADER*)base;
+    auto* nt = (const IMAGE_NT_HEADERS64*)(base + dos->e_lfanew);
+    auto* sec = IMAGE_FIRST_SECTION(nt);
+
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (rva < sec->VirtualAddress ||
+            rva >= sec->VirtualAddress + sec->Misc.VirtualSize) {
+            continue;
+        }
+
+        const BYTE* onDisk =
+            base + sec->PointerToRawData + (rva - sec->VirtualAddress);
+        if (memcmp(onDisk, live, count) == 0) {
+            Report(L"memory matches disk: nothing has patched this function");
+        } else {
+            Report(L"MEMORY DIFFERS FROM DISK -- the function is patched");
+            ReportBytes(L"on disk", onDisk, count);
+        }
+        FreeLibrary(data);
+        return;
+    }
+
+    Report(L"rva 0x%X not found in any section", rva);
+    FreeLibrary(data);
 }
 
 using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void*);
@@ -206,6 +271,15 @@ BOOL Wh_ModInit() {
            memcmp(fn + EXPECT_SIG_OFFSET, kSig, sizeof(kSig)) == 0 ? L"YES"
                                                                    : L"NO");
     ScanForShape(fn, 0x80);
+
+    Report(L"");
+    ReportDiskComparison(taskbar,
+                         (DWORD)((const BYTE*)fn - (const BYTE*)taskbar), fn,
+                         0x80);
+
+    Report(L"");
+    Report(L"windhawk modules loaded in this process:");
+    ReportLoadedMods();
 
     Report(L"");
     ReportBytes(L"GetAutoHideFlags", fn, 0x80);
