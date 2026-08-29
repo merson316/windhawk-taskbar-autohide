@@ -1172,8 +1172,7 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
 // GetAutoHideFlags encodes both member offsets, so read them out of it rather
 // than hardcoding them, and find the instructions by shape rather than at a
 // fixed offset. A recompiled prologue moves the sequence and a changed struct
-// moves the members; neither is a different Windows, and both used to stand the
-// mod down.
+// moves the members; neither is a different Windows.
 //
 //   83 BB ?? ?? ?? ?? 03   cmp dword [rbx+edge], 3
 //   74 04                  je   .return_real
