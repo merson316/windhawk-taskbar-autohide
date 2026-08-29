@@ -428,10 +428,9 @@ volatile LONG64 g_holdVisibleUntil = 0;
 volatile LONG64 g_lastNotifyUnhide = 0;
 
 // Windows 11 hosts Start, Search and the shell flyouts in their own processes,
-// so the taskbar is not the foreground window while any of them is open.
-// Testing for the taskbar itself, as this did, held it up only for as long as
-// the notification hold happened to last -- which is why a second Start press
-// inside the burst gap let the watcher hide it 80 ms later.
+// so the taskbar is not the foreground window while any of them is open, and
+// testing for the taskbar itself holds it up only for as long as the
+// notification hold happens to last.
 bool ShellSurfaceInForeground() {
     HWND fg = GetForegroundWindow();
     if (!fg) {
@@ -488,8 +487,7 @@ bool ShellSurfaceInForeground() {
 
 // What kind of unhide opened the current burst. A flashing button repeats one
 // cause; anything else arriving mid-burst is a separate event and must not be
-// swallowed as a repeat -- pressing the Windows key twice in quick succession
-// dropped the second press entirely.
+// swallowed as a repeat.
 volatile LONG g_burstRequest = -1;
 
 // A flashing taskbar button produces one unhide per flash. Unhides closer
