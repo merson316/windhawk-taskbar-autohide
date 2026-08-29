@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.4
+// @version         1.11.5
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -613,15 +613,13 @@ bool ShellSurfaceInForeground() {
         return false;
     }
 
+    // Deliberately no test for this process. A dismissed flyout keeps the
+    // foreground and still reports itself visible, so holding the taskbar up
+    // for one latched until something else was clicked. The taskbar's own
+    // flyouts are covered by PointerOverShellSurface, which cannot latch
+    // because the pointer moves away on its own.
     if (pid == GetCurrentProcessId()) {
-        // The taskbar's flyouts are tool windows -- that is why they have no
-        // taskbar button of their own. Measured: the tray overflow
-        // (TopLevelWindowForOverflowXamlIsland) and the thumbnail peek
-        // (XamlExplorerHostIslandWindow) set WS_EX_TOOLWINDOW; File Explorer
-        // (CabinetWClass) and the desktop do not, and all of them run in this
-        // process. None of them has an owner, so ownership cannot be used.
-        return (GetWindowLongPtrW(fg, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0 &&
-               IsWindowVisible(fg) != FALSE;
+        return false;
     }
 
     return ForegroundIsShellHost(pid);
@@ -1291,6 +1289,11 @@ void WatcherTick() {
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {
+        if (g_leaveTicks != 0) {
+            Diag(L"HELD: onTaskbar=%d onFlyout=%d surfaceOpen=%d",
+                 (int)PtInRect(&docked, pt), (int)PointerOverShellSurface(),
+                 (int)ShellSurfaceInForeground());
+        }
         g_leaveTicks = 0;
         return;
     }
