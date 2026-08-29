@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.0
+// @version         1.11.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -528,13 +528,14 @@ bool ShellSurfaceInForeground() {
     }
 
     if (pid == GetCurrentProcessId()) {
-        WCHAR cls[64] = L"";
-        if (GetClassNameW(fg, cls, ARRAYSIZE(cls)) &&
-            (lstrcmpiW(cls, L"Progman") == 0 ||
-             lstrcmpiW(cls, L"WorkerW") == 0)) {
-            return false;   // the desktop, not a flyout
-        }
-        return IsWindowVisible(fg) != FALSE;
+        // The taskbar's flyouts are tool windows -- that is why they have no
+        // taskbar button of their own. Measured: the tray overflow
+        // (TopLevelWindowForOverflowXamlIsland) and the thumbnail peek
+        // (XamlExplorerHostIslandWindow) set WS_EX_TOOLWINDOW; File Explorer
+        // (CabinetWClass) and the desktop do not, and all of them run in this
+        // process. None of them has an owner, so ownership cannot be used.
+        return (GetWindowLongPtrW(fg, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0 &&
+               IsWindowVisible(fg) != FALSE;
     }
 
     return ForegroundIsShellHost(pid);
