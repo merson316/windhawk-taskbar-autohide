@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.7
+// @version         1.12.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -178,9 +178,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
-#include <shlobj.h>
 #include <wtsapi32.h>
-#include <stdarg.h>
 #include <string>
 
 #include <utility>
@@ -450,60 +448,6 @@ ULONGLONG g_dwellStart = 0;
 // unhide the mod did not issue.
 volatile LONG64 g_holdVisibleUntil = 0;
 volatile LONG64 g_lastNotifyUnhide = 0;
-
-// TEMPORARY -- diagnosing why the taskbar hides during a thumbnail peek and
-// why the Windows key stopped working again.
-void Diag(PCWSTR format, ...) {
-    WCHAR path[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0,
-                                path))) {
-        return;
-    }
-    lstrcatW(path, L"\\windhawk-autohide-decide.log");
-
-    HANDLE f = CreateFileW(path, FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE |
-                               FILE_SHARE_DELETE,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    if (f == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    WCHAR line[1024];
-    // Milliseconds since load, so gaps between actions are visible: the burst
-    // tracking carries state for up to five seconds, which makes the same
-    // action behave differently depending on how long since the last one.
-    static const ULONGLONG base = GetTickCount64();
-    wsprintfW(line, L"[%6u] ", (UINT)(GetTickCount64() - base));
-
-    va_list args;
-    va_start(args, format);
-    wvsprintfW(line + lstrlenW(line), format, args);
-    va_end(args);
-    lstrcatW(line, L"\r\n");
-
-    char utf8[2048];
-    int len = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
-                                  nullptr, nullptr);
-    if (len > 1) {
-        DWORD written = 0;
-        SetFilePointer(f, 0, nullptr, FILE_END);
-        WriteFile(f, utf8, len - 1, &written, nullptr);
-    }
-    CloseHandle(f);
-}
-
-void DiagForeground(PCWSTR what) {
-    HWND fg = GetForegroundWindow();
-    WCHAR cls[96] = L"";
-    GetClassNameW(fg, cls, ARRAYSIZE(cls));
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    Diag(L"%s fg=%p pid=%lu ex=0x%08X vis=%d cls=%s", what, (void*)fg, pid,
-         (UINT)GetWindowLongPtrW(fg, GWL_EXSTYLE), (int)IsWindowVisible(fg),
-         cls);
-}
 
 // Windows 11 hosts Start, Search and the shell flyouts in their own processes,
 // so the taskbar is not the foreground window while any of them is open.
@@ -789,10 +733,6 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     }
 
     UINT edge = CurrentStuckPlace(pThis);
-
-    Diag(L"Unhide(flags=%d request=%d) inWatcher=%d atStrip=%d shellFocus=%d",
-         flags, request, (int)g_inWatcherCall, (int)CursorAtRevealStrip(edge),
-         (int)ShellHasFocus());
 
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
         EdgeEnabled(edge) && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
@@ -1297,30 +1237,8 @@ void WatcherTick() {
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {
-        if (g_leaveTicks != 0) {
-            HWND under = WindowFromPoint(pt);
-            HWND top = under ? GetAncestor(under, GA_ROOT) : nullptr;
-            WCHAR cls[96] = L"";
-            GetClassNameW(top, cls, ARRAYSIZE(cls));
-            RECT tr{};
-            GetWindowRect(top, &tr);
-            DWORD tpid = 0;
-            GetWindowThreadProcessId(top, &tpid);
-            Diag(L"HELD: onTaskbar=%d onFlyout=%d surfaceOpen=%d | cursor "
-                 L"(%ld,%ld) over %p pid=%lu ex=0x%08X vis=%d "
-                 L"(%ld,%ld)-(%ld,%ld) cls=%s",
-                 (int)PtInRect(&docked, pt), (int)PointerOverShellSurface(),
-                 (int)ShellSurfaceInForeground(), pt.x, pt.y, (void*)top, tpid,
-                 (UINT)GetWindowLongPtrW(top, GWL_EXSTYLE),
-                 (int)IsWindowVisible(top), tr.left, tr.top, tr.right,
-                 tr.bottom, cls);
-        }
         g_leaveTicks = 0;
         return;
-    }
-
-    if (g_leaveTicks == 0) {
-        DiagForeground(L"HIDE: not on taskbar, not on a flyout, none open --");
     }
 
     if ((LONG64)GetTickCount64() <
