@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.3.0
+// @version         1.3.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -844,8 +844,36 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
+// Shell_TrayWnd does not exist yet when the mod loads at boot: Windhawk injects
+// as explorer.exe starts, well before the shell creates the taskbar. Acquiring
+// the window once in Wh_ModInit therefore left the mod inert after every
+// restart -- the hooks were live, but with nothing subclassed and no tick
+// target, neither hide nor reveal ever ran. Keep trying from the watch thread,
+// which is also a thread other than the taskbar's, as
+// SetWindowSubclassFromAnyThread requires.
+void EnsureTrayWindow() {
+    if (g_trayWnd && g_subclassed && IsWindow(g_trayWnd)) {
+        return;
+    }
+
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) {
+        return;
+    }
+
+    if (tray != g_trayWnd) {
+        g_trayWnd = tray;
+        g_subclassed = false;
+    }
+
+    g_subclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
+                       g_trayWnd, TrayWatchProc, 0) != FALSE;
+}
+
 DWORD WINAPI WatchThreadProc(LPVOID) {
     while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+        EnsureTrayWindow();
+
         if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
             RunHideAnimation();
         }
@@ -967,16 +995,9 @@ BOOL Wh_ModInit() {
         return FALSE;
     }
 
-    // Subclass here rather than from a hook: this runs off the taskbar's
-    // thread, which is what SetWindowSubclassFromAnyThread expects.
-    g_trayWnd = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (g_trayWnd) {
-        g_subclassed = WindhawkUtils::SetWindowSubclassFromAnyThread(
-                           g_trayWnd, TrayWatchProc, 0) != FALSE;
-    }
-    if (!g_subclassed) {
-        Wh_Log(L"could not subclass Shell_TrayWnd, reveal will not work");
-    }
+    // Best effort only: at boot the taskbar does not exist yet, and the watch
+    // thread picks it up as soon as it does.
+    EnsureTrayWindow();
 
     g_watchMsg = RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeTick");
     if (!g_watchMsg) {
