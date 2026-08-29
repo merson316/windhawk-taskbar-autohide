@@ -1,8 +1,10 @@
 # Flash a taskbar button, which is what makes Windows force an auto-hidden
 # taskbar visible. This is what a Discord/Teams style notification does.
 #
-#   powershell -ExecutionPolicy Bypass -File flash-taskbar.ps1
-#   powershell -ExecutionPolicy Bypass -File flash-taskbar.ps1 -Process Discord
+# From a PowerShell prompt in the repo root:
+#
+#   .\tools\flash-taskbar.ps1
+#   .\tools\flash-taskbar.ps1 -Process Discord
 #
 # FlashWindowEx does nothing while the target window is in the foreground, so
 # the window is minimised first. That is why flashing a freshly launched app

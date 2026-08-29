@@ -1,6 +1,7 @@
 # Raise a real Windows toast notification, no modules required.
+# From a PowerShell prompt in the repo root:
 #
-#   powershell -ExecutionPolicy Bypass -File tools\toast.ps1
+#   .\tools\toast.ps1
 
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] > $null
 $template = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent(
