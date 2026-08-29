@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32
+// @compilerOptions -lcomctl32 -lwtsapi32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -122,6 +122,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
+#include <wtsapi32.h>
 #include <string>
 
 #include <utility>
@@ -146,7 +147,6 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
 UINT g_watchMsg = 0;
 HANDLE g_watchThread = nullptr;
-DWORD g_watchThreadId = 0;
 volatile LONG g_watchStop = 0;
 
 // How long the shell gets to finish coming up before a warning is allowed on
@@ -157,10 +157,9 @@ volatile LONG g_watchStop = 0;
 
 // Set when the mod cannot do its job. Kept rather than returning FALSE from
 // Wh_ModInit: Windhawk unloads a mod whose init failed, which would pull the
-// DLL out from under the thread showing the warning. Staying loaded but inert
-// is behaviourally identical -- every action below is already gated on the
-// checks that set this -- and it keeps the watch thread alive to raise the
-// dialog.
+// DLL out from under the thread that raises the warning. Staying loaded but
+// inert is behaviourally identical -- every action below is already gated on
+// the checks that set this -- and it keeps the watch thread alive to warn.
 PCWSTR g_fatalReason = nullptr;
 volatile LONG g_warned = 0;
 
@@ -938,6 +937,7 @@ void WarnOnce(PCWSTR reason) {
         return;
     }
 
+    WCHAR title[] = L"Windhawk - Taskbar auto-hide on any edge";
     WCHAR text[1024];
     wsprintfW(text,
               L"Taskbar auto-hide on any edge is not running.\n\n%s\n\n"
@@ -945,8 +945,16 @@ void WarnOnce(PCWSTR reason) {
               L"Disable or remove the mod in Windhawk to stop this warning.",
               reason);
 
-    MessageBoxW(nullptr, text, L"Windhawk - Taskbar auto-hide on any edge",
-                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+    // The session takes ownership of the dialog, so nothing here waits on the
+    // user. MessageBoxW would park this thread inside mod code until the button
+    // was clicked, and Windhawk holds the unload until every mod thread has
+    // exited -- so the response the warning asks for, disabling the mod, hung
+    // the uninitialize instead. Lengths are bytes, not characters.
+    DWORD response = 0;
+    WTSSendMessageW(WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, title,
+                    (DWORD)(lstrlenW(title) * sizeof(WCHAR)), text,
+                    (DWORD)(lstrlenW(text) * sizeof(WCHAR)),
+                    MB_OK | MB_ICONWARNING, 0, &response, FALSE);
 }
 
 DWORD WINAPI WatchThreadProc(LPVOID) {
@@ -1126,7 +1134,7 @@ BOOL Wh_ModInit() {
     }
 
     g_watchThread = CreateThread(nullptr, 0, WatchThreadProc, nullptr, 0,
-                                 &g_watchThreadId);
+                                 nullptr);
     if (!g_watchThread) {
         Wh_Log(L"could not start the watch thread");
         return FALSE;
@@ -1172,36 +1180,13 @@ void RestoreTaskbarIfHidden() {
     PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
 }
 
-BOOL CALLBACK CloseDialogProc(HWND hWnd, LPARAM) {
-    WCHAR cls[16];
-    if (GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) &&
-        lstrcmpW(cls, L"#32770") == 0) {
-        // Clicking the button, rather than WM_CLOSE, which a message box may
-        // or may not honour depending on the buttons it was given.
-        PostMessageW(hWnd, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
-    }
-    return TRUE;
-}
-
 void StopWatchThread() {
     InterlockedExchange(&g_watchStop, 1);
-    if (!g_watchThread) {
-        return;
+    if (g_watchThread) {
+        WaitForSingleObject(g_watchThread, 2000);
+        CloseHandle(g_watchThread);
+        g_watchThread = nullptr;
     }
-
-    // The warning dialog blocks the watch thread, and the response it asks for
-    // is to disable the mod -- which unloads the DLL while the dialog is still
-    // up, executing freed code. Dismiss it first. The only dialog this thread
-    // ever owns is that message box.
-    for (int i = 0; i < 5; i++) {
-        EnumThreadWindows(g_watchThreadId, CloseDialogProc, 0);
-        if (WaitForSingleObject(g_watchThread, 1000) == WAIT_OBJECT_0) {
-            break;
-        }
-    }
-
-    CloseHandle(g_watchThread);
-    g_watchThread = nullptr;
 }
 
 void Wh_ModBeforeUninit() {

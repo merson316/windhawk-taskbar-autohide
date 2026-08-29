@@ -136,8 +136,14 @@ dialog naming the reason:
 
 Failures are deliberately not fatal to loading. Returning `FALSE` from
 `Wh_ModInit` makes Windhawk unload the mod immediately, which would pull the DLL
-out from under the thread showing the dialog. Staying loaded and inert is
+out from under the thread that raises the warning. Staying loaded and inert is
 behaviourally identical and keeps that thread alive.
+
+The dialog is raised through `WTSSendMessageW`, so the session owns it and
+nothing in the mod waits on the user. `MessageBoxW` parks its calling thread
+inside mod code until the button is clicked, and Windhawk holds the unload until
+every mod thread has exited -- so following the warning's own advice and
+disabling the mod hung the uninitialize until the dialog was dismissed by hand.
 
 Only the process that owns `Shell_TrayWnd` ever warns. Windhawk injects into
 every `explorer.exe`, including the separate processes folder windows can use,
