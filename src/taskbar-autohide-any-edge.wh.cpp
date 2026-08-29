@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.10.4
+// @version         1.11.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -178,9 +178,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
-#include <shlobj.h>
 #include <wtsapi32.h>
-#include <stdarg.h>
 #include <string>
 
 #include <utility>
@@ -490,42 +488,6 @@ bool ForegroundIsShellHost(DWORD pid) {
     return match;
 }
 
-// TEMPORARY -- diagnosing why a Windows key press does not reveal the taskbar.
-void Diag(PCWSTR format, ...) {
-    WCHAR path[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0,
-                                path))) {
-        return;
-    }
-    lstrcatW(path, L"\\windhawk-autohide-unhide.log");
-
-    HANDLE f = CreateFileW(path, FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE |
-                               FILE_SHARE_DELETE,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    if (f == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    WCHAR line[1024];
-    va_list args;
-    va_start(args, format);
-    wvsprintfW(line, format, args);
-    va_end(args);
-    lstrcatW(line, L"\r\n");
-
-    char utf8[2048];
-    int len = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
-                                  nullptr, nullptr);
-    if (len > 1) {
-        DWORD written = 0;
-        SetFilePointer(f, 0, nullptr, FILE_END);
-        WriteFile(f, utf8, len - 1, &written, nullptr);
-    }
-    CloseHandle(f);
-}
-
 // Whether the user is interacting with the shell at all. Used to decide that a
 // repeat unhide is the user asking rather than a notification repeating, so it
 // is deliberately broad: the taskbar itself counts, and so does the desktop.
@@ -718,8 +680,9 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
     return TrayUI_GetDockedRect_Original(pThis, rect, arg);
 }
 
-// Defined with the animation state below; the unhide hook has to release it.
+// Defined with the animation state below; the unhide hook has to reach both.
 extern volatile LONG g_clipHold;
+extern volatile LONG g_animAbort;
 
 // Request 9 is Windows' "auto-hide state changed, ensure shown" reflex. It
 // fires as soon as the hidden state is set and would undo the hide, so drop it
@@ -734,22 +697,8 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
 
     UINT edge = CurrentStuckPlace(pThis);
 
-    {
-        HWND fg = GetForegroundWindow();
-        WCHAR cls[64] = L"";
-        GetClassNameW(fg, cls, ARRAYSIZE(cls));
-        DWORD fgPid = 0;
-        GetWindowThreadProcessId(fg, &fgPid);
-        Diag(L"Unhide(flags=%d request=%d) edge=%u inWatcher=%d atStrip=%d "
-             L"shellFocus=%d fg=%p pid=%lu cls=%s",
-             flags, request, edge, (int)g_inWatcherCall,
-             (int)CursorAtRevealStrip(edge), (int)ShellHasFocus(), (void*)fg,
-             fgPid, cls);
-    }
-
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
         EdgeEnabled(edge) && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
-        Diag(L"  DROPPED: request 9 state-change reflex");
         return;
     }
 
@@ -762,8 +711,6 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
                 request) {
             // A new notification, or a different cause arriving mid-burst:
             // show it for the configured hold.
-            Diag(L"  new burst (gap %lld ms, burstRequest was %ld)", now - last,
-                 InterlockedCompareExchange(&g_burstRequest, request, request));
             InterlockedExchange(&g_burstRequest, request);
             InterlockedExchange64(&g_holdVisibleUntil,
                                   now + g_settings.notificationHoldMs);
@@ -775,18 +722,17 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
             // away from the edge and nothing of the taskbar's in front: keep it
             // hidden rather than flashing it back up. Applies on every edge
             // including the bottom, where Windows drives the hiding itself.
-            Diag(L"  DROPPED: same burst, hold elapsed");
             return;
         }
     }
-
-    Diag(L"  PASSED to Windows");
 
     // Any unhide that reaches Windows means the taskbar is to become visible.
     // Release the off-screen pin first: it is cleared on the mod's own reveal
     // path, but Windows reveals the taskbar too -- for Start, for a
     // notification -- and the clamp would otherwise drag it straight back out
-    // of sight, so it could never return.
+    // of sight, so it could never return. Abandon any hide still sliding, for
+    // the same reason.
+    InterlockedExchange(&g_animAbort, 1);
     InterlockedExchange(&g_clipHold, 0);
 
     bool prev = g_inUnhide;
@@ -885,6 +831,11 @@ int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
 
 volatile LONG g_animRequested = 0;
 volatile LONG g_animOverride = 0;
+
+// A reveal arriving mid-hide would otherwise take turns with the slide over the
+// window position until the slide ran out, which is what spamming the Windows
+// key looked like. The reveal wins: it is the newer intent.
+volatile LONG g_animAbort = 0;
 RECT g_animFrom{}, g_animTo{};
 int g_animDurationMs = 400;
 UINT g_animEdge = ABE_LEFT;
@@ -1054,6 +1005,7 @@ void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
     const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
 
+    InterlockedExchange(&g_animAbort, 0);
     InterlockedExchange(&g_animOverride, 1);
 
     // Reachable only with "Skip edges facing another display" turned off: the
@@ -1085,7 +1037,8 @@ void RunHideAnimation() {
         // Abandon the slide if the mod is unloading: this runs on the watch
         // thread, and a full-length animation would outlast the join in
         // StopWatchThread, leaving the thread inside a module being unloaded.
-        if (InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+        if (InterlockedCompareExchange(&g_watchStop, 0, 0) ||
+            InterlockedCompareExchange(&g_animAbort, 0, 0)) {
             break;
         }
 
@@ -1103,6 +1056,13 @@ void RunHideAnimation() {
         // Sleep what is left of the frame, not a fixed amount after the work.
         FrameWait(g_hideTimer, frameBudgetMs - (NowMs() - frameStart));
         frameStart = NowMs();
+    }
+
+    // Overtaken by a reveal: leave the window wherever the reveal is taking it
+    // rather than finishing a slide nobody wants any more.
+    if (InterlockedCompareExchange(&g_animAbort, 0, 0)) {
+        InterlockedExchange(&g_animOverride, 0);
+        return;
     }
 
     // Arm the hold before the final move, not after, and stand the animation
@@ -1205,6 +1165,7 @@ void WatcherTick() {
         g_dwellStart = 0;
 
         ApplyDurationOverrides(g_trayUI);
+        InterlockedExchange(&g_animAbort, 1);
         InterlockedExchange(&g_clipHold, 0);
 
         if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
