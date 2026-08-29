@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-probe
 // @name            Taskbar auto-hide probe (diagnostic)
 // @description     Reports what the shipping mod sees when it validates taskbar.dll
-// @version         1.2.0
+// @version         1.3.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -204,6 +204,101 @@ void ReportDiskComparison(HMODULE loaded, DWORD rva, const BYTE* live,
     CloseHandle(file);
 }
 
+PCWSTR EdgeName(UINT edge) {
+    switch (edge) {
+        case 0: return L"left";
+        case 1: return L"top";
+        case 2: return L"right";
+        case 3: return L"bottom";
+        default: return L"unknown";
+    }
+}
+
+BOOL CALLBACK MonitorProc(HMONITOR mon, HDC, LPRECT, LPARAM) {
+    MONITORINFO mi{sizeof(mi)};
+    if (GetMonitorInfoW(mon, &mi)) {
+        Report(L"  %p  (%ld,%ld)-(%ld,%ld)%s", (void*)mon, mi.rcMonitor.left,
+               mi.rcMonitor.top, mi.rcMonitor.right, mi.rcMonitor.bottom,
+               (mi.dwFlags & MONITORINFOF_PRIMARY) ? L"  primary" : L"");
+    }
+    return TRUE;
+}
+
+// The state the shipping mod acts on: which edge the taskbar is docked to,
+// whether Windows thinks auto-hide is on, and whether the mod would stand that
+// edge down because a display sits beyond it. A skipped edge is silent by
+// design, and looks exactly like a mod that is not working.
+void ReportTaskbarState() {
+    BYTE settings[64]{};
+    DWORD size = sizeof(settings);
+    UINT edge = 0xFFFFFFFF;
+    if (RegGetValueW(HKEY_CURRENT_USER,
+                     L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer"
+                     L"\\StuckRects3",
+                     L"Settings", RRF_RT_REG_BINARY, nullptr, settings,
+                     &size) == ERROR_SUCCESS &&
+        size >= 16) {
+        UINT flags = *(UINT*)(settings + 8);
+        edge = *(UINT*)(settings + 12);
+        Report(L"StuckRects3 edge=%u (%s) flags=0x%X  autohide=%s", edge,
+               EdgeName(edge), flags, (flags & 1) ? L"ON" : L"OFF");
+    } else {
+        Report(L"could not read StuckRects3");
+    }
+
+    Report(L"monitors:");
+    EnumDisplayMonitors(nullptr, nullptr, MonitorProc, 0);
+
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) {
+        Report(L"Shell_TrayWnd NOT FOUND");
+        return;
+    }
+
+    RECT r{};
+    GetWindowRect(tray, &r);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(tray, &pid);
+    Report(L"Shell_TrayWnd %p  (%ld,%ld)-(%ld,%ld)  pid %lu%s", (void*)tray,
+           r.left, r.top, r.right, r.bottom, pid,
+           pid == GetCurrentProcessId() ? L"  (this process)" : L"  (OTHER)");
+
+    HMONITOR own = MonitorFromWindow(tray, MONITOR_DEFAULTTONULL);
+    MONITORINFO mi{sizeof(mi)};
+    if (!own || !GetMonitorInfoW(own, &mi)) {
+        Report(L"could not identify the taskbar's monitor");
+        return;
+    }
+
+    const RECT& m = mi.rcMonitor;
+    Report(L"taskbar monitor (%ld,%ld)-(%ld,%ld)", m.left, m.top, m.right,
+           m.bottom);
+
+    // Exactly what DisplayBeyondEdge does in the shipping mod.
+    struct {
+        UINT edge;
+        POINT probe;
+    } probes[] = {
+        {0, {m.left - 1, (m.top + m.bottom) / 2}},
+        {1, {(m.left + m.right) / 2, m.top - 1}},
+        {2, {m.right, (m.top + m.bottom) / 2}},
+    };
+
+    for (const auto& t : probes) {
+        HMONITOR there = MonitorFromPoint(t.probe, MONITOR_DEFAULTTONULL);
+        const bool faces = there && there != own;
+        Report(L"  %-5s edge: %s%s", EdgeName(t.edge),
+               faces ? L"display beyond -- MOD SKIPS THIS EDGE"
+                     : L"nothing beyond -- mod active here",
+               t.edge == edge ? L"   <== taskbar is here" : L"");
+    }
+
+    if (edge == 3) {
+        Report(L"  taskbar is on the bottom: Windows handles it, mod does "
+               L"nothing by design");
+    }
+}
+
 using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void*);
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Address;
 
@@ -308,6 +403,9 @@ BOOL Wh_ModInit() {
     ReportDiskComparison(taskbar,
                          (DWORD)((const BYTE*)fn - (const BYTE*)taskbar), fn,
                          0x80);
+
+    Report(L"");
+    ReportTaskbarState();
 
     Report(L"");
     Report(L"windhawk modules loaded in this process:");
