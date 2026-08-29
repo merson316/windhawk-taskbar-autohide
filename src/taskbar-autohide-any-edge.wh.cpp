@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.8.0
+// @version         1.9.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -103,14 +103,14 @@ reason instead of failing silently. The taskbar is left alone in that state.
     position.
 
     Default: on.
-- hideFrameRate: 90
-  $name: Hide animation frame rate
+- frameRate: 90
+  $name: Animation frame rate
   $description: >-
-    Frames per second for the hide slide. Higher is smoother and costs more
-    CPU. Range 30-240.
+    Frames per second for the hide and reveal slides. Higher is smoother and
+    costs more CPU. Range 30-240.
 
-    Only the hide is affected, because only the hide is animated by this mod.
-    The reveal uses Windows' own slide.
+    Disable "Taskbar auto-hide speed" if you have it: both mods pace the same
+    reveal, and together they fight over it.
 
     Default: 90.
 - hideDurationMs: 0
@@ -226,7 +226,7 @@ volatile LONG g_warned = 0;
 struct Settings {
     bool skipAdjacentEdges = true;
     bool hideFully = true;
-    int hideFrameRate = 90;
+    int frameRate = 90;
     int revealTolerance = 8;
     int revealDwellMs = 0;
     int notificationHoldMs = 1500;
@@ -253,11 +253,11 @@ void LoadSettings() {
         Wh_GetIntSetting(L"skipAdjacentEdges") != 0;
     g_settings.hideFully = Wh_GetIntSetting(L"hideFully") != 0;
 
-    g_settings.hideFrameRate = Wh_GetIntSetting(L"hideFrameRate");
-    if (g_settings.hideFrameRate < 30) {
-        g_settings.hideFrameRate = 30;
-    } else if (g_settings.hideFrameRate > 240) {
-        g_settings.hideFrameRate = 240;
+    g_settings.frameRate = Wh_GetIntSetting(L"frameRate");
+    if (g_settings.frameRate < 30) {
+        g_settings.frameRate = 30;
+    } else if (g_settings.frameRate > 240) {
+        g_settings.frameRate = 240;
     }
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
     if (g_settings.revealTolerance < 1) {
@@ -428,6 +428,9 @@ TrayUI_Unhide_t TrayUI_Unhide_Original;
 // call corrupts the trampoline and breaks every slide, so the address is used
 // directly for both the signature check and the calls.
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
+// Resolved separately, never hooked: the pointer above becomes a trampoline
+// once hooked, and the duration signature must be read from the function.
+TrayUI_SlideWindow_t TrayUI_SlideWindow_Address;
 
 bool g_offsetsVerified = false;
 
@@ -829,7 +832,8 @@ RECT g_dockedBeforeHide{};
 // duplicate positions. QueryPerformanceCounter is what makes a frame rate mean
 // anything.
 double g_qpcPeriodMs = 0.0;
-HANDLE g_frameTimer = nullptr;
+HANDLE g_hideTimer = nullptr;    // watch thread, driving RunHideAnimation
+HANDLE g_slideTimer = nullptr;   // taskbar thread, inside SlideWindow
 
 double NowMs() {
     // Without this the slide would never advance and the loop would spin until
@@ -854,30 +858,96 @@ void FrameTimerInit() {
     // requested 90 fps would silently cap near 64. A high-resolution timer is
     // not bound by it, and unlike timeBeginPeriod it costs the rest of the
     // process nothing.
-    g_frameTimer = CreateWaitableTimerExW(
-        nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
-        TIMER_MODIFY_STATE | SYNCHRONIZE);
-    if (!g_frameTimer) {
-        g_frameTimer = CreateWaitableTimerExW(nullptr, nullptr, 0,
-                                              TIMER_MODIFY_STATE | SYNCHRONIZE);
+    for (HANDLE* h : {&g_hideTimer, &g_slideTimer}) {
+        *h = CreateWaitableTimerExW(nullptr, nullptr,
+                                    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                    TIMER_MODIFY_STATE | SYNCHRONIZE);
+        if (!*h) {
+            *h = CreateWaitableTimerExW(nullptr, nullptr, 0,
+                                        TIMER_MODIFY_STATE | SYNCHRONIZE);
+        }
     }
 }
 
-void FrameWait(double ms) {
+// Declared before FrameWait so the fallback can reach the unhooked Sleep:
+// calling Sleep itself from inside the Sleep hook would recurse.
+using Sleep_t = decltype(&Sleep);
+Sleep_t Sleep_Original = nullptr;
+
+void FrameWait(HANDLE timer, double ms) {
     if (ms <= 0.0) {
         return;
     }
 
-    if (g_frameTimer) {
+    if (timer) {
         LARGE_INTEGER due;
         due.QuadPart = -(LONGLONG)(ms * 10000.0);   // relative, 100 ns units
-        if (SetWaitableTimer(g_frameTimer, &due, 0, nullptr, nullptr, FALSE)) {
-            WaitForSingleObject(g_frameTimer, INFINITE);
+        if (SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+            WaitForSingleObject(timer, INFINITE);
             return;
         }
     }
 
-    Sleep((DWORD)(ms + 0.5));
+    const DWORD ticks = (DWORD)(ms + 0.5);
+    if (Sleep_Original) {
+        Sleep_Original(ticks);
+    } else {
+        Sleep(ticks);
+    }
+}
+
+// The reveal is Windows' own loop, so there is nothing here to pace. What can
+// be reached is the Sleep between its frames: record the thread inside
+// SlideWindow, and replace that sleep with a frame budget while on it. Only the
+// frame rate is taken this way -- the durations are set directly on the TrayUI
+// members by ApplyDurationOverrides.
+volatile LONG g_slideThreadId = 0;
+double g_slideStartMs = 0.0;
+double g_slideFrameStart = 0.0;
+
+void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
+                                    HMONITOR monitor, bool show, bool animate) {
+    if (g_fatalReason) {
+        TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+        return;
+    }
+
+    g_slideStartMs = NowMs();
+    g_slideFrameStart = g_slideStartMs;
+    InterlockedExchange(&g_slideThreadId, (LONG)GetCurrentThreadId());
+
+    TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+
+    InterlockedExchange(&g_slideThreadId, 0);
+}
+
+// SlideWindow derives each frame's position from GetTickCount, which advances
+// in ~15.6 ms steps -- coarser than the frames now being asked for, so without
+// this the extra frames would land on positions already drawn. Reports the same
+// elapsed time measured properly, held steady for the duration of each frame so
+// a frame draws at one position rather than drifting through it.
+using GetTickCount_t = decltype(&GetTickCount);
+GetTickCount_t GetTickCount_Original = nullptr;
+
+DWORD WINAPI GetTickCount_Hook() {
+    if ((LONG)GetCurrentThreadId() !=
+        InterlockedCompareExchange(&g_slideThreadId, 0, 0)) {
+        return GetTickCount_Original();
+    }
+
+    return (DWORD)(g_slideFrameStart - g_slideStartMs + 0.5);
+}
+
+void WINAPI Sleep_Hook(DWORD ms) {
+    if ((LONG)GetCurrentThreadId() !=
+        InterlockedCompareExchange(&g_slideThreadId, 0, 0)) {
+        Sleep_Original(ms);
+        return;
+    }
+
+    FrameWait(g_slideTimer,
+              1000.0 / g_settings.frameRate - (NowMs() - g_slideFrameStart));
+    g_slideFrameStart = NowMs();
 }
 
 void RunHideAnimation() {
@@ -908,7 +978,7 @@ void RunHideAnimation() {
 
 
     const double start = NowMs();
-    const double frameBudgetMs = 1000.0 / g_settings.hideFrameRate;
+    const double frameBudgetMs = 1000.0 / g_settings.frameRate;
     double frameStart = start;
 
     for (;;) {
@@ -931,7 +1001,7 @@ void RunHideAnimation() {
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Sleep what is left of the frame, not a fixed amount after the work.
-        FrameWait(frameBudgetMs - (NowMs() - frameStart));
+        FrameWait(g_hideTimer, frameBudgetMs - (NowMs() - frameStart));
         frameStart = NowMs();
     }
 
@@ -1338,6 +1408,10 @@ PCWSTR SetUpHooks() {
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))",
           LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
          &TrayUI_GetAutoHideFlags_Address, nullptr, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
+          LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
+         &TrayUI_SlideWindow_Address, nullptr, true},
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, resolveOnly,
@@ -1385,7 +1459,7 @@ PCWSTR SetUpHooks() {
 
         {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
           LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
-         &TrayUI_SlideWindow_Original, nullptr, true},
+         &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
 
         {{LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void))",
           LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void) )"},
@@ -1411,7 +1485,7 @@ PCWSTR SetUpHooks() {
         {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
         {L"GetDockedRect", (void*)TrayUI_GetDockedRect_Original},
         {L"Unhide", (void*)TrayUI_Unhide_Original},
-        {L"SlideWindow", (void*)TrayUI_SlideWindow_Original},
+        {L"SlideWindow", (void*)TrayUI_SlideWindow_Address},
     };
 
     for (const auto& r : required) {
@@ -1426,7 +1500,26 @@ PCWSTR SetUpHooks() {
         }
     }
 
-    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Original;
+    // Pacing the reveal means pacing a loop this mod does not own. The hook is
+    // inert on every thread but the one inside SlideWindow.
+    if (HMODULE kernelBase = GetModuleHandleW(L"kernelbase.dll")) {
+        auto pSleep = (Sleep_t)(void*)GetProcAddress(kernelBase, "Sleep");
+        auto pTick =
+            (GetTickCount_t)(void*)GetProcAddress(kernelBase, "GetTickCount");
+
+        // Both or neither: pacing the frames without a clock fine enough to
+        // separate them would draw the extra frames at positions already drawn.
+        if (!pSleep || !pTick ||
+            !WindhawkUtils::SetFunctionHook(pSleep, Sleep_Hook,
+                                            &Sleep_Original) ||
+            !WindhawkUtils::SetFunctionHook(pTick, GetTickCount_Hook,
+                                            &GetTickCount_Original)) {
+            Wh_Log(L"could not hook Sleep and GetTickCount, the reveal keeps "
+                   L"Windows' frame rate");
+        }
+    }
+
+    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Address;
     g_durationOffsetsVerified =
         memcmp(slide + kShowDurSigOffset, kShowDurSig, sizeof(kShowDurSig)) ==
             0 &&
@@ -1528,9 +1621,11 @@ void Wh_ModBeforeUninit() {
 void Wh_ModUninit() {
     StopWatchThread();
 
-    if (g_frameTimer) {
-        CloseHandle(g_frameTimer);
-        g_frameTimer = nullptr;
+    for (HANDLE* h : {&g_hideTimer, &g_slideTimer}) {
+        if (*h) {
+            CloseHandle(*h);
+            *h = nullptr;
+        }
     }
 
     if (g_trayWnd && g_subclassed) {
