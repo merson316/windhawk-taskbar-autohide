@@ -427,6 +427,65 @@ ULONGLONG g_dwellStart = 0;
 volatile LONG64 g_holdVisibleUntil = 0;
 volatile LONG64 g_lastNotifyUnhide = 0;
 
+// Windows 11 hosts Start, Search and the shell flyouts in their own processes,
+// so the taskbar is not the foreground window while any of them is open.
+// Testing for the taskbar itself, as this did, held it up only for as long as
+// the notification hold happened to last -- which is why a second Start press
+// inside the burst gap let the watcher hide it 80 ms later.
+bool ShellSurfaceInForeground() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) {
+        return false;
+    }
+    if (fg == g_trayWnd) {
+        return true;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (!pid) {
+        return false;
+    }
+    if (pid == GetCurrentProcessId()) {
+        return true;   // another of the shell's own windows
+    }
+
+    // Resolving the image name every tick is wasteful and the foreground
+    // process rarely changes.
+    static DWORD cachedPid = 0;
+    static bool cachedResult = false;
+    if (pid == cachedPid) {
+        return cachedResult;
+    }
+
+    bool match = false;
+    if (HANDLE proc =
+            OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        WCHAR path[MAX_PATH];
+        DWORD len = ARRAYSIZE(path);
+        if (QueryFullProcessImageNameW(proc, 0, path, &len)) {
+            PCWSTR name = wcsrchr(path, L'\\');
+            name = name ? name + 1 : path;
+            static PCWSTR kShellHosts[] = {
+                L"StartMenuExperienceHost.exe",
+                L"SearchHost.exe",
+                L"ShellExperienceHost.exe",
+            };
+            for (PCWSTR host : kShellHosts) {
+                if (lstrcmpiW(name, host) == 0) {
+                    match = true;
+                    break;
+                }
+            }
+        }
+        CloseHandle(proc);
+    }
+
+    cachedPid = pid;
+    cachedResult = match;
+    return match;
+}
+
 // What kind of unhide opened the current burst. A flashing button repeats one
 // cause; anything else arriving mid-burst is a separate event and must not be
 // swallowed as a repeat -- pressing the Windows key twice in quick succession
@@ -601,7 +660,7 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         } else if (now >= InterlockedCompareExchange64(&g_holdVisibleUntil, 0,
                                                        0) &&
                    edge <= ABE_BOTTOM && !CursorAtRevealStrip(edge) &&
-                   GetForegroundWindow() != g_trayWnd) {
+                   !ShellSurfaceInForeground()) {
             // The same cause repeating, already shown for its hold, pointer
             // away from the edge and nothing of the taskbar's in front: keep it
             // hidden rather than flashing it back up. Applies on every edge
@@ -897,8 +956,8 @@ void WatcherTick() {
         return;
     }
 
-    // Shown. Stay up while the pointer is over the taskbar, or while the
-    // taskbar is foreground, which covers Start and Search being open.
+    // Shown. Stay up while the pointer is over the taskbar, or while Start,
+    // Search or a shell flyout is open.
     RECT docked{};
     TrayUI_GetDockedRect_Original(g_trayUI, &docked, 0);
 
@@ -909,7 +968,7 @@ void WatcherTick() {
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
 
-    if (PtInRect(&docked, pt) || GetForegroundWindow() == g_trayWnd) {
+    if (PtInRect(&docked, pt) || ShellSurfaceInForeground()) {
         g_leaveTicks = 0;
         return;
     }
