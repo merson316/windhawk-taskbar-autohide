@@ -108,13 +108,40 @@ blocked, so keep it short -- a few hundred milliseconds at most.
   class and are not handled.
 - **Tied to `Taskbar.dll` internals.** The two member offsets are validated
   against a byte signature inside `GetAutoHideFlags`; if a Windows update
-  changes that function, the mod goes inert rather than misbehaving.
+  changes that function, the mod goes inert rather than misbehaving, and warns
+  that it has.
 - **An edge with another display beyond it cannot hide.** The hidden position
   is real screen space on the neighbouring monitor, so the taskbar would slide
   into view there instead of out of sight. Detected automatically and skipped:
   that edge then behaves as it does with the mod uninstalled. Controlled by
   "Skip edges facing another display". `docs/ROADMAP.md` records why two fixes
   were attempted and abandoned.
+
+## If it does not work
+
+Every failure mode leaves the taskbar behaving exactly as it does with no mod
+installed. That is indistinguishable from the mod working on a machine where
+nothing happens to hide, so a silent failure is worse than useless. When the mod
+cannot run it stays loaded but completely inert, and the watch thread raises a
+dialog naming the reason:
+
+| Warning | Cause |
+|---|---|
+| Needs build 26200 or newer | Windows is older than the taskbar rework this mod targets. |
+| `taskbar.dll` could not be loaded | Should not happen on a supported build. |
+| Debug symbols could not be resolved | Windhawk downloads these from Microsoft on first use. Usually no internet, a firewall, or a blocked symbol server. |
+| A taskbar function could not be found | Symbols resolved but incompletely. Reloading the mod re-downloads them. |
+| `taskbar.dll` does not match | A Windows update recompiled `GetAutoHideFlags`, so the member offsets can no longer be trusted. The mod needs updating. |
+| Could not attach to the taskbar window | The taskbar never appeared, or subclassing it failed. |
+
+Failures are deliberately not fatal to loading. Returning `FALSE` from
+`Wh_ModInit` makes Windhawk unload the mod immediately, which would pull the DLL
+out from under the thread showing the dialog. Staying loaded and inert is
+behaviourally identical and keeps that thread alive.
+
+Only the process that owns `Shell_TrayWnd` ever warns. Windhawk injects into
+every `explorer.exe`, including the separate processes folder windows can use,
+and those have no taskbar to manage.
 
 ## Anti-cheat note
 

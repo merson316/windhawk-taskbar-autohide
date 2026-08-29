@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.3.1
+// @version         1.4.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -54,6 +54,13 @@ or the other, not both, since they hook the same function.
   so the mod skips it and that edge behaves as it does without the mod. This is
   detected automatically; see "Skip edges facing another display".
 - Requires Windows 11 build 26200 or newer.
+
+## If it does not work
+
+Every way this mod can fail leaves the taskbar behaving exactly as it does with
+no mod installed, which looks the same as the mod working on a machine where
+nothing hides. So when it cannot run, it says so in a dialog and names the
+reason instead of failing silently. The taskbar is left alone in that state.
 */
 // ==/WindhawkModReadme==
 
@@ -139,7 +146,24 @@ or the other, not both, since they hook the same function.
 
 UINT g_watchMsg = 0;
 HANDLE g_watchThread = nullptr;
+DWORD g_watchThreadId = 0;
 volatile LONG g_watchStop = 0;
+
+// How long the shell gets to finish coming up before a warning is allowed on
+// screen, and how long the taskbar window gets to appear before its absence is
+// treated as a failure rather than as boot still being in progress.
+#define WARN_SETTLE_MS 5000
+#define WARN_NO_TASKBAR_MS 30000
+
+// Set when the mod cannot do its job. Kept rather than returning FALSE from
+// Wh_ModInit: Windhawk unloads a mod whose init failed, which would pull the
+// DLL out from under the thread showing the warning. Staying loaded but inert
+// is behaviourally identical -- every action below is already gated on the
+// checks that set this -- and it keeps the watch thread alive to raise the
+// dialog.
+PCWSTR g_fatalReason = nullptr;
+volatile LONG g_warned = 0;
+
 #define LEAVE_TICKS    2
 
 // ------------------------------------------------------------------ settings
@@ -431,7 +455,7 @@ bool CursorOverTaskbar(void* pThis) {
 // taskbar is not docked to the bottom.
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
-    if (!pThis || !g_offsetsVerified) {
+    if (g_fatalReason || !pThis || !g_offsetsVerified) {
         return ret;
     }
 
@@ -455,6 +479,11 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
 // edge but not elsewhere, so add it here. Not while unhiding, where a bare
 // ABS_AUTOHIDE means "show".
 void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
+    if (g_fatalReason) {
+        TrayUI_SetAutoHideFlags_Original(pThis, flags);
+        return;
+    }
+
     UINT edge = CurrentStuckPlace(pThis);
     UINT effective = flags;
 
@@ -467,7 +496,9 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
 }
 
 UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
-    g_trayUI = pThis;
+    if (!g_fatalReason) {
+        g_trayUI = pThis;
+    }
     return TrayUI_GetDockedRect_Original(pThis, rect, arg);
 }
 
@@ -477,6 +508,11 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
 #define UNHIDE_REQUEST_STATE_CHANGED 9
 
 void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
+    if (g_fatalReason) {
+        TrayUI_Unhide_Original(pThis, flags, request);
+        return;
+    }
+
     UINT edge = CurrentStuckPlace(pThis);
 
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
@@ -576,7 +612,7 @@ void ApplyDurationOverrides(void* pThis) {
 using CTaskListWnd_PermitAutoHide_t = int(WINAPI*)(void* pThis);
 CTaskListWnd_PermitAutoHide_t CTaskListWnd_PermitAutoHide_Original;
 int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
-    if (g_settings.notificationHoldMs > 0 &&
+    if (!g_fatalReason && g_settings.notificationHoldMs > 0 &&
         (LONG64)GetTickCount64() >=
             InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
         return TRUE;   // hold elapsed: allow hiding even if Windows objects
@@ -861,6 +897,12 @@ void EnsureTrayWindow() {
         return;
     }
 
+    DWORD pid = 0;
+    GetWindowThreadProcessId(tray, &pid);
+    if (pid != GetCurrentProcessId()) {
+        return;   // another explorer.exe is the shell; nothing to do here
+    }
+
     if (tray != g_trayWnd) {
         g_trayWnd = tray;
         g_subclassed = false;
@@ -870,9 +912,63 @@ void EnsureTrayWindow() {
                        g_trayWnd, TrayWatchProc, 0) != FALSE;
 }
 
+// Every failure below leaves the taskbar behaving exactly as it does with no
+// mod installed, which is indistinguishable from the mod working on a machine
+// where nothing hides. Say so out loud instead. A message box rather than a
+// toast: toasts need WinRT and an AppUserModelID, and Windows routes balloon
+// tips through the notification centre, where Do Not Disturb can swallow them
+// silently -- the one outcome this exists to prevent.
+// Windhawk injects into every explorer.exe, and folder windows can run as
+// their own process. FindWindowW searches system-wide, so such a process finds
+// the real taskbar, cannot subclass it across the process boundary, and would
+// warn about a job that was never its own. Decide by ownership.
+bool ThisProcessOwnsTaskbar() {
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray) {
+        return false;   // no taskbar anywhere yet: undecided, so stay quiet
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(tray, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+void WarnOnce(PCWSTR reason) {
+    if (InterlockedExchange(&g_warned, 1) != 0) {
+        return;
+    }
+
+    WCHAR text[1024];
+    wsprintfW(text,
+              L"Taskbar auto-hide on any edge is not running.\n\n%s\n\n"
+              L"The taskbar will behave as it does with the mod uninstalled. "
+              L"Disable or remove the mod in Windhawk to stop this warning.",
+              reason);
+
+    MessageBoxW(nullptr, text, L"Windhawk - Taskbar auto-hide on any edge",
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST);
+}
+
 DWORD WINAPI WatchThreadProc(LPVOID) {
+    const ULONGLONG started = GetTickCount64();
+
     while (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
-        EnsureTrayWindow();
+        if (!g_fatalReason) {
+            EnsureTrayWindow();
+        }
+
+        const ULONGLONG up = GetTickCount64() - started;
+        if (up > WARN_SETTLE_MS &&
+            !InterlockedCompareExchange(&g_warned, 0, 0)) {
+            if (g_fatalReason) {
+                if (ThisProcessOwnsTaskbar()) {
+                    WarnOnce(g_fatalReason);
+                }
+            } else if ((!g_trayWnd || !g_subclassed) &&
+                       up > WARN_NO_TASKBAR_MS && ThisProcessOwnsTaskbar()) {
+                WarnOnce(L"The mod could not attach to the taskbar window.");
+            }
+        }
 
         if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
             RunHideAnimation();
@@ -904,19 +1000,22 @@ void Wh_ModSettingsChanged() {
     LoadSettings();
 }
 
-BOOL Wh_ModInit() {
+// Returns nullptr when the mod is ready, or a reason fit to put in front of a
+// user. Every path out of here used to be a silent FALSE from Wh_ModInit.
+PCWSTR SetUpHooks() {
     if (!IsSupportedBuild()) {
-        Wh_Log(L"unsupported build %u, mod inactive", g_buildNumber);
-        return FALSE;
+        static WCHAR reason[192];
+        wsprintfW(reason,
+                  L"This mod needs Windows 11 build 26200 or newer. Windows "
+                  L"reports build %u.",
+                  g_buildNumber);
+        return reason;
     }
-
-    LoadSettings();
 
     HMODULE taskbar =
         LoadLibraryExW(L"taskbar.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (!taskbar) {
-        Wh_Log(L"could not load taskbar.dll");
-        return FALSE;
+        return L"taskbar.dll could not be loaded.";
     }
 
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
@@ -951,8 +1050,10 @@ BOOL Wh_ModInit() {
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
-        Wh_Log(L"HookSymbols failed");
-        return FALSE;
+        return L"The taskbar's debug symbols could not be resolved. "
+               L"Windhawk downloads these from Microsoft the first time a mod "
+               L"needs them, so check the internet connection and reload the "
+               L"mod.";
     }
 
     // Every one of these is load-bearing: running with any missing would change
@@ -971,8 +1072,13 @@ BOOL Wh_ModInit() {
 
     for (const auto& r : required) {
         if (!r.ptr) {
-            Wh_Log(L"required symbol %s unresolved, mod inactive", r.name);
-            return FALSE;
+            static WCHAR missing[256];
+            wsprintfW(missing,
+                      L"The taskbar function %s could not be found, so the mod "
+                      L"cannot hook it. This usually means the debug symbols "
+                      L"are incomplete; reloading the mod re-downloads them.",
+                      r.name);
+            return missing;
         }
     }
 
@@ -990,15 +1096,29 @@ BOOL Wh_ModInit() {
     const BYTE* sig = (const BYTE*)TrayUI_GetAutoHideFlags_Original + kSigOffset;
     g_offsetsVerified = memcmp(sig, kSig, sizeof(kSig)) == 0;
     if (!g_offsetsVerified) {
-        Wh_Log(L"GetAutoHideFlags does not match the expected form, "
-               L"member offsets are not trustworthy, mod inactive");
-        return FALSE;
+        return L"This build of taskbar.dll does not match what the mod was "
+               L"built against, so it cannot safely read the taskbar's state. "
+               L"A Windows update most likely changed it, and the mod needs "
+               L"updating to match.";
     }
 
-    // Best effort only: at boot the taskbar does not exist yet, and the watch
-    // thread picks it up as soon as it does.
-    EnsureTrayWindow();
+    return nullptr;
+}
 
+BOOL Wh_ModInit() {
+    LoadSettings();
+
+    g_fatalReason = SetUpHooks();
+    if (g_fatalReason) {
+        Wh_Log(L"inactive: %s", g_fatalReason);
+    } else {
+        // Best effort only: at boot the taskbar does not exist yet, and the
+        // watch thread picks it up as soon as it does.
+        EnsureTrayWindow();
+    }
+
+    // Started even when the mod has stood down: it is what puts the warning on
+    // screen, and it is why the failures above no longer return FALSE.
     g_watchMsg = RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeTick");
     if (!g_watchMsg) {
         Wh_Log(L"could not register the tick message");
@@ -1006,7 +1126,7 @@ BOOL Wh_ModInit() {
     }
 
     g_watchThread = CreateThread(nullptr, 0, WatchThreadProc, nullptr, 0,
-                                 nullptr);
+                                 &g_watchThreadId);
     if (!g_watchThread) {
         Wh_Log(L"could not start the watch thread");
         return FALSE;
@@ -1052,13 +1172,36 @@ void RestoreTaskbarIfHidden() {
     PostMessageW(g_trayWnd, WM_SETTINGCHANGE, SPI_SETWORKAREA, 0);
 }
 
+BOOL CALLBACK CloseDialogProc(HWND hWnd, LPARAM) {
+    WCHAR cls[16];
+    if (GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) &&
+        lstrcmpW(cls, L"#32770") == 0) {
+        // WM_CLOSE is ignored by an MB_OK message box, whose close button is
+        // disabled. Clicking its button is not.
+        PostMessageW(hWnd, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
+    }
+    return TRUE;
+}
+
 void StopWatchThread() {
     InterlockedExchange(&g_watchStop, 1);
-    if (g_watchThread) {
-        WaitForSingleObject(g_watchThread, 2000);
-        CloseHandle(g_watchThread);
-        g_watchThread = nullptr;
+    if (!g_watchThread) {
+        return;
     }
+
+    // The warning dialog blocks the watch thread, and the response it asks for
+    // is to disable the mod -- which unloads the DLL while the dialog is still
+    // up, executing freed code. Dismiss it first. The only dialog this thread
+    // ever owns is that message box.
+    for (int i = 0; i < 5; i++) {
+        EnumThreadWindows(g_watchThreadId, CloseDialogProc, 0);
+        if (WaitForSingleObject(g_watchThread, 1000) == WAIT_OBJECT_0) {
+            break;
+        }
+    }
+
+    CloseHandle(g_watchThread);
+    g_watchThread = nullptr;
 }
 
 void Wh_ModBeforeUninit() {
