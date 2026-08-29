@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.10.0
+// @version         1.10.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -473,8 +473,16 @@ bool ShellSurfaceInForeground() {
     }
 
     // A different window of the shell's, and one actually on screen: the tray
-    // overflow and the other taskbar flyouts are hosted in this process.
+    // overflow and the other taskbar flyouts are hosted in this process. The
+    // desktop is hosted here too, and clicking it is the opposite of a surface
+    // being open -- without this it held the taskbar up indefinitely.
     if (pid == GetCurrentProcessId()) {
+        WCHAR cls[64] = L"";
+        if (GetClassNameW(fg, cls, ARRAYSIZE(cls)) &&
+            (lstrcmpiW(cls, L"Progman") == 0 ||
+             lstrcmpiW(cls, L"WorkerW") == 0)) {
+            return false;
+        }
         return IsWindowVisible(fg) != FALSE;
     }
 
@@ -512,6 +520,15 @@ bool ShellSurfaceInForeground() {
     cachedPid = pid;
     cachedResult = match;
     return match;
+}
+
+// Whether the user is interacting with the shell at all, the taskbar itself
+// included. Distinct from the question above: a repeat unhide arriving while
+// the taskbar has focus is the user asking for it, not a notification
+// repeating, so it must not be suppressed. Keeping an already-visible taskbar
+// up is the other question, and there the taskbar's own focus means nothing.
+bool ShellHasFocus() {
+    return GetForegroundWindow() == g_trayWnd || ShellSurfaceInForeground();
 }
 
 // What kind of unhide opened the current burst. A flashing button repeats one
@@ -687,7 +704,7 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         } else if (now >= InterlockedCompareExchange64(&g_holdVisibleUntil, 0,
                                                        0) &&
                    edge <= ABE_BOTTOM && !CursorAtRevealStrip(edge) &&
-                   !ShellSurfaceInForeground()) {
+                   !ShellHasFocus()) {
             // The same cause repeating, already shown for its hold, pointer
             // away from the edge and nothing of the taskbar's in front: keep it
             // hidden rather than flashing it back up. Applies on every edge
