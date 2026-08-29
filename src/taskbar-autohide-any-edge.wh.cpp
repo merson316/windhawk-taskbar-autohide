@@ -888,10 +888,9 @@ void WatcherTick() {
         RECT hidden{};
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
 
-        // Windows leaves a sliver on screen so the pointer can find the
-        // taskbar. CursorAtRevealStrip does that job here, with its own
-        // tolerance, so the sliver is only a line along the edge. Park the
-        // window past the edge instead. Only left and top matter: the slide
+        // Windows stops a sliver short of off-screen so the pointer can find
+        // the taskbar. CursorAtRevealStrip does that here, so the sliver is
+        // only a line along the edge. Only left and top are set: the slide
         // moves the window without resizing it.
         RECT mon{};
         if (g_settings.hideFully && TrayMonitorRect(&mon)) {
