@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.4.0
+// @version         1.4.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -340,6 +340,10 @@ using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
 
 TrayUI_GetStuckPlace_t TrayUI_GetStuckPlace_Original;
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
+
+// The function itself, resolved without hooking. Not interchangeable with the
+// pointer above: see the check in SetUpHooks.
+TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Address;
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
 TrayUI_Unhide_t TrayUI_Unhide_Original;
@@ -1021,6 +1025,38 @@ PCWSTR SetUpHooks() {
         return L"taskbar.dll could not be loaded.";
     }
 
+    // Resolve GetAutoHideFlags on its own first, passing no hook function so
+    // the pointer receives the symbol address. Once a hook is registered, the
+    // same pointer is a trampoline: the engine's relocated copy of however many
+    // leading instructions the patch displaced, followed by a jump back. Its
+    // bytes are the engine's, not the function's, and how many of them are the
+    // function's varies by engine version -- which is why this check passed on
+    // one machine and failed on another running byte-identical taskbar.dll.
+    // Validating first also means an unrecognised build is never patched.
+    WindhawkUtils::SYMBOL_HOOK resolveOnly[] = {
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))",
+          LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
+         &TrayUI_GetAutoHideFlags_Address, nullptr, true},
+    };
+
+    if (!WindhawkUtils::HookSymbols(taskbar, resolveOnly,
+                                    ARRAYSIZE(resolveOnly)) ||
+        !TrayUI_GetAutoHideFlags_Address) {
+        return L"The taskbar's debug symbols could not be resolved. "
+               L"Windhawk downloads these from Microsoft the first time a mod "
+               L"needs them, so check the internet connection and reload the "
+               L"mod.";
+    }
+
+    const BYTE* sig = (const BYTE*)TrayUI_GetAutoHideFlags_Address + kSigOffset;
+    g_offsetsVerified = memcmp(sig, kSig, sizeof(kSig)) == 0;
+    if (!g_offsetsVerified) {
+        return L"This build of taskbar.dll does not match what the mod was "
+               L"built against, so it cannot safely read the taskbar's state. "
+               L"A Windows update most likely changed it, and the mod needs "
+               L"updating to match.";
+    }
+
     WindhawkUtils::SYMBOL_HOOK hooks[] = {
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))",
           LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"},
@@ -1094,15 +1130,6 @@ PCWSTR SetUpHooks() {
         Wh_Log(L"slide duration offsets unverified, durations left alone");
     } else {
         Wh_Log(L"slide duration offsets verified");
-    }
-
-    const BYTE* sig = (const BYTE*)TrayUI_GetAutoHideFlags_Original + kSigOffset;
-    g_offsetsVerified = memcmp(sig, kSig, sizeof(kSig)) == 0;
-    if (!g_offsetsVerified) {
-        return L"This build of taskbar.dll does not match what the mod was "
-               L"built against, so it cannot safely read the taskbar's state. "
-               L"A Windows update most likely changed it, and the mod needs "
-               L"updating to match.";
     }
 
     return nullptr;

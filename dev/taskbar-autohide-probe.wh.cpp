@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-probe
 // @name            Taskbar auto-hide probe (diagnostic)
 // @description     Reports what the shipping mod sees when it validates taskbar.dll
-// @version         1.1.0
+// @version         1.2.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -137,19 +137,43 @@ void ReportLoadedMods() {
 // the one explanation consistent with a matching file hash.
 void ReportDiskComparison(HMODULE loaded, DWORD rva, const BYTE* live,
                           size_t count) {
-    HMODULE data = LoadLibraryExW(L"taskbar.dll", nullptr,
-                                  LOAD_LIBRARY_AS_DATAFILE);
-    if (!data) {
-        Report(L"could not map taskbar.dll as data");
+    WCHAR path[MAX_PATH];
+    if (!GetModuleFileNameW(loaded, path, ARRAYSIZE(path))) {
+        Report(L"could not get the module path");
         return;
     }
 
-    // LOAD_LIBRARY_AS_DATAFILE returns the base with its low bits flagged.
-    const BYTE* base = (const BYTE*)((ULONG_PTR)data & ~(ULONG_PTR)3);
+    // Map the file, not the module. LoadLibraryEx with LOAD_LIBRARY_AS_DATAFILE
+    // hands back the already-loaded image when the DLL is loaded, and applying
+    // PointerToRawData to an image base lands somewhere else entirely.
+    HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr,
+                              OPEN_EXISTING, 0, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+        Report(L"could not open taskbar.dll for reading");
+        return;
+    }
+
+    HANDLE mapping =
+        CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (!mapping) {
+        CloseHandle(file);
+        Report(L"could not map taskbar.dll");
+        return;
+    }
+
+    const BYTE* base = (const BYTE*)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+    if (!base) {
+        CloseHandle(mapping);
+        CloseHandle(file);
+        Report(L"could not view taskbar.dll");
+        return;
+    }
+
     auto* dos = (const IMAGE_DOS_HEADER*)base;
     auto* nt = (const IMAGE_NT_HEADERS64*)(base + dos->e_lfanew);
     auto* sec = IMAGE_FIRST_SECTION(nt);
 
+    bool found = false;
     for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
         if (rva < sec->VirtualAddress ||
             rva >= sec->VirtualAddress + sec->Misc.VirtualSize) {
@@ -158,18 +182,26 @@ void ReportDiskComparison(HMODULE loaded, DWORD rva, const BYTE* live,
 
         const BYTE* onDisk =
             base + sec->PointerToRawData + (rva - sec->VirtualAddress);
+        Report(L"section %.8S  file offset 0x%X", sec->Name,
+               (UINT)(sec->PointerToRawData + (rva - sec->VirtualAddress)));
+
         if (memcmp(onDisk, live, count) == 0) {
             Report(L"memory matches disk: nothing has patched this function");
         } else {
-            Report(L"MEMORY DIFFERS FROM DISK -- the function is patched");
+            Report(L"memory differs from disk: the function is patched");
             ReportBytes(L"on disk", onDisk, count);
         }
-        FreeLibrary(data);
-        return;
+        found = true;
+        break;
     }
 
-    Report(L"rva 0x%X not found in any section", rva);
-    FreeLibrary(data);
+    if (!found) {
+        Report(L"rva 0x%X not found in any section", rva);
+    }
+
+    UnmapViewOfFile(base);
+    CloseHandle(mapping);
+    CloseHandle(file);
 }
 
 using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void*);
