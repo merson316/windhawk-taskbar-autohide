@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.2
+// @version         1.11.3
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -471,9 +471,15 @@ void Diag(PCWSTR format, ...) {
     }
 
     WCHAR line[1024];
+    // Milliseconds since load, so gaps between actions are visible: the burst
+    // tracking carries state for up to five seconds, which makes the same
+    // action behave differently depending on how long since the last one.
+    static const ULONGLONG base = GetTickCount64();
+    wsprintfW(line, L"[%6u] ", (UINT)(GetTickCount64() - base));
+
     va_list args;
     va_start(args, format);
-    wvsprintfW(line, format, args);
+    wvsprintfW(line + lstrlenW(line), format, args);
     va_end(args);
     lstrcatW(line, L"\r\n");
 
