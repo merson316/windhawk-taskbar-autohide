@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.4.1
+// @version         1.5.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -43,6 +43,21 @@ That makes Cirn09's [Better Taskbar
 Autohide](https://windhawk.net/mods/taskbar-autohide-better) redundant; run one
 or the other, not both, since they hook the same function.
 
+## Nothing happens?
+
+In the order these actually turn out to be the cause:
+
+- **Auto-hide is not enabled in Windows.** Settings > Personalisation > Taskbar
+  > Taskbar behaviours. On a non-bottom edge that toggle can read back as off
+  even when it is on -- that is the bug this mod fixes, so seeing it turn itself
+  off means the mod is not running.
+- **The taskbar is on the bottom edge**, where Windows already handles
+  auto-hide. The mod leaves it alone.
+- **The edge faces another display**, so the mod skips it deliberately. See
+  "Skip edges facing another display".
+
+The mod writes which of these applies to the Windhawk log, once per session.
+
 ## Known limitations
 
 - The hide is a linear slide, not the eased Windows curve. Windows clamps every
@@ -50,6 +65,9 @@ or the other, not both, since they hook the same function.
   the reveal still uses Windows' own slide. Both durations are configurable.
 - Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
   class.
+- Windows parks a hidden taskbar with a sliver still on screen. The mod hides
+  it completely instead, since it does its own pointer tracking; "Hide
+  completely" turns that off.
 - An edge with another display beyond it has nowhere off-screen to hide into,
   so the mod skips it and that edge behaves as it does without the mod. This is
   detected automatically; see "Skip edges facing another display".
@@ -73,6 +91,14 @@ reason instead of failing silently. The taskbar is left alone in that state.
     position is occupied screen space on the neighbour, so the taskbar would
     slide into view there rather than out of sight. Such an edge is left to
     behave as it does without this mod.
+- hideFully: true
+  $name: Hide completely
+  $description: >-
+    Windows parks a hidden taskbar with a sliver still on screen so the pointer
+    can find it. On the bottom edge nobody notices; on the left, top and right
+    it reads as a line along the screen edge. This mod does its own pointer
+    tracking, so the sliver earns nothing. Turn this off to keep Windows'
+    position.
 - hideDurationMs: 0
   $name: Hide animation duration (ms)
   $description: >-
@@ -168,6 +194,7 @@ volatile LONG g_warned = 0;
 
 struct Settings {
     bool skipAdjacentEdges = true;
+    bool hideFully = true;
     int revealTolerance = 8;
     int revealDwellMs = 120;
     int notificationHoldMs = 1500;
@@ -192,6 +219,7 @@ int ClampDuration(int ms) {
 void LoadSettings() {
     g_settings.skipAdjacentEdges =
         Wh_GetIntSetting(L"skipAdjacentEdges") != 0;
+    g_settings.hideFully = Wh_GetIntSetting(L"hideFully") != 0;
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
     if (g_settings.revealTolerance < 1) {
         g_settings.revealTolerance = 1;
@@ -325,6 +353,16 @@ bool IsSupportedBuild() {
 
     g_buildNumber = vi.dwBuildNumber;
     return vi.dwBuildNumber >= 26200;
+}
+
+PCWSTR EdgeName(UINT edge) {
+    switch (edge) {
+        case ABE_LEFT:   return L"left";
+        case ABE_TOP:    return L"top";
+        case ABE_RIGHT:  return L"right";
+        case ABE_BOTTOM: return L"bottom";
+        default:         return L"unknown";
+    }
 }
 
 // ------------------------------------------------------------ hooked symbols
@@ -756,11 +794,29 @@ void WatcherTick() {
     }
 
     UINT edge = *(UINT*)((BYTE*)g_trayUI + TRAYUI_EDGE_OFFSET);
+    UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
+
+    // Three of the four outcomes below are the mod working correctly while
+    // appearing to do nothing, which is otherwise indistinguishable from a
+    // fault without attaching a diagnostic build.
+    static bool stateLogged = false;
+    if (!stateLogged) {
+        stateLogged = true;
+        Wh_Log(L"docked %s, Windows auto-hide %s -- %s", EdgeName(edge),
+               (stored & ABS_AUTOHIDE) ? L"on" : L"off",
+               edge >= ABE_BOTTOM
+                   ? L"bottom edge, Windows handles this itself"
+               : !EdgeEnabled(edge)
+                   ? L"a display sits beyond this edge, so it is skipped"
+               : !(stored & ABS_AUTOHIDE)
+                   ? L"nothing to do until auto-hide is turned on in Windows"
+                   : L"active");
+    }
+
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
     }
 
-    UINT stored = *(UINT*)((BYTE*)g_trayUI + TRAYUI_FLAGS_OFFSET);
     if (!(stored & ABS_AUTOHIDE)) {
         return;
     }
@@ -831,6 +887,22 @@ void WatcherTick() {
     if (g_trayWnd) {
         RECT hidden{};
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
+
+        // Windows leaves a sliver on screen so the pointer can find the
+        // taskbar. CursorAtRevealStrip does that job here, with its own
+        // tolerance, so the sliver is only a line along the edge. Park the
+        // window past the edge instead. Only left and top matter: the slide
+        // moves the window without resizing it.
+        RECT mon{};
+        if (g_settings.hideFully && TrayMonitorRect(&mon)) {
+            const LONG w = docked.right - docked.left;
+            const LONG h = docked.bottom - docked.top;
+            switch (edge) {
+                case ABE_LEFT:  hidden.left = mon.left - w; break;
+                case ABE_TOP:   hidden.top = mon.top - h;   break;
+                case ABE_RIGHT: hidden.left = mon.right;    break;
+            }
+        }
 
         GetWindowRect(g_trayWnd, &g_animFrom);
         g_dockedBeforeHide = docked;

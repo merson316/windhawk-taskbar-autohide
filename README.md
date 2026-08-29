@@ -58,6 +58,7 @@ Compile → Enable.
 
 | Setting | Default | Meaning |
 |---|---|---|
+| Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so it hides the taskbar completely. |
 | Skip edges facing another display | on | Leaves an edge alone when a monitor sits beyond it, since there is nowhere off-screen to hide into. The bottom edge is never touched, as Windows already handles it. |
 | Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
@@ -96,6 +97,28 @@ requested position after that clamp so the intermediate frames survive.
 The **reveal** still goes through Windows' own `SlideWindow`, a synchronous loop
 on the taskbar's thread. Its duration is therefore also how long the shell is
 blocked, so keep it short -- a few hundred milliseconds at most.
+
+## Nothing happens?
+
+In the order these actually turn out to be the cause:
+
+1. **Auto-hide is not enabled in Windows.** Settings → Personalisation → Taskbar
+   → Taskbar behaviours. On a non-bottom edge that toggle can read back as *off*
+   even when the registry has it on -- that is the masked `GetAutoHideFlags`
+   read this mod exists to fix, so a toggle that turns itself off means the mod
+   is not running.
+2. **The taskbar is on the bottom edge.** Windows already handles auto-hide
+   there and the mod leaves it alone.
+3. **The edge faces another display**, so the mod skips it deliberately and that
+   edge behaves as it does with the mod uninstalled.
+
+Cases 2 and 3 are the mod working correctly while appearing to do nothing. It
+writes which one applies to the Windhawk log once per session, so the answer
+does not need a diagnostic build:
+
+```
+docked right, Windows auto-hide on -- a display sits beyond this edge, so it is skipped
+```
 
 ## Known limitations
 
