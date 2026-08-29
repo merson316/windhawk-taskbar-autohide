@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.3
+// @version         1.11.4
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -542,6 +542,36 @@ bool ForegroundIsShellHost(DWORD pid) {
     cachedPid = pid;
     cachedResult = match;
     return match;
+}
+
+// A flyout only takes the foreground when the window behind it was not an
+// ordinary app -- hovering a taskbar button while Terminal is focused leaves
+// Terminal foreground, so no focus test can see the thumbnail peek. The pointer
+// can: it is inside the flyout, which is the whole reason the taskbar must stay
+// up. Same tool-window rule, asked of the window under the cursor.
+bool PointerOverShellSurface() {
+    POINT pt;
+    if (!GetCursorPos(&pt)) {
+        return false;
+    }
+
+    HWND under = WindowFromPoint(pt);
+    if (!under) {
+        return false;
+    }
+
+    HWND top = GetAncestor(under, GA_ROOT);
+    if (!top || top == g_trayWnd) {
+        return false;   // the taskbar itself is tested separately
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(top, &pid);
+    if (pid != GetCurrentProcessId()) {
+        return false;
+    }
+
+    return (GetWindowLongPtrW(top, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0;
 }
 
 // Whether the user is interacting with the shell at all. Used to decide that a
@@ -1259,13 +1289,14 @@ void WatcherTick() {
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
 
-    if (PtInRect(&docked, pt) || ShellSurfaceInForeground()) {
+    if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
+        ShellSurfaceInForeground()) {
         g_leaveTicks = 0;
         return;
     }
 
     if (g_leaveTicks == 0) {
-        DiagForeground(L"HIDE: pointer off taskbar, no surface open --");
+        DiagForeground(L"HIDE: not on taskbar, not on a flyout, none open --");
     }
 
     if ((LONG64)GetTickCount64() <
