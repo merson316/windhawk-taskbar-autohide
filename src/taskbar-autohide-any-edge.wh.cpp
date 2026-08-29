@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.7.0
+// @version         1.8.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -103,6 +103,16 @@ reason instead of failing silently. The taskbar is left alone in that state.
     position.
 
     Default: on.
+- hideFrameRate: 90
+  $name: Hide animation frame rate
+  $description: >-
+    Frames per second for the hide slide. Higher is smoother and costs more
+    CPU. Range 30-240.
+
+    Only the hide is affected, because only the hide is animated by this mod.
+    The reveal uses Windows' own slide.
+
+    Default: 90.
 - hideDurationMs: 0
   $name: Hide animation duration (ms)
   $description: >-
@@ -216,6 +226,7 @@ volatile LONG g_warned = 0;
 struct Settings {
     bool skipAdjacentEdges = true;
     bool hideFully = true;
+    int hideFrameRate = 90;
     int revealTolerance = 8;
     int revealDwellMs = 0;
     int notificationHoldMs = 1500;
@@ -241,6 +252,13 @@ void LoadSettings() {
     g_settings.skipAdjacentEdges =
         Wh_GetIntSetting(L"skipAdjacentEdges") != 0;
     g_settings.hideFully = Wh_GetIntSetting(L"hideFully") != 0;
+
+    g_settings.hideFrameRate = Wh_GetIntSetting(L"hideFrameRate");
+    if (g_settings.hideFrameRate < 30) {
+        g_settings.hideFrameRate = 30;
+    } else if (g_settings.hideFrameRate > 240) {
+        g_settings.hideFrameRate = 240;
+    }
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
     if (g_settings.revealTolerance < 1) {
         g_settings.revealTolerance = 1;
@@ -802,6 +820,66 @@ RECT g_clipRect{};
 volatile LONG g_windowHidden = 0;
 RECT g_dockedBeforeHide{};
 
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+// GetTickCount64 advances in ~15.6 ms steps, so sampling it once per frame at
+// any useful rate returns the same value repeatedly and the slide renders
+// duplicate positions. QueryPerformanceCounter is what makes a frame rate mean
+// anything.
+double g_qpcPeriodMs = 0.0;
+HANDLE g_frameTimer = nullptr;
+
+double NowMs() {
+    // Without this the slide would never advance and the loop would spin until
+    // the mod unloaded. QueryPerformanceFrequency is documented never to fail
+    // on anything this mod runs on, which is exactly why the fallback is cheap.
+    if (g_qpcPeriodMs == 0.0) {
+        return (double)GetTickCount64();
+    }
+
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart * g_qpcPeriodMs;
+}
+
+void FrameTimerInit() {
+    LARGE_INTEGER f;
+    if (QueryPerformanceFrequency(&f) && f.QuadPart) {
+        g_qpcPeriodMs = 1000.0 / (double)f.QuadPart;
+    }
+
+    // Sleep cannot resolve finer than the system timer, typically 15.6 ms, so a
+    // requested 90 fps would silently cap near 64. A high-resolution timer is
+    // not bound by it, and unlike timeBeginPeriod it costs the rest of the
+    // process nothing.
+    g_frameTimer = CreateWaitableTimerExW(
+        nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+        TIMER_MODIFY_STATE | SYNCHRONIZE);
+    if (!g_frameTimer) {
+        g_frameTimer = CreateWaitableTimerExW(nullptr, nullptr, 0,
+                                              TIMER_MODIFY_STATE | SYNCHRONIZE);
+    }
+}
+
+void FrameWait(double ms) {
+    if (ms <= 0.0) {
+        return;
+    }
+
+    if (g_frameTimer) {
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)(ms * 10000.0);   // relative, 100 ns units
+        if (SetWaitableTimer(g_frameTimer, &due, 0, nullptr, nullptr, FALSE)) {
+            WaitForSingleObject(g_frameTimer, INFINITE);
+            return;
+        }
+    }
+
+    Sleep((DWORD)(ms + 0.5));
+}
+
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
     const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
@@ -829,7 +907,10 @@ void RunHideAnimation() {
     }
 
 
-    const ULONGLONG start = GetTickCount64();
+    const double start = NowMs();
+    const double frameBudgetMs = 1000.0 / g_settings.hideFrameRate;
+    double frameStart = start;
+
     for (;;) {
         // Abandon the slide if the mod is unloading: this runs on the watch
         // thread, and a full-length animation would outlast the join in
@@ -838,17 +919,20 @@ void RunHideAnimation() {
             break;
         }
 
-        const ULONGLONG elapsed = GetTickCount64() - start;
-        if (elapsed >= (ULONGLONG)ms) {
+        const double elapsed = NowMs() - start;
+        if (elapsed >= (double)ms) {
             break;
         }
-        const double t = (double)elapsed / ms;
+        const double t = elapsed / ms;
         LONG x = from.left + (LONG)((to.left - from.left) * t);
         LONG y = from.top + (LONG)((to.top - from.top) * t);
 
         SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
                      SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        Sleep(16);
+
+        // Sleep what is left of the frame, not a fixed amount after the work.
+        FrameWait(frameBudgetMs - (NowMs() - frameStart));
+        frameStart = NowMs();
     }
 
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
@@ -1369,6 +1453,8 @@ BOOL Wh_ModInit() {
     }
 
     // Started even when the mod has stood down: it raises the warning.
+    FrameTimerInit();
+
     g_watchMsg = RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeTick");
     if (!g_watchMsg) {
         Wh_Log(L"could not register the tick message");
@@ -1441,6 +1527,12 @@ void Wh_ModBeforeUninit() {
 
 void Wh_ModUninit() {
     StopWatchThread();
+
+    if (g_frameTimer) {
+        CloseHandle(g_frameTimer);
+        g_frameTimer = nullptr;
+    }
+
     if (g_trayWnd && g_subclassed) {
         WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_trayWnd,
                                                          TrayWatchProc);

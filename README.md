@@ -60,6 +60,7 @@ Compile → Enable.
 |---|---|---|
 | Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so it hides the taskbar completely. |
 | Skip edges facing another display | on | Leaves an edge alone when a monitor sits beyond it, since there is nowhere off-screen to hide into. The bottom edge is never touched, as Windows already handles it. |
+| Hide animation frame rate | 90 | Frames per second for the hide slide. Higher is smoother and costs more CPU; range 30-240. Only the hide is animated by this mod; the reveal uses Windows' own slide. |
 | Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
@@ -97,6 +98,16 @@ requested position after that clamp so the intermediate frames survive.
 The **reveal** still goes through Windows' own `SlideWindow`, a synchronous loop
 on the taskbar's thread. Its duration is therefore also how long the shell is
 blocked, so keep it short -- a few hundred milliseconds at most.
+
+Only the hide has a frame rate setting, for the same reason. The mod paces those
+frames from `QueryPerformanceCounter` against a per-frame budget, waiting on a
+high-resolution timer: `GetTickCount64` advances in ~15.6 ms steps, so sampling
+it once per frame renders duplicate positions, and `Sleep` cannot resolve finer
+than the system timer, which would cap a requested 90 fps near 64. To smooth the
+reveal as well, [Taskbar auto-hide
+speed](https://github.com/ramensoftware/windhawk-mods) applies the same
+technique to `SlideWindow` by hooking `Sleep` and `GetTickCount` on the thread
+inside it, which is the only way to reach a loop this mod does not own.
 
 ## Nothing happens?
 
