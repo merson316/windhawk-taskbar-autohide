@@ -143,17 +143,17 @@ reason instead of failing silently. The taskbar is left alone in that state.
     above is 0.
 
     Default: 5000.
-- revealDwellMs: 120
+- revealDwellMs: 0
   $name: Reveal dwell (ms)
   $description: >-
     How long the pointer must stay in the trigger strip before the taskbar
     appears. Raise it if the taskbar appears when you were only moving to the
     next screen. A pointer already over the taskbar never waits.
 
-    Set to 0 to turn the dwell off, revealing as soon as the pointer reaches
-    the strip.
+    Off by default, revealing as soon as the pointer reaches the strip, which
+    is how Windows behaves on the bottom edge.
 
-    Default: 120.
+    Default: 0.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
@@ -216,7 +216,7 @@ struct Settings {
     bool skipAdjacentEdges = true;
     bool hideFully = true;
     int revealTolerance = 8;
-    int revealDwellMs = 120;
+    int revealDwellMs = 0;
     int notificationHoldMs = 1500;
     int notificationBurstGapMs = 5000;
     int hideDurationMs = 0;
