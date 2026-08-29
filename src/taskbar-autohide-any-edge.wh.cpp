@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.9.3
+// @version         1.9.4
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1045,18 +1045,15 @@ void RunHideAnimation() {
         frameStart = NowMs();
     }
 
-    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
-                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-    RECT settled{};
-    GetWindowRect(g_trayWnd, &settled);
-    HideDiag(L"  slide ended: asked for %ld, window is at %ld", to.left,
-             settled.left);
-
-    // Hold it there. Windows otherwise moves the taskbar back to its own hidden
-    // rect on the next WM_WINDOWPOSCHANGING -- a sliver short of off-screen,
-    // which is the line this setting exists to remove. Cleared on reveal and on
-    // unload.
+    // Arm the hold before the final move, not after, and stand the animation
+    // clamp down first so the hold is the branch that runs.
+    //
+    // The animation clamp restores whatever position the caller asked for.
+    // That is right for the mod's own frames, but Windows repositions the
+    // taskbar to its own hidden rect as the slide ends, and the clamp then
+    // faithfully preserves Windows' position -- a sliver short of off-screen,
+    // which is the line this setting exists to remove. The hold forces the
+    // mod's position regardless of who asked.
     if (g_settings.hideFully) {
         const LONG w = g_dockedBeforeHide.right - g_dockedBeforeHide.left;
         const LONG h = g_dockedBeforeHide.bottom - g_dockedBeforeHide.top;
@@ -1065,6 +1062,14 @@ void RunHideAnimation() {
     }
 
     InterlockedExchange(&g_animOverride, 0);
+
+    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+    RECT settled{};
+    GetWindowRect(g_trayWnd, &settled);
+    HideDiag(L"  slide ended: asked for %ld, window is at %ld", to.left,
+             settled.left);
 }
 
 // ------------------------------------------------------------ pointer watcher
