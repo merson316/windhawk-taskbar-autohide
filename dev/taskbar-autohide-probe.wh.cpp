@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-probe
 // @name            Taskbar auto-hide probe (diagnostic)
 // @description     Reports what the shipping mod sees when it validates taskbar.dll
-// @version         1.4.0
+// @version         1.5.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -21,8 +21,12 @@ Installs no hooks and changes no behaviour: it resolves symbols, reads bytes,
 writes a report to `%LOCALAPPDATA%\windhawk-autohide-probe.txt`, and stops.
 Safe to leave enabled, and safe to run alongside the mod it is diagnosing.
 
+After the one-off report it samples for 20 seconds: hide the taskbar during
+that time and it records where the taskbar window actually goes, and what else
+is left touching the screen edge.
+
 Send that file back. It contains no personal data -- Windows build numbers,
-module addresses and machine code from a system DLL.
+module addresses, machine code from a system DLL, and window rectangles.
 */
 // ==/WindhawkModReadme==
 
@@ -299,6 +303,94 @@ void ReportTaskbarState() {
     }
 }
 
+// Two fixes aimed at Shell_TrayWnd did not remove the line along the screen
+// edge, so establish whether that window is even the thing still on screen.
+// Samples where the taskbar goes, and anything else thin and edge-hugging.
+volatile LONG g_sampleStop = 0;
+HANDLE g_sampleThread = nullptr;
+
+struct EdgeScan {
+    RECT mon;
+    int found;
+};
+
+BOOL CALLBACK EdgeWindowProc(HWND hWnd, LPARAM param) {
+    auto* scan = (EdgeScan*)param;
+    if (!IsWindowVisible(hWnd)) {
+        return TRUE;
+    }
+
+    RECT r{};
+    if (!GetWindowRect(hWnd, &r)) {
+        return TRUE;
+    }
+
+    const LONG w = r.right - r.left, h = r.bottom - r.top;
+    if (w <= 0 || h <= 0) {
+        return TRUE;
+    }
+
+    // A line: thin in one axis, long in the other, and flush against an edge.
+    const bool thinV = w <= 8 && h >= (scan->mon.bottom - scan->mon.top) / 2;
+    const bool thinH = h <= 8 && w >= (scan->mon.right - scan->mon.left) / 2;
+    const bool atEdge = r.left <= scan->mon.left + 8 ||
+                        r.right >= scan->mon.right - 8 ||
+                        r.top <= scan->mon.top + 8 ||
+                        r.bottom >= scan->mon.bottom - 8;
+    if (!((thinV || thinH) && atEdge)) {
+        return TRUE;
+    }
+
+    WCHAR cls[128] = L"";
+    GetClassNameW(hWnd, cls, ARRAYSIZE(cls));
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hWnd, &pid);
+    Report(L"    edge window %p  (%ld,%ld)-(%ld,%ld)  pid %lu  class %s",
+           (void*)hWnd, r.left, r.top, r.right, r.bottom, pid, cls);
+    scan->found++;
+    return TRUE;
+}
+
+DWORD WINAPI SampleProc(LPVOID) {
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    MONITORINFO mi{sizeof(mi)};
+    if (tray) {
+        GetMonitorInfoW(MonitorFromWindow(tray, MONITOR_DEFAULTTOPRIMARY), &mi);
+    }
+
+    RECT last{};
+    BOOL lastVisible = -1;
+
+    for (int i = 0; i < 80 && !InterlockedCompareExchange(&g_sampleStop, 0, 0);
+         i++) {
+        if (tray) {
+            RECT r{};
+            GetWindowRect(tray, &r);
+            const BOOL vis = IsWindowVisible(tray);
+
+            // Only on change, so the file stays readable.
+            if (!EqualRect(&r, &last) || vis != lastVisible) {
+                Report(L"  t+%04dms  Shell_TrayWnd (%ld,%ld)-(%ld,%ld) %s",
+                       i * 250, r.left, r.top, r.right, r.bottom,
+                       vis ? L"visible" : L"HIDDEN");
+                EdgeScan scan{mi.rcMonitor, 0};
+                EnumWindows(EdgeWindowProc, (LPARAM)&scan);
+                if (!scan.found) {
+                    Report(L"    nothing else at the edge");
+                }
+                last = r;
+                lastVisible = vis;
+            }
+        }
+        Sleep(250);
+    }
+
+    Report(L"");
+    Report(L"=== sampling done ===");
+    FlushFileBuffers(g_out);
+    return 0;
+}
+
 using TrayUI_GetAutoHideFlags_t = UINT(WINAPI*)(void*);
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Address;
 
@@ -462,8 +554,22 @@ BOOL Wh_ModInit() {
     ReportBytes(L"GetAutoHideFlags", fn, 0x80);
 
     Report(L"");
-    Report(L"=== end ===");
-    CloseHandle(g_out);
-    g_out = INVALID_HANDLE_VALUE;
+    Report(L"=== sampling for 20s -- hide the taskbar now ===");
+    FlushFileBuffers(g_out);
+
+    g_sampleThread = CreateThread(nullptr, 0, SampleProc, nullptr, 0, nullptr);
     return TRUE;
+}
+
+void Wh_ModUninit() {
+    InterlockedExchange(&g_sampleStop, 1);
+    if (g_sampleThread) {
+        WaitForSingleObject(g_sampleThread, 3000);
+        CloseHandle(g_sampleThread);
+        g_sampleThread = nullptr;
+    }
+    if (g_out != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_out);
+        g_out = INVALID_HANDLE_VALUE;
+    }
 }
