@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.5
+// @version         1.11.6
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1290,9 +1290,22 @@ void WatcherTick() {
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {
         if (g_leaveTicks != 0) {
-            Diag(L"HELD: onTaskbar=%d onFlyout=%d surfaceOpen=%d",
+            HWND under = WindowFromPoint(pt);
+            HWND top = under ? GetAncestor(under, GA_ROOT) : nullptr;
+            WCHAR cls[96] = L"";
+            GetClassNameW(top, cls, ARRAYSIZE(cls));
+            RECT tr{};
+            GetWindowRect(top, &tr);
+            DWORD tpid = 0;
+            GetWindowThreadProcessId(top, &tpid);
+            Diag(L"HELD: onTaskbar=%d onFlyout=%d surfaceOpen=%d | cursor "
+                 L"(%ld,%ld) over %p pid=%lu ex=0x%08X vis=%d "
+                 L"(%ld,%ld)-(%ld,%ld) cls=%s",
                  (int)PtInRect(&docked, pt), (int)PointerOverShellSurface(),
-                 (int)ShellSurfaceInForeground());
+                 (int)ShellSurfaceInForeground(), pt.x, pt.y, (void*)top, tpid,
+                 (UINT)GetWindowLongPtrW(top, GWL_EXSTYLE),
+                 (int)IsWindowVisible(top), tr.left, tr.top, tr.right,
+                 tr.bottom, cls);
         }
         g_leaveTicks = 0;
         return;
