@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.9.1
+// @version         1.9.2
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1178,6 +1178,13 @@ void WatcherTick() {
         GetWindowRect(g_trayWnd, &g_animFrom);
         g_dockedBeforeHide = docked;
         g_animTo = hidden;
+
+        Wh_Log(L"hide: hideFully=%d docked=(%ld,%ld)-(%ld,%ld) mon.left=%ld "
+               L"mon.right=%ld from=(%ld,%ld)-(%ld,%ld) to=(%ld,%ld)-(%ld,%ld)",
+               (int)g_settings.hideFully, docked.left, docked.top, docked.right,
+               docked.bottom, mon.left, mon.right, g_animFrom.left,
+               g_animFrom.top, g_animFrom.right, g_animFrom.bottom, hidden.left,
+               hidden.top, hidden.right, hidden.bottom);
         g_animDurationMs =
             g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
         g_animEdge = edge;
