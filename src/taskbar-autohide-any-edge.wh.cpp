@@ -91,6 +91,8 @@ reason instead of failing silently. The taskbar is left alone in that state.
     position is occupied screen space on the neighbour, so the taskbar would
     slide into view there rather than out of sight. Such an edge is left to
     behave as it does without this mod.
+
+    Default: on.
 - hideFully: true
   $name: Hide completely
   $description: >-
@@ -99,6 +101,8 @@ reason instead of failing silently. The taskbar is left alone in that state.
     it reads as a line along the screen edge. This mod does its own pointer
     tracking, so the sliver earns nothing. Turn this off to keep Windows'
     position.
+
+    Default: on.
 - hideDurationMs: 0
   $name: Hide animation duration (ms)
   $description: >-
@@ -108,9 +112,14 @@ reason instead of failing silently. The taskbar is left alone in that state.
     The mod animates the hide itself: Windows clamps each intermediate position
     to the endpoint, which is why an unmodified vertical taskbar appears to
     vanish instantly.
+
+    Default: 0.
 - showDurationMs: 0
   $name: Reveal animation duration (ms)
-  $description: 0 keeps the Windows default of 200 ms. Range 25-2000.
+  $description: >-
+    0 keeps the Windows default of 200 ms. Range 25-2000.
+
+    Default: 0.
 - notificationHoldMs: 1500
   $name: Notifications - keep visible for (ms)
   $description: >-
@@ -120,6 +129,8 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
     Set to 0 to turn notification handling off. Applies on every edge,
     including the bottom.
+
+    Default: 1500.
 - notificationBurstGapMs: 5000
   $name: Notifications - treat as one within (ms)
   $description: >-
@@ -130,18 +141,25 @@ reason instead of failing silently. The taskbar is left alone in that state.
     Raise it if the taskbar keeps reappearing during a single notification;
     lower it if two separate notifications get merged. Unused when the setting
     above is 0.
+
+    Default: 5000.
 - revealDwellMs: 120
   $name: Reveal dwell (ms)
   $description: >-
     How long the pointer must stay in the trigger strip before the taskbar
     appears. Raise it if the taskbar appears when you were only moving to the
-    next screen; 0 reveals instantly.
+    next screen; 0 reveals instantly. A pointer already over the taskbar never
+    waits.
+
+    Default: 120.
 - revealTolerance: 8
   $name: Reveal trigger width (pixels)
   $description: >-
     How close to the screen edge the pointer must get to bring the taskbar
     back. Raise it if the taskbar is hard to summon, lower it if it appears
     when you did not mean it to.
+
+    Default: 8.
 */
 // ==/WindhawkModSettings==
 
