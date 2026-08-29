@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.9.0
+// @version         1.9.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1008,6 +1008,17 @@ void RunHideAnimation() {
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
+    // Hold it there. Windows otherwise moves the taskbar back to its own hidden
+    // rect on the next WM_WINDOWPOSCHANGING -- a sliver short of off-screen,
+    // which is the line this setting exists to remove. Cleared on reveal and on
+    // unload.
+    if (g_settings.hideFully) {
+        const LONG w = g_dockedBeforeHide.right - g_dockedBeforeHide.left;
+        const LONG h = g_dockedBeforeHide.bottom - g_dockedBeforeHide.top;
+        g_clipRect = {to.left, to.top, to.left + w, to.top + h};
+        InterlockedExchange(&g_clipHold, 1);
+    }
+
     InterlockedExchange(&g_animOverride, 0);
 }
 
@@ -1583,6 +1594,8 @@ void RestoreTaskbarIfHidden() {
     if (!(*flags & ABS_AUTOHIDE) || !(*flags & ABS_ALWAYSONTOP)) {
         return;   // not hidden
     }
+
+    InterlockedExchange(&g_clipHold, 0);   // or the restore below is clamped
 
     *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
 
