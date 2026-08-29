@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.10.1
+// @version         1.10.2
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -450,42 +450,8 @@ volatile LONG64 g_holdVisibleUntil = 0;
 volatile LONG64 g_lastNotifyUnhide = 0;
 
 // Windows 11 hosts Start, Search and the shell flyouts in their own processes,
-// so the taskbar is not the foreground window while any of them is open, and
-// testing for the taskbar itself holds it up only for as long as the
-// notification hold happens to last.
-bool ShellSurfaceInForeground() {
-    HWND fg = GetForegroundWindow();
-    if (!fg) {
-        return false;
-    }
-
-    // The taskbar holding focus is not a surface being open. It keeps focus
-    // after one of its own flyouts closes -- the system tray overflow, for
-    // instance -- which left the taskbar up until something else was clicked.
-    if (fg == g_trayWnd) {
-        return false;
-    }
-
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    if (!pid) {
-        return false;
-    }
-
-    // A different window of the shell's, and one actually on screen: the tray
-    // overflow and the other taskbar flyouts are hosted in this process. The
-    // desktop is hosted here too, and clicking it is the opposite of a surface
-    // being open -- without this it held the taskbar up indefinitely.
-    if (pid == GetCurrentProcessId()) {
-        WCHAR cls[64] = L"";
-        if (GetClassNameW(fg, cls, ARRAYSIZE(cls)) &&
-            (lstrcmpiW(cls, L"Progman") == 0 ||
-             lstrcmpiW(cls, L"WorkerW") == 0)) {
-            return false;
-        }
-        return IsWindowVisible(fg) != FALSE;
-    }
-
+// so the taskbar is not the foreground window while any of them is open.
+bool ForegroundIsShellHost(DWORD pid) {
     // Resolving the image name every tick is wasteful and the foreground
     // process rarely changes.
     static DWORD cachedPid = 0;
@@ -522,13 +488,56 @@ bool ShellSurfaceInForeground() {
     return match;
 }
 
-// Whether the user is interacting with the shell at all, the taskbar itself
-// included. Distinct from the question above: a repeat unhide arriving while
-// the taskbar has focus is the user asking for it, not a notification
-// repeating, so it must not be suppressed. Keeping an already-visible taskbar
-// up is the other question, and there the taskbar's own focus means nothing.
+// Whether the user is interacting with the shell at all. Used to decide that a
+// repeat unhide is the user asking rather than a notification repeating, so it
+// is deliberately broad: the taskbar itself counts, and so does the desktop.
 bool ShellHasFocus() {
-    return GetForegroundWindow() == g_trayWnd || ShellSurfaceInForeground();
+    HWND fg = GetForegroundWindow();
+    if (!fg) {
+        return false;
+    }
+    if (fg == g_trayWnd) {
+        return true;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (!pid) {
+        return false;
+    }
+    if (pid == GetCurrentProcessId()) {
+        return true;
+    }
+    return ForegroundIsShellHost(pid);
+}
+
+// Whether a shell surface is actually open, which is the different question of
+// whether to keep an already-visible taskbar up. Narrow where the above is
+// broad: the taskbar holding focus is not a surface -- it keeps focus after its
+// own flyouts close -- and neither is the desktop.
+bool ShellSurfaceInForeground() {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == g_trayWnd) {
+        return false;
+    }
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (!pid) {
+        return false;
+    }
+
+    if (pid == GetCurrentProcessId()) {
+        WCHAR cls[64] = L"";
+        if (GetClassNameW(fg, cls, ARRAYSIZE(cls)) &&
+            (lstrcmpiW(cls, L"Progman") == 0 ||
+             lstrcmpiW(cls, L"WorkerW") == 0)) {
+            return false;   // the desktop, not a flyout
+        }
+        return IsWindowVisible(fg) != FALSE;
+    }
+
+    return ForegroundIsShellHost(pid);
 }
 
 // What kind of unhide opened the current burst. A flashing button repeats one
