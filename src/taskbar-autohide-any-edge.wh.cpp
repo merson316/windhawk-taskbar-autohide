@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.11.6
+// @version         1.11.7
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -563,6 +563,14 @@ bool PointerOverShellSurface() {
     HWND top = GetAncestor(under, GA_ROOT);
     if (!top || top == g_trayWnd) {
         return false;   // the taskbar itself is tested separately
+    }
+
+    // The desktop is a tool window in explorer.exe spanning every monitor
+    // (Progman, WS_EX_TOOLWINDOW), so without this the rule below matches
+    // anywhere the pointer is not over an ordinary window, and the taskbar
+    // never hides. GetShellWindow names it without depending on the class.
+    if (top == GetShellWindow()) {
+        return false;
     }
 
     DWORD pid = 0;
