@@ -1176,8 +1176,8 @@ BOOL CALLBACK CloseDialogProc(HWND hWnd, LPARAM) {
     WCHAR cls[16];
     if (GetClassNameW(hWnd, cls, ARRAYSIZE(cls)) &&
         lstrcmpW(cls, L"#32770") == 0) {
-        // WM_CLOSE is ignored by an MB_OK message box, whose close button is
-        // disabled. Clicking its button is not.
+        // Clicking the button, rather than WM_CLOSE, which a message box may
+        // or may not honour depending on the buttons it was given.
         PostMessageW(hWnd, WM_COMMAND, MAKEWPARAM(IDOK, BN_CLICKED), 0);
     }
     return TRUE;
