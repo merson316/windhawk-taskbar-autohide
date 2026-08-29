@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.9.5
+// @version         1.10.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -458,8 +458,12 @@ bool ShellSurfaceInForeground() {
     if (!fg) {
         return false;
     }
+
+    // The taskbar holding focus is not a surface being open. It keeps focus
+    // after one of its own flyouts closes -- the system tray overflow, for
+    // instance -- which left the taskbar up until something else was clicked.
     if (fg == g_trayWnd) {
-        return true;
+        return false;
     }
 
     DWORD pid = 0;
@@ -467,8 +471,11 @@ bool ShellSurfaceInForeground() {
     if (!pid) {
         return false;
     }
+
+    // A different window of the shell's, and one actually on screen: the tray
+    // overflow and the other taskbar flyouts are hosted in this process.
     if (pid == GetCurrentProcessId()) {
-        return true;   // another of the shell's own windows
+        return IsWindowVisible(fg) != FALSE;
     }
 
     // Resolving the image name every tick is wasteful and the foreground
