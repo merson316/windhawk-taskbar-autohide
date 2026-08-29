@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.9.4
+// @version         1.9.5
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -178,9 +178,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <windhawk_utils.h>
 
 #include <shellapi.h>
-#include <shlobj.h>
 #include <wtsapi32.h>
-#include <stdarg.h>
 #include <string>
 
 #include <utility>
@@ -952,44 +950,6 @@ void WINAPI Sleep_Hook(DWORD ms) {
     g_slideFrameStart = NowMs();
 }
 
-// TEMPORARY -- diagnosing why the hidden taskbar rests 2px short of the
-// computed position. Writes where Wh_Log cannot be read from without
-// DebugView. Remove once the resting position is explained.
-void HideDiag(PCWSTR format, ...) {
-    WCHAR path[MAX_PATH];
-    if (FAILED(SHGetFolderPathW(nullptr, CSIDL_LOCAL_APPDATA, nullptr, 0,
-                                path))) {
-        return;
-    }
-    lstrcatW(path, L"\\windhawk-autohide-hide.log");
-
-    HANDLE f = CreateFileW(path, FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE |
-                               FILE_SHARE_DELETE,
-                           nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL,
-                           nullptr);
-    if (f == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    WCHAR line[1024];
-    va_list args;
-    va_start(args, format);
-    wvsprintfW(line, format, args);
-    va_end(args);
-    lstrcatW(line, L"\r\n");
-
-    char utf8[2048];
-    int len = WideCharToMultiByte(CP_UTF8, 0, line, -1, utf8, sizeof(utf8),
-                                  nullptr, nullptr);
-    if (len > 1) {
-        DWORD written = 0;
-        SetFilePointer(f, 0, nullptr, FILE_END);
-        WriteFile(f, utf8, len - 1, &written, nullptr);
-    }
-    CloseHandle(f);
-}
-
 void RunHideAnimation() {
     const RECT from = g_animFrom, to = g_animTo;
     const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
@@ -1065,11 +1025,6 @@ void RunHideAnimation() {
 
     SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-    RECT settled{};
-    GetWindowRect(g_trayWnd, &settled);
-    HideDiag(L"  slide ended: asked for %ld, window is at %ld", to.left,
-             settled.left);
 }
 
 // ------------------------------------------------------------ pointer watcher
@@ -1228,14 +1183,6 @@ void WatcherTick() {
         GetWindowRect(g_trayWnd, &g_animFrom);
         g_dockedBeforeHide = docked;
         g_animTo = hidden;
-
-        HideDiag(L"hide: hideFully=%d docked=(%ld,%ld)-(%ld,%ld) mon.left=%ld "
-                 L"mon.right=%ld from=(%ld,%ld)-(%ld,%ld) to=(%ld,%ld)-(%ld,%ld)",
-                 (int)g_settings.hideFully, docked.left, docked.top,
-                 docked.right, docked.bottom, mon.left, mon.right,
-                 g_animFrom.left, g_animFrom.top, g_animFrom.right,
-                 g_animFrom.bottom, hidden.left, hidden.top, hidden.right,
-                 hidden.bottom);
         g_animDurationMs =
             g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
         g_animEdge = edge;
