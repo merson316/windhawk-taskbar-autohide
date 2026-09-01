@@ -122,7 +122,10 @@ In the order these actually turn out to be the cause:
    → Taskbar behaviours. On a non-bottom edge that toggle can read back as *off*
    even when the registry has it on -- that is the masked `GetAutoHideFlags`
    read this mod exists to fix, so a toggle that turns itself off means the mod
-   is not running.
+   is not running. Because the same masked read backs the Settings toggle, a
+   session spent with the mod inert can leave the setting written back off, so
+   an install that failed once tends to fail the same way again. Since v1.13.0
+   the mod raises a dialog for this rather than only logging it.
 2. **The taskbar is on the bottom edge.** Windows already handles auto-hide
    there and the mod leaves it alone.
 3. **The edge faces another display**, so the mod skips it deliberately and that
@@ -130,7 +133,9 @@ In the order these actually turn out to be the cause:
 
 Cases 2 and 3 are the mod working correctly while appearing to do nothing. It
 writes which one applies to the Windhawk log once per session, so the answer
-does not need a diagnostic build:
+does not need a diagnostic build. The line is written from the
+`GetAutoHideFlags` hook, which runs whatever the edge -- before v1.13.0 it was
+written from the watcher, which never reaches these two cases:
 
 ```
 docked right, Windows auto-hide on -- a display sits beyond this edge, so it is skipped
@@ -173,6 +178,7 @@ dialog naming the reason:
 | A taskbar function could not be found | Symbols resolved but incompletely. Reloading the mod re-downloads them. |
 | `taskbar.dll` does not match | A Windows update recompiled `GetAutoHideFlags`, so the member offsets can no longer be trusted. The mod needs updating. |
 | Could not attach to the taskbar window | The taskbar never appeared, or subclassing it failed. |
+| Auto-hide is turned off in Windows | The mod is running correctly and has nothing to do. Historically the most common report of "it does not work". |
 
 Failures are deliberately not fatal to loading. Returning `FALSE` from
 `Wh_ModInit` makes Windhawk unload the mod immediately, which would pull the DLL

@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.12.0
+// @version         1.13.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -211,12 +211,20 @@ volatile LONG g_watchStop = 0;
 // counts as a failure rather than as boot still being in progress.
 #define WARN_SETTLE_MS 5000
 #define WARN_NO_TASKBAR_MS 30000
+#define WARN_AUTOHIDE_OFF_MS 15000
 
 // Set when the mod cannot do its job. Kept rather than returning FALSE from
 // Wh_ModInit: Windhawk unloads a mod whose init failed, taking the DLL out from
 // under the thread that raises the warning. Every hook below stands down on
 // this, so staying loaded is inert.
 PCWSTR g_fatalReason = nullptr;
+
+// 1 while the taskbar sits on an edge this mod would act on but Windows'
+// auto-hide toggle is off, which is the mod's most common "it does nothing"
+// report and is invisible from inside Windows: the Settings toggle reads back
+// from the same masked GetAutoHideFlags this mod exists to unmask, so off-bottom
+// it shows unchecked whether or not it is. Republished on every state read.
+volatile LONG g_autoHideOff = 0;
 volatile LONG g_warned = 0;
 
 #define LEAVE_TICKS    2
@@ -666,6 +674,36 @@ bool CursorOverTaskbar(void* pThis) {
 
 // ------------------------------------------------------------------- hooks
 
+// Three of the four outcomes below are the mod working correctly while
+// appearing to do nothing, which is otherwise indistinguishable from a fault
+// without attaching a diagnostic build. Reached from GetAutoHideFlags, which
+// runs whatever the edge: the two "working correctly" cases are exactly the
+// ones the watcher never reports, because it needs a TrayUI pointer this hook
+// used to decline to publish on the edges it stands down for.
+void LogStateOnce(UINT edge, UINT stored) {
+    static volatile LONG logged = 0;
+    if (InterlockedExchange(&logged, 1) != 0) {
+        return;
+    }
+
+    Wh_Log(L"docked %s, Windows auto-hide %s -- %s", EdgeName(edge),
+           (stored & ABS_AUTOHIDE) ? L"on" : L"off",
+           edge >= ABE_BOTTOM ? L"bottom edge, Windows handles this itself"
+           : !EdgeEnabled(edge)
+               ? L"a display sits beyond this edge, so it is skipped"
+           : !(stored & ABS_AUTOHIDE)
+               ? L"nothing to do until auto-hide is turned on in Windows"
+               : L"active");
+}
+
+void PublishAutoHideState(UINT edge, UINT stored) {
+    InterlockedExchange(&g_autoHideOff, (edge < ABE_BOTTOM && EdgeEnabled(edge) &&
+                                         !(stored & ABS_AUTOHIDE))
+                                            ? 1
+                                            : 0);
+}
+
+
 // Returns the stored flags rather than the zero the original reports when the
 // taskbar is not docked to the bottom.
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
@@ -674,19 +712,25 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
         return ret;
     }
 
-    UINT edge = *(UINT*)((BYTE*)pThis + g_getFlagsEdgeOffset);
-    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
-        return ret;
-    }
-
     // This function is reached on a base 8 bytes below the one the other calls
     // use, so it is a second source for the pointer the watcher needs. Without
     // it the watcher idles until a layout pass happens to run GetDockedRect.
+    // Published before the edge is judged: every caller re-checks the edge for
+    // itself, and standing down is the case whose pointer is hardest to come by.
     if (!g_trayUI) {
         g_trayUI = (BYTE*)pThis + 8;
     }
 
-    return *(UINT*)((BYTE*)pThis + g_getFlagsFlagsOffset);
+    UINT edge = *(UINT*)((BYTE*)pThis + g_getFlagsEdgeOffset);
+    UINT stored = *(UINT*)((BYTE*)pThis + g_getFlagsFlagsOffset);
+    LogStateOnce(edge, stored);
+    PublishAutoHideState(edge, stored);
+
+    if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
+        return ret;
+    }
+
+    return stored;
 }
 
 // GetDockedRect returns the hidden rect only when both ABS_AUTOHIDE and
@@ -1151,23 +1195,7 @@ void WatcherTick() {
 
     UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
     UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
-
-    // Three of the four outcomes below are the mod working correctly while
-    // appearing to do nothing, which is otherwise indistinguishable from a
-    // fault without attaching a diagnostic build.
-    static bool stateLogged = false;
-    if (!stateLogged) {
-        stateLogged = true;
-        Wh_Log(L"docked %s, Windows auto-hide %s -- %s", EdgeName(edge),
-               (stored & ABS_AUTOHIDE) ? L"on" : L"off",
-               edge >= ABE_BOTTOM
-                   ? L"bottom edge, Windows handles this itself"
-               : !EdgeEnabled(edge)
-                   ? L"a display sits beyond this edge, so it is skipped"
-               : !(stored & ABS_AUTOHIDE)
-                   ? L"nothing to do until auto-hide is turned on in Windows"
-                   : L"active");
-    }
+    PublishAutoHideState(edge, stored);
 
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
@@ -1375,18 +1403,15 @@ bool ThisProcessOwnsTaskbar() {
 
 // A failed mod leaves the taskbar behaving as it does with no mod installed,
 // which looks exactly like a machine where nothing happens to hide.
-void WarnOnce(PCWSTR reason) {
+void WarnOnce(PCWSTR body) {
     if (InterlockedExchange(&g_warned, 1) != 0) {
         return;
     }
 
     WCHAR title[] = L"Windhawk - Taskbar auto-hide on any edge";
     WCHAR text[1024];
-    wsprintfW(text,
-              L"Taskbar auto-hide on any edge is not running.\n\n%s\n\n"
-              L"The taskbar will behave as it does with the mod uninstalled. "
-              L"Disable or remove the mod in Windhawk to stop this warning.",
-              reason);
+    wsprintfW(text, L"%s\n\nDisable or remove the mod in Windhawk to stop "
+                    L"this warning.", body);
 
     // The session owns the dialog, so nothing here waits on the user.
     // MessageBoxW would park this thread inside mod code until the button was
@@ -1398,6 +1423,16 @@ void WarnOnce(PCWSTR reason) {
                     (DWORD)(lstrlenW(title) * sizeof(WCHAR)), text,
                     (DWORD)(lstrlenW(text) * sizeof(WCHAR)),
                     MB_OK | MB_ICONWARNING, 0, &response, FALSE);
+}
+
+// The mod stood down, so the taskbar behaves as it does uninstalled.
+void WarnNotRunning(PCWSTR reason) {
+    WCHAR body[768];
+    wsprintfW(body,
+              L"Taskbar auto-hide on any edge is not running.\n\n%s\n\n"
+              L"The taskbar will behave as it does with the mod uninstalled.",
+              reason);
+    WarnOnce(body);
 }
 
 DWORD WINAPI WatchThreadProc(LPVOID) {
@@ -1413,11 +1448,19 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
             !InterlockedCompareExchange(&g_warned, 0, 0)) {
             if (g_fatalReason) {
                 if (ThisProcessOwnsTaskbar()) {
-                    WarnOnce(g_fatalReason);
+                    WarnNotRunning(g_fatalReason);
                 }
             } else if ((!g_trayWnd || !g_subclassed) &&
                        up > WARN_NO_TASKBAR_MS && ThisProcessOwnsTaskbar()) {
-                WarnOnce(L"The mod could not attach to the taskbar window.");
+                WarnNotRunning(
+                    L"The mod could not attach to the taskbar window.");
+            } else if (up > WARN_AUTOHIDE_OFF_MS &&
+                       InterlockedCompareExchange(&g_autoHideOff, 0, 0) &&
+                       ThisProcessOwnsTaskbar()) {
+                WarnOnce(L"Auto-hide is turned off in Windows, so there is "
+                         L"nothing for this mod to do. Turn it on under "
+                         L"Settings > Personalisation > Taskbar > Taskbar "
+                         L"behaviours.");
             }
         }
 
