@@ -1,7 +1,9 @@
-# Samples Shell_TrayWnd's extended style and z-order neighbours for 20 seconds.
+# Samples Shell_TrayWnd's extended style and z-order neighbours until stopped.
 # Answers one question: while the taskbar is SHOWN, has it lost WS_EX_TOPMOST?
-# Run it, then reveal the taskbar over an app that covers it.
-# Usage:  .\tools\traystyle.ps1
+# The symptom is intermittent, so leave this running and read the log after you
+# next see the taskbar behind something. Logs only on a change, so an untroubled
+# session leaves a handful of lines.
+# Usage:  .\tools\traystyle.ps1        (Ctrl+C to stop)
 $ErrorActionPreference = 'Stop'
 
 Add-Type @"
@@ -34,12 +36,11 @@ function Describe([IntPtr]$h) {
 
 $log = Join-Path $env:LOCALAPPDATA 'windhawk-autohide-zorder.log'
 "--- started $(Get-Date -Format o) ---" | Out-File $log -Encoding utf8
-Write-Host "Sampling for 20s. Reveal the taskbar over an app that covers it."
+Write-Host "Sampling until stopped (Ctrl+C). Logs only when the state changes."
 Write-Host "Writing to $log`n"
 
 $last = ''
-$end = (Get-Date).AddSeconds(20)
-while ((Get-Date) -lt $end) {
+while ($true) {
   $t = [W]::FindWindowW('Shell_TrayWnd', $null)
   if ($t -ne [IntPtr]::Zero) {
     $ex = [W]::GetWindowLongW($t, -20)
@@ -61,6 +62,5 @@ while ((Get-Date) -lt $end) {
       $stamp | Out-File $log -Append -Encoding utf8
     }
   }
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds 500
 }
-Write-Host "`nDone. Log: $log"

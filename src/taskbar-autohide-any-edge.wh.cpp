@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.0
+// @version         1.13.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1168,6 +1168,63 @@ void RunHideAnimation() {
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// --------------------------------------------------------- z-order detector
+
+// The taskbar revealing underneath other windows has not been reproducible on
+// demand, so this has to be running whenever the user is rather than during a
+// sampling window. It costs one style read per tick while the taskbar is shown;
+// naming the window on top of it only happens on a transition.
+//
+// The suspicion it exists to test: this mod repurposed ABS_ALWAYSONTOP as its
+// hidden marker, so a shown taskbar carries flags 0x1 where Windows persists
+// 0x3, and that bit is also how Windows is told to keep the window on top.
+// A hit here makes the state model the cause; no hit over a session that
+// showed the symptom rules it out.
+void CheckShownZOrder(const RECT* docked) {
+    if (!g_trayWnd) {
+        return;
+    }
+
+    const bool topmost =
+        (GetWindowLongW(g_trayWnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+
+    static int lastTopmost = -1;
+    if ((int)topmost == lastTopmost) {
+        return;
+    }
+    const bool first = lastTopmost < 0;
+    lastTopmost = (int)topmost;
+
+    if (topmost) {
+        if (!first) {
+            Wh_Log(L"z-order: taskbar is topmost again");
+        }
+        return;
+    }
+
+    // Whatever is painted over the middle of it is the best lead available.
+    POINT mid{(docked->left + docked->right) / 2,
+              (docked->top + docked->bottom) / 2};
+    HWND at = WindowFromPoint(mid);
+    if (at) {
+        at = GetAncestor(at, GA_ROOT);
+    }
+
+    WCHAR cls[128] = L"(none)";
+    DWORD pid = 0;
+    if (at && at != g_trayWnd) {
+        GetClassNameW(at, cls, ARRAYSIZE(cls));
+        GetWindowThreadProcessId(at, &pid);
+    } else if (at) {
+        lstrcpyW(cls, L"(the taskbar itself)");
+    }
+
+    UINT stored = g_trayUI ? *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) : 0;
+    Wh_Log(L"z-order: taskbar shown but NOT topmost -- flags 0x%X, covered by "
+           L"%s pid %u",
+           stored, cls, pid);
+}
+
 // ------------------------------------------------------------ pointer watcher
 
 // Windows' cursor-at-edge detection does not run off-bottom, and none of the
@@ -1262,6 +1319,8 @@ void WatcherTick() {
     }
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
+
+    CheckShownZOrder(&docked);
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {
