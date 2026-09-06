@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.2
+// @version         1.13.3
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1171,56 +1171,91 @@ void RunHideAnimation() {
 // --------------------------------------------------------- z-order detector
 
 // The taskbar revealing underneath other windows is not reproducible on demand,
-// so this runs on every tick the taskbar is shown rather than in a sampling
-// window.
+// so this runs from the watcher rather than in a sampling window.
 //
-// It tests coverage, not WS_EX_TOPMOST. A snapshot taken while the symptom was
-// live had the style bit set -- exstyle 0x88 -- with a plain non-topmost window
-// sitting above the taskbar in the z-order all the same, so the style bit is a
-// proxy that reports "fine" during the fault. What is actually painted over the
-// taskbar is the symptom itself.
-void CheckShownZOrder(const RECT* docked) {
-    if (!g_trayWnd || IsRectEmpty(docked)) {
+// What it tests took three instruments to get right. WS_EX_TOPMOST is not it: a
+// snapshot taken while the symptom was live had the style bit set and the
+// taskbar sitting below a plain window all the same, so a style check reports
+// "fine" during the fault. The real state is the taskbar's position in the
+// z-order -- it had been demoted out of the topmost band while keeping the
+// style, and had put itself back by the time the next snapshot ran, which is
+// why the symptom comes and goes without the mod being touched.
+//
+// A visible, non-trivial window above the taskbar that is not itself topmost
+// means the band is broken. The walk skips the invisible tooltip and IME
+// siblings that sit above the taskbar even when it is at the top of the order,
+// and is bounded so a long sibling list cannot stall the watcher.
+HWND FirstRealWindowAbove(HWND wnd) {
+    HWND h = wnd;
+    for (int i = 0; i < 40 && h; i++) {
+        h = GetWindow(h, GW_HWNDPREV);
+        if (!h) {
+            return nullptr;   // nothing above it: top of the z-order
+        }
+        if (!IsWindowVisible(h)) {
+            continue;
+        }
+        RECT r{};
+        if (!GetWindowRect(h, &r) ||
+            ((r.right - r.left) <= 2 && (r.bottom - r.top) <= 2)) {
+            continue;
+        }
+        return h;
+    }
+    return nullptr;
+}
+
+void DescribeWnd(HWND h, PWSTR cls, int cch, DWORD* pid) {
+    lstrcpynW(cls, L"?", cch);
+    *pid = 0;
+    if (h) {
+        GetClassNameW(h, cls, cch);
+        GetWindowThreadProcessId(h, pid);
+    }
+}
+
+// Called on every watcher tick, hidden or shown: the fault was first caught
+// while the taskbar was hidden, so gating this on the shown state would have
+// missed it. Throttled, because the state persists for seconds at a time and
+// the walk is the most expensive thing the watcher does.
+void CheckZOrder() {
+    if (!g_trayWnd) {
         return;
     }
 
-    POINT mid{(docked->left + docked->right) / 2,
-              (docked->top + docked->bottom) / 2};
-    HWND at = WindowFromPoint(mid);
-    if (at) {
-        at = GetAncestor(at, GA_ROOT);
-    }
-    const bool covered = at && at != g_trayWnd;
-
-    static int lastCovered = -1;
-    static HWND lastBy = nullptr;
-    if ((int)covered == lastCovered && at == lastBy) {
+    static int ticks = 0;
+    if ((ticks++ % 8) != 0) {
         return;
     }
-    const bool first = lastCovered < 0;
-    lastCovered = (int)covered;
-    lastBy = at;
 
-    if (!covered) {
+    HWND above = FirstRealWindowAbove(g_trayWnd);
+    const bool demoted =
+        above && (GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
+
+    static int lastDemoted = -1;
+    if ((int)demoted == lastDemoted) {
+        return;
+    }
+    const bool first = lastDemoted < 0;
+    lastDemoted = (int)demoted;
+
+    if (!demoted) {
         if (!first) {
-            Wh_Log(L"z-order: taskbar is clear again");
+            Wh_Log(L"z-order: taskbar is back at the top of the band");
         }
         return;
     }
 
-    WCHAR cls[128] = L"?";
+    WCHAR cls[128];
     DWORD pid = 0;
-    GetClassNameW(at, cls, ARRAYSIZE(cls));
-    GetWindowThreadProcessId(at, &pid);
+    DescribeWnd(above, cls, ARRAYSIZE(cls), &pid);
 
     const LONG trayEx = GetWindowLongW(g_trayWnd, GWL_EXSTYLE);
-    const LONG overEx = GetWindowLongW(at, GWL_EXSTYLE);
     UINT stored = g_trayUI ? *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) : 0;
 
-    Wh_Log(L"z-order: taskbar covered at %d,%d by %s pid %u (its exstyle "
-           L"0x%08X%s); taskbar exstyle 0x%08X%s, flags 0x%X",
-           mid.x, mid.y, cls, pid, (unsigned)overEx,
-           (overEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", (unsigned)trayEx,
+    Wh_Log(L"z-order: taskbar DEMOTED below %s pid %u -- taskbar exstyle "
+           L"0x%08X%s, flags 0x%X",
+           cls, pid, (unsigned)trayEx,
            (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored);
 }
 
@@ -1252,6 +1287,7 @@ void WatcherTick() {
     UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
     UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
     PublishAutoHideState(edge, stored);
+    CheckZOrder();
 
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
@@ -1318,8 +1354,6 @@ void WatcherTick() {
     }
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
-
-    CheckShownZOrder(&docked);
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {
