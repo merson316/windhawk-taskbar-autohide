@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.4
+// @version         1.13.5
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1271,7 +1271,12 @@ void CheckZOrder() {
     lastDemoted = (int)demoted;
 
     if (!demoted) {
-        if (!first) {
+        if (first) {
+            // Proof of life. Without it an empty log is indistinguishable from
+            // a logger that never worked, and this fault gives us one
+            // occurrence to catch.
+            ZLog(L"baseline: taskbar at the top of the band, detector live");
+        } else {
             Wh_Log(L"z-order: taskbar is back at the top of the band");
             ZLog(L"taskbar is back at the top of the band");
         }
