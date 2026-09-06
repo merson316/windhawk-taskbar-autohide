@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.1
+// @version         1.13.2
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1170,59 +1170,58 @@ void RunHideAnimation() {
 
 // --------------------------------------------------------- z-order detector
 
-// The taskbar revealing underneath other windows has not been reproducible on
-// demand, so this has to be running whenever the user is rather than during a
-// sampling window. It costs one style read per tick while the taskbar is shown;
-// naming the window on top of it only happens on a transition.
+// The taskbar revealing underneath other windows is not reproducible on demand,
+// so this runs on every tick the taskbar is shown rather than in a sampling
+// window.
 //
-// The suspicion it exists to test: this mod repurposed ABS_ALWAYSONTOP as its
-// hidden marker, so a shown taskbar carries flags 0x1 where Windows persists
-// 0x3, and that bit is also how Windows is told to keep the window on top.
-// A hit here makes the state model the cause; no hit over a session that
-// showed the symptom rules it out.
+// It tests coverage, not WS_EX_TOPMOST. A snapshot taken while the symptom was
+// live had the style bit set -- exstyle 0x88 -- with a plain non-topmost window
+// sitting above the taskbar in the z-order all the same, so the style bit is a
+// proxy that reports "fine" during the fault. What is actually painted over the
+// taskbar is the symptom itself.
 void CheckShownZOrder(const RECT* docked) {
-    if (!g_trayWnd) {
+    if (!g_trayWnd || IsRectEmpty(docked)) {
         return;
     }
 
-    const bool topmost =
-        (GetWindowLongW(g_trayWnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
-
-    static int lastTopmost = -1;
-    if ((int)topmost == lastTopmost) {
-        return;
-    }
-    const bool first = lastTopmost < 0;
-    lastTopmost = (int)topmost;
-
-    if (topmost) {
-        if (!first) {
-            Wh_Log(L"z-order: taskbar is topmost again");
-        }
-        return;
-    }
-
-    // Whatever is painted over the middle of it is the best lead available.
     POINT mid{(docked->left + docked->right) / 2,
               (docked->top + docked->bottom) / 2};
     HWND at = WindowFromPoint(mid);
     if (at) {
         at = GetAncestor(at, GA_ROOT);
     }
+    const bool covered = at && at != g_trayWnd;
 
-    WCHAR cls[128] = L"(none)";
-    DWORD pid = 0;
-    if (at && at != g_trayWnd) {
-        GetClassNameW(at, cls, ARRAYSIZE(cls));
-        GetWindowThreadProcessId(at, &pid);
-    } else if (at) {
-        lstrcpyW(cls, L"(the taskbar itself)");
+    static int lastCovered = -1;
+    static HWND lastBy = nullptr;
+    if ((int)covered == lastCovered && at == lastBy) {
+        return;
+    }
+    const bool first = lastCovered < 0;
+    lastCovered = (int)covered;
+    lastBy = at;
+
+    if (!covered) {
+        if (!first) {
+            Wh_Log(L"z-order: taskbar is clear again");
+        }
+        return;
     }
 
+    WCHAR cls[128] = L"?";
+    DWORD pid = 0;
+    GetClassNameW(at, cls, ARRAYSIZE(cls));
+    GetWindowThreadProcessId(at, &pid);
+
+    const LONG trayEx = GetWindowLongW(g_trayWnd, GWL_EXSTYLE);
+    const LONG overEx = GetWindowLongW(at, GWL_EXSTYLE);
     UINT stored = g_trayUI ? *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) : 0;
-    Wh_Log(L"z-order: taskbar shown but NOT topmost -- flags 0x%X, covered by "
-           L"%s pid %u",
-           stored, cls, pid);
+
+    Wh_Log(L"z-order: taskbar covered at %d,%d by %s pid %u (its exstyle "
+           L"0x%08X%s); taskbar exstyle 0x%08X%s, flags 0x%X",
+           mid.x, mid.y, cls, pid, (unsigned)overEx,
+           (overEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", (unsigned)trayEx,
+           (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored);
 }
 
 // ------------------------------------------------------------ pointer watcher

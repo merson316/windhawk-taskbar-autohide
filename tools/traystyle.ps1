@@ -11,13 +11,13 @@ using System;
 using System.Text;
 using System.Runtime.InteropServices;
 public static class W {
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr FindWindowW(string c, string n);
-  [DllImport("user32.dll", SetLastError=true)] public static extern int GetWindowLongW(IntPtr h, int i);
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
-  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
-  [DllImport("user32.dll")] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int m);
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr FindWindowW(string c, string n);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern int GetWindowLongW(IntPtr h, int i);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr GetAncestor(IntPtr h, uint f);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int m);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int left, top, right, bottom; }
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int x, y; }
 }
