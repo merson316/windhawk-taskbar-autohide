@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.5
+// @version         1.13.6
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -672,6 +672,9 @@ bool CursorOverTaskbar(void* pThis) {
     return GetCursorPos(&pt) && PtInRect(&r, pt);
 }
 
+// Defined with the z-order detector below; the flags hook reaches it too.
+void ZLog(PCWSTR text);
+
 // ------------------------------------------------------------------- hooks
 
 // Three of the four outcomes below are the mod working correctly while
@@ -751,7 +754,30 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
         effective = flags | ABS_ALWAYSONTOP;
     }
 
+    // Windows applies the taskbar's topmost state from these flags, and the
+    // mod clears ABS_ALWAYSONTOP on every reveal because it repurposed that bit
+    // as its hidden marker. Three of the four recorded demotions had the
+    // taskbar at exstyle 0x80 -- WS_EX_TOPMOST stripped -- so the question is
+    // whether this call is what strips it. Logged only when the style actually
+    // changes across the call, so a normal transition writes nothing.
+    const LONG exBefore =
+        g_trayWnd ? GetWindowLongW(g_trayWnd, GWL_EXSTYLE) : 0;
+
     TrayUI_SetAutoHideFlags_Original(pThis, effective);
+
+    const LONG exAfter = g_trayWnd ? GetWindowLongW(g_trayWnd, GWL_EXSTYLE) : 0;
+    if (g_trayWnd && exBefore != exAfter) {
+        WCHAR text[256];
+        wsprintfW(text,
+                  L"SetAutoHideFlags(edge=%u) asked 0x%X applied 0x%X -- "
+                  L"taskbar exstyle 0x%08X%s -> 0x%08X%s",
+                  edge, flags, effective, (unsigned)exBefore,
+                  (exBefore & WS_EX_TOPMOST) ? L" TOPMOST" : L"",
+                  (unsigned)exAfter,
+                  (exAfter & WS_EX_TOPMOST) ? L" TOPMOST" : L"");
+        Wh_Log(L"%s", text);
+        ZLog(text);
+    }
 }
 
 UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
