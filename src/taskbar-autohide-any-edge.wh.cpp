@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.3
+// @version         1.13.4
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1205,6 +1205,37 @@ HWND FirstRealWindowAbove(HWND wnd) {
     return nullptr;
 }
 
+// Wh_Log goes to Windhawk's viewer and nothing else: it reaches no file, and a
+// mod whose log verbosity is turned off produces nothing at all. This fault
+// shows up once in days and cannot be provoked, so the one record of it must
+// not depend on a setting nobody checked. Written alongside Wh_Log, not
+// instead of it. Temporary -- it goes when the cause is found.
+void ZLog(PCWSTR text) {
+    WCHAR path[MAX_PATH];
+    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", path, MAX_PATH);
+    if (!n || n >= MAX_PATH - 40) {
+        return;
+    }
+    lstrcatW(path, L"\\windhawk-autohide-zorder.log");
+
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    WCHAR line[1024];
+    wsprintfW(line, L"%04u-%02u-%02u %02u:%02u:%02u  %s\r\n", st.wYear,
+              st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, text);
+
+    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    DWORD written = 0;
+    WriteFile(h, line, (DWORD)(lstrlenW(line) * sizeof(WCHAR)), &written,
+              nullptr);
+    CloseHandle(h);
+}
+
 void DescribeWnd(HWND h, PWSTR cls, int cch, DWORD* pid) {
     lstrcpynW(cls, L"?", cch);
     *pid = 0;
@@ -1242,6 +1273,7 @@ void CheckZOrder() {
     if (!demoted) {
         if (!first) {
             Wh_Log(L"z-order: taskbar is back at the top of the band");
+            ZLog(L"taskbar is back at the top of the band");
         }
         return;
     }
@@ -1253,10 +1285,19 @@ void CheckZOrder() {
     const LONG trayEx = GetWindowLongW(g_trayWnd, GWL_EXSTYLE);
     UINT stored = g_trayUI ? *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) : 0;
 
-    Wh_Log(L"z-order: taskbar DEMOTED below %s pid %u -- taskbar exstyle "
-           L"0x%08X%s, flags 0x%X",
-           cls, pid, (unsigned)trayEx,
-           (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored);
+    // Whether the taskbar was hidden at the time narrows which path to suspect.
+    RECT tray{};
+    GetWindowRect(g_trayWnd, &tray);
+
+    WCHAR text[512];
+    wsprintfW(text,
+              L"taskbar DEMOTED below %s pid %u -- taskbar exstyle 0x%08X%s, "
+              L"flags 0x%X, rect %d,%d-%d,%d",
+              cls, pid, (unsigned)trayEx,
+              (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored, tray.left,
+              tray.top, tray.right, tray.bottom);
+    Wh_Log(L"z-order: %s", text);
+    ZLog(text);
 }
 
 // ------------------------------------------------------------ pointer watcher
