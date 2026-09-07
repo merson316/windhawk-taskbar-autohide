@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.9
+// @version         1.14.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -172,6 +172,18 @@ reason instead of failing silently. The taskbar is left alone in that state.
     when you did not mean it to.
 
     Default: 8.
+- keepTaskbarOnTop: true
+  $name: Keep the taskbar above other windows
+  $description: >-
+    Windows can drop the taskbar out of the always-on-top band while it is
+    hidden, and the reveal does not put it back, so it slides up behind
+    whatever sits over that edge. This puts it back as it appears.
+
+    Left alone when a full-screen window is in front: Windows lowers the
+    taskbar there on purpose, and overriding that would put it over
+    full-screen games and video.
+
+    Default: enabled.
 */
 // ==/WindhawkModSettings==
 
@@ -236,6 +248,7 @@ struct Settings {
     bool hideFully = true;
     int frameRate = 90;
     int revealTolerance = 8;
+    bool keepTaskbarOnTop = true;
     int revealDwellMs = 0;
     int notificationHoldMs = 1500;
     int notificationBurstGapMs = 5000;
@@ -267,6 +280,7 @@ void LoadSettings() {
     } else if (g_settings.frameRate > 240) {
         g_settings.frameRate = 240;
     }
+    g_settings.keepTaskbarOnTop = Wh_GetIntSetting(L"keepTaskbarOnTop") != 0;
     g_settings.revealTolerance = Wh_GetIntSetting(L"revealTolerance");
     if (g_settings.revealTolerance < 1) {
         g_settings.revealTolerance = 1;
@@ -1304,6 +1318,52 @@ bool TaskbarDemoted() {
     return above && (GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
 }
 
+// Windows lowers the taskbar out of the topmost band by design while a
+// full-screen window is in front. Telling the two cases apart is what keeps the
+// repair below from putting the taskbar over full-screen games and video.
+bool ForegroundFillsMonitor() {
+    HWND fg = GetForegroundWindow();
+    RECT r{};
+    if (!fg || !GetWindowRect(fg, &r)) {
+        return false;
+    }
+    HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{sizeof(mi)};
+    if (!mon || !GetMonitorInfoW(mon, &mi)) {
+        return false;
+    }
+    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
+           r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+}
+
+// Measured, not inferred: driving the pointer to the trigger strip and sampling
+// either side of the reveal gives demoted=1 before and demoted=1 after, with the
+// taskbar shown at 0,0-48,1440 and a plain window still above it. TrayUI::Unhide
+// does not restore the z-order, so the taskbar slides up behind whatever covers
+// that edge.
+//
+// Re-asserting HWND_TOPMOST rather than touching ABS_ALWAYSONTOP: the flags are
+// how Windows decides this for itself, and the earlier readings show it keeping
+// the style bit set throughout. This puts the window back in the band it already
+// claims to belong to.
+void RaiseTaskbarIfDemoted() {
+    if (!g_settings.keepTaskbarOnTop || !g_trayWnd) {
+        return;
+    }
+    if (!TaskbarDemoted() || ForegroundFillsMonitor()) {
+        return;
+    }
+
+    SetWindowPos(g_trayWnd, HWND_TOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    static volatile LONG logged = 0;
+    if (InterlockedExchange(&logged, 1) == 0) {
+        Wh_Log(L"z-order: taskbar was revealed demoted, raised it back");
+        ZLog(L"taskbar was revealed demoted, raised it back (logged once)");
+    }
+}
+
 void CheckZOrder() {
     if (!g_trayWnd) {
         return;
@@ -1478,6 +1538,8 @@ void WatcherTick() {
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
 
+        RaiseTaskbarIfDemoted();
+
         const bool demotedAfter = TaskbarDemoted();
         if (demotedBefore || demotedAfter) {
             WCHAR text[256];
@@ -1506,6 +1568,8 @@ void WatcherTick() {
     }
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
+
+    RaiseTaskbarIfDemoted();
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {

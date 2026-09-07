@@ -67,6 +67,7 @@ Compile → Enable.
 | Notifications - treat as one within | 5000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
 | Reveal dwell | 0 (off) | How long the pointer must rest in the trigger strip before the taskbar appears. Off by default; raise it if the taskbar appears when you were only crossing the edge. A pointer already over the taskbar never waits. |
 | Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
+| Keep the taskbar above other windows | on | Windows can drop the taskbar out of the always-on-top band while it is hidden, and the reveal does not put it back, so it slides up behind whatever sits over that edge. This puts it back as it appears. Left alone when a full-screen window is in front, where Windows lowers the taskbar deliberately. |
 
 ### Notification handling
 
@@ -140,6 +141,25 @@ written from the watcher, which never reaches these two cases:
 ```
 docked right, Windows auto-hide on -- a display sits beyond this edge, so it is skipped
 ```
+
+### The taskbar reveals behind other windows
+
+Windows lowers the taskbar out of the always-on-top band and `TrayUI::Unhide`
+does not put it back, so on a side edge the taskbar slides up underneath any
+window covering that edge. Driving the pointer to the trigger strip and sampling
+either side of the reveal shows it plainly:
+
+```
+before:    taskbar rect=-48,0-0,1440 hidden  first above='CASCADIA_HOSTING_WINDOW_CLASS' demoted=True
+revealed:  taskbar rect=0,0-48,1440  SHOWN   first above='CASCADIA_HOSTING_WINDOW_CLASS' demoted=True
+```
+
+The taskbar keeps `WS_EX_TOPMOST` throughout -- it is the position in the band
+that is lost, not the style -- so the fix re-asserts `HWND_TOPMOST` as the
+taskbar appears rather than touching the auto-hide flags, which is how Windows
+decides this for itself. It is skipped while a full-screen window is in front,
+because Windows lowers the taskbar there on purpose and overriding it would put
+the taskbar over full-screen games and video.
 
 ## Known limitations
 
