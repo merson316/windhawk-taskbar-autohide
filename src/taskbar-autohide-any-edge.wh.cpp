@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.8
+// @version         1.13.9
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1299,6 +1299,11 @@ void DescribeWnd(HWND h, PWSTR cls, int cch, DWORD* pid, PWSTR exe, int exeCch) 
 // while the taskbar was hidden, so gating this on the shown state would have
 // missed it. Throttled, because the state persists for seconds at a time and
 // the walk is the most expensive thing the watcher does.
+bool TaskbarDemoted() {
+    HWND above = FirstRealWindowAbove(g_trayWnd);
+    return above && (GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
+}
+
 void CheckZOrder() {
     if (!g_trayWnd) {
         return;
@@ -1310,8 +1315,7 @@ void CheckZOrder() {
     }
 
     HWND above = FirstRealWindowAbove(g_trayWnd);
-    const bool demoted =
-        above && (GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
+    const bool demoted = TaskbarDemoted();
 
     static int lastDemoted = -1;
     if ((int)demoted == lastDemoted) {
@@ -1464,9 +1468,29 @@ void WatcherTick() {
             ShowWindow(g_trayWnd, SW_SHOWNA);
         }
 
+        // If the taskbar was demoted while hidden, the reveal is the moment
+        // that has to undo it -- otherwise it comes back underneath whatever is
+        // sitting over the edge. Measured either side of the call rather than
+        // reasoned about: this is the transition, not the state after it.
+        const bool demotedBefore = TaskbarDemoted();
+
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
+
+        const bool demotedAfter = TaskbarDemoted();
+        if (demotedBefore || demotedAfter) {
+            WCHAR text[256];
+            wsprintfW(text,
+                      L"reveal: demoted before=%d after=%d -- Unhide %s the "
+                      L"taskbar's z-order",
+                      demotedBefore ? 1 : 0, demotedAfter ? 1 : 0,
+                      (demotedBefore && !demotedAfter) ? L"RESTORED"
+                      : demotedAfter                   ? L"did NOT restore"
+                                                       : L"left alone");
+            Wh_Log(L"%s", text);
+            ZLog(text);
+        }
         g_leaveTicks = 0;
         return;
     }
