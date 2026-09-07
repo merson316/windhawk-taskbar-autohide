@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.6
+// @version         1.13.7
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1320,13 +1320,38 @@ void CheckZOrder() {
     RECT tray{};
     GetWindowRect(g_trayWnd, &tray);
 
-    WCHAR text[512];
+    // Windows strips the taskbar's topmost state itself when a fullscreen window
+    // is in the foreground, and that is indistinguishable from the fault
+    // without knowing what was in front at the time. If the foreground window
+    // fills its monitor, this is Windows behaving as designed and the mod is
+    // not the actor.
+    HWND fg = GetForegroundWindow();
+    WCHAR fgCls[128];
+    DWORD fgPid = 0;
+    DescribeWnd(fg, fgCls, ARRAYSIZE(fgCls), &fgPid);
+
+    RECT fgRect{};
+    bool fillsMonitor = false;
+    if (fg && GetWindowRect(fg, &fgRect)) {
+        HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO mi{sizeof(mi)};
+        if (mon && GetMonitorInfoW(mon, &mi)) {
+            fillsMonitor = fgRect.left <= mi.rcMonitor.left &&
+                           fgRect.top <= mi.rcMonitor.top &&
+                           fgRect.right >= mi.rcMonitor.right &&
+                           fgRect.bottom >= mi.rcMonitor.bottom;
+        }
+    }
+
+    WCHAR text[768];
     wsprintfW(text,
               L"taskbar DEMOTED below %s pid %u -- taskbar exstyle 0x%08X%s, "
-              L"flags 0x%X, rect %d,%d-%d,%d",
+              L"flags 0x%X, rect %d,%d-%d,%d; foreground %s pid %u rect "
+              L"%d,%d-%d,%d fillsMonitor=%d",
               cls, pid, (unsigned)trayEx,
               (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored, tray.left,
-              tray.top, tray.right, tray.bottom);
+              tray.top, tray.right, tray.bottom, fgCls, fgPid, fgRect.left,
+              fgRect.top, fgRect.right, fgRect.bottom, fillsMonitor ? 1 : 0);
     Wh_Log(L"z-order: %s", text);
     ZLog(text);
 }
