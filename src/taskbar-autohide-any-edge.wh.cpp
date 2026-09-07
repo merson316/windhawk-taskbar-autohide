@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.13.7
+// @version         1.13.8
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1262,13 +1262,37 @@ void ZLog(PCWSTR text) {
     CloseHandle(h);
 }
 
-void DescribeWnd(HWND h, PWSTR cls, int cch, DWORD* pid) {
+// The windows that displace the taskbar have been short-lived: every pid
+// recorded so far was dead by the time the log was read, which makes a pid on
+// its own useless. Resolve the image name while the process still exists.
+void DescribeWnd(HWND h, PWSTR cls, int cch, DWORD* pid, PWSTR exe, int exeCch) {
     lstrcpynW(cls, L"?", cch);
+    lstrcpynW(exe, L"?", exeCch);
     *pid = 0;
-    if (h) {
-        GetClassNameW(h, cls, cch);
-        GetWindowThreadProcessId(h, pid);
+    if (!h) {
+        return;
     }
+
+    GetClassNameW(h, cls, cch);
+    GetWindowThreadProcessId(h, pid);
+
+    HANDLE proc =
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, *pid);
+    if (!proc) {
+        return;
+    }
+    WCHAR full[MAX_PATH];
+    DWORD n = ARRAYSIZE(full);
+    if (QueryFullProcessImageNameW(proc, 0, full, &n)) {
+        PCWSTR leaf = full;
+        for (PCWSTR q = full; *q; q++) {
+            if (*q == L'\\') {
+                leaf = q + 1;
+            }
+        }
+        lstrcpynW(exe, leaf, exeCch);
+    }
+    CloseHandle(proc);
 }
 
 // Called on every watcher tick, hidden or shown: the fault was first caught
@@ -1309,9 +1333,9 @@ void CheckZOrder() {
         return;
     }
 
-    WCHAR cls[128];
+    WCHAR cls[128], exe[128];
     DWORD pid = 0;
-    DescribeWnd(above, cls, ARRAYSIZE(cls), &pid);
+    DescribeWnd(above, cls, ARRAYSIZE(cls), &pid, exe, ARRAYSIZE(exe));
 
     const LONG trayEx = GetWindowLongW(g_trayWnd, GWL_EXSTYLE);
     UINT stored = g_trayUI ? *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) : 0;
@@ -1326,9 +1350,9 @@ void CheckZOrder() {
     // fills its monitor, this is Windows behaving as designed and the mod is
     // not the actor.
     HWND fg = GetForegroundWindow();
-    WCHAR fgCls[128];
+    WCHAR fgCls[128], fgExe[128];
     DWORD fgPid = 0;
-    DescribeWnd(fg, fgCls, ARRAYSIZE(fgCls), &fgPid);
+    DescribeWnd(fg, fgCls, ARRAYSIZE(fgCls), &fgPid, fgExe, ARRAYSIZE(fgExe));
 
     RECT fgRect{};
     bool fillsMonitor = false;
@@ -1343,15 +1367,22 @@ void CheckZOrder() {
         }
     }
 
-    WCHAR text[768];
+    // A taskbar that is off-screen cannot be seen behind anything, so only a
+    // shown one is the reported symptom. Both are recorded, tagged, because a
+    // demotion that begins while hidden and survives the reveal would otherwise
+    // look like two unrelated events.
+    const bool shown = !(stored & ABS_ALWAYSONTOP);
+
+    WCHAR text[1024];
     wsprintfW(text,
-              L"taskbar DEMOTED below %s pid %u -- taskbar exstyle 0x%08X%s, "
-              L"flags 0x%X, rect %d,%d-%d,%d; foreground %s pid %u rect "
-              L"%d,%d-%d,%d fillsMonitor=%d",
-              cls, pid, (unsigned)trayEx,
+              L"%s: taskbar DEMOTED below %s [%s] pid %u -- taskbar exstyle "
+              L"0x%08X%s, flags 0x%X, rect %d,%d-%d,%d; foreground %s [%s] "
+              L"pid %u rect %d,%d-%d,%d fillsMonitor=%d",
+              shown ? L"SHOWN" : L"hidden", cls, exe, pid, (unsigned)trayEx,
               (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored, tray.left,
-              tray.top, tray.right, tray.bottom, fgCls, fgPid, fgRect.left,
-              fgRect.top, fgRect.right, fgRect.bottom, fillsMonitor ? 1 : 0);
+              tray.top, tray.right, tray.bottom, fgCls, fgExe, fgPid,
+              fgRect.left, fgRect.top, fgRect.right, fgRect.bottom,
+              fillsMonitor ? 1 : 0);
     Wh_Log(L"z-order: %s", text);
     ZLog(text);
 }
