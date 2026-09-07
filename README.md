@@ -154,6 +154,10 @@ before:    taskbar rect=-48,0-0,1440 hidden  first above='CASCADIA_HOSTING_WINDO
 revealed:  taskbar rect=0,0-48,1440  SHOWN   first above='CASCADIA_HOSTING_WINDOW_CLASS' demoted=True
 ```
 
+The correction is applied before the slide starts, while the taskbar is still
+off-screen. Applying it afterwards works, but it is visible: the taskbar slides
+up behind the covering window and then jumps in front of it.
+
 The taskbar keeps `WS_EX_TOPMOST` throughout -- it is the position in the band
 that is lost, not the style -- so the fix re-asserts `HWND_TOPMOST` as the
 taskbar appears rather than touching the auto-hide flags, which is how Windows

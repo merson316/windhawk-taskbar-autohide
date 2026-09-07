@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.14.0
+// @version         1.14.1
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -686,8 +686,9 @@ bool CursorOverTaskbar(void* pThis) {
     return GetCursorPos(&pt) && PtInRect(&r, pt);
 }
 
-// Defined with the z-order detector below; the flags hook reaches it too.
+// Defined with the z-order detector below; the flags hook reaches these too.
 void ZLog(PCWSTR text);
+void RaiseTaskbarIfDemoted();
 
 // ------------------------------------------------------------------- hooks
 
@@ -776,6 +777,13 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     // changes across the call, so a normal transition writes nothing.
     const LONG exBefore =
         g_trayWnd ? GetWindowLongW(g_trayWnd, GWL_EXSTYLE) : 0;
+
+    // A reveal Windows drives itself starts here, by clearing the hidden bit.
+    // Raising now keeps those reveals free of the same visible jump.
+    if ((effective & ABS_AUTOHIDE) && !(effective & ABS_ALWAYSONTOP) &&
+        edge < ABE_BOTTOM && EdgeEnabled(edge)) {
+        RaiseTaskbarIfDemoted();
+    }
 
     TrayUI_SetAutoHideFlags_Original(pThis, effective);
 
@@ -1534,22 +1542,24 @@ void WatcherTick() {
         // reasoned about: this is the transition, not the state after it.
         const bool demotedBefore = TaskbarDemoted();
 
+        // Raised before the slide starts, not after it finishes. The taskbar is
+        // still off-screen here, so the correction is invisible; doing it
+        // afterwards means watching the taskbar slide up behind the window that
+        // covers the edge and then jump in front of it.
+        RaiseTaskbarIfDemoted();
+
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
-
-        RaiseTaskbarIfDemoted();
 
         const bool demotedAfter = TaskbarDemoted();
         if (demotedBefore || demotedAfter) {
             WCHAR text[256];
             wsprintfW(text,
-                      L"reveal: demoted before=%d after=%d -- Unhide %s the "
-                      L"taskbar's z-order",
+                      L"reveal: demoted before=%d after=%d -- raised %s the "
+                      L"slide",
                       demotedBefore ? 1 : 0, demotedAfter ? 1 : 0,
-                      (demotedBefore && !demotedAfter) ? L"RESTORED"
-                      : demotedAfter                   ? L"did NOT restore"
-                                                       : L"left alone");
+                      demotedAfter ? L"but it fell back during" : L"before");
             Wh_Log(L"%s", text);
             ZLog(text);
         }
