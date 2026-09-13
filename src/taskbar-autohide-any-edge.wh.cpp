@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.14.1
+// @version         1.15.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -56,7 +56,8 @@ In the order these actually turn out to be the cause:
 - **The edge faces another display**, so the mod skips it deliberately. See
   "Skip edges facing another display".
 
-The mod writes which of these applies to the Windhawk log, once per session.
+If auto-hide is off, the mod says so in a dialog. For the other two, it writes
+which one applies to the Windhawk log, once per session.
 
 ## Known limitations
 
@@ -71,6 +72,10 @@ The mod writes which of these applies to the Windhawk log, once per session.
 - An edge with another display beyond it has nowhere off-screen to hide into,
   so the mod skips it and that edge behaves as it does without the mod. This is
   detected automatically; see "Skip edges facing another display".
+- Windows can lower the taskbar out of the always-on-top band while it is
+  hidden, and its reveal does not raise it again. The mod raises it before the
+  slide starts, except while a full-screen window is in front. See "Keep the
+  taskbar above other windows".
 - Requires Windows 11 build 26200 or newer.
 
 ## If it does not work
@@ -189,11 +194,10 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
 #include <windhawk_utils.h>
 
+#include <initializer_list>
+
 #include <shellapi.h>
 #include <wtsapi32.h>
-#include <string>
-
-#include <utility>
 
 // ABE_LEFT/TOP/RIGHT/BOTTOM and ABS_AUTOHIDE/ABS_ALWAYSONTOP come from
 // shellapi.h.
@@ -232,10 +236,9 @@ volatile LONG g_watchStop = 0;
 PCWSTR g_fatalReason = nullptr;
 
 // 1 while the taskbar sits on an edge this mod would act on but Windows'
-// auto-hide toggle is off, which is the mod's most common "it does nothing"
-// report and is invisible from inside Windows: the Settings toggle reads back
-// from the same masked GetAutoHideFlags this mod exists to unmask, so off-bottom
-// it shows unchecked whether or not it is. Republished on every state read.
+// auto-hide toggle is off. That is the most common reason the mod appears to do
+// nothing, and Windows cannot show it: off-bottom, the Settings toggle reads
+// back through the same masked GetAutoHideFlags this mod unmasks.
 volatile LONG g_autoHideOff = 0;
 volatile LONG g_warned = 0;
 
@@ -440,18 +443,15 @@ using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
 TrayUI_GetStuckPlace_t TrayUI_GetStuckPlace_Original;
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
 
-// The function itself, resolved without hooking. Not interchangeable with the
-// pointer above: see the check in SetUpHooks.
+// Once a function is hooked, its _Original pointer is a trampoline, and the
+// bytes behind it belong to the hook engine rather than taskbar.dll. The
+// _Address pointers are resolved without hooking, for code that reads the
+// function's own instructions.
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Address;
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
 TrayUI_Unhide_t TrayUI_Unhide_Original;
-// Resolved, never hooked. Registering the same symbol twice in one HookSymbols
-// call corrupts the trampoline and breaks every slide, so the address is used
-// directly for both the signature check and the calls.
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
-// Resolved separately, never hooked: the pointer above becomes a trampoline
-// once hooked, and the duration signature must be read from the function.
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Address;
 
 bool g_offsetsVerified = false;
@@ -599,15 +599,17 @@ bool ShellSurfaceInForeground() {
     return ForegroundIsShellHost(pid);
 }
 
-// What kind of unhide opened the current burst. A flashing button repeats one
-// cause; anything else arriving mid-burst is a separate event and must not be
-// swallowed as a repeat.
-volatile LONG g_burstRequest = -1;
-
 // A flashing taskbar button produces one unhide per flash. Unhides closer
 // together than notificationBurstGapMs belong to the same burst and are treated
 // as one notification, so the taskbar shows once, hides after the hold, and
 // stays hidden while the flashing continues.
+//
+// This records what kind of unhide opened the current burst. A flashing button
+// repeats one cause; anything else arriving mid-burst is a separate event and
+// must not be swallowed as a repeat.
+volatile LONG g_burstRequest = -1;
+
+// The last docked rect seen while shown, so unloading can put the taskbar back.
 RECT g_lastDockedRect{};
 
 // Set while Windows is unhiding, and while the watcher is calling in.
@@ -686,18 +688,15 @@ bool CursorOverTaskbar(void* pThis) {
     return GetCursorPos(&pt) && PtInRect(&r, pt);
 }
 
-// Defined with the z-order detector below; the flags hook reaches these too.
-void ZLog(PCWSTR text);
+// Defined with the z-order handling below; the flags hook needs it too.
 void RaiseTaskbarIfDemoted();
 
 // ------------------------------------------------------------------- hooks
 
 // Three of the four outcomes below are the mod working correctly while
-// appearing to do nothing, which is otherwise indistinguishable from a fault
-// without attaching a diagnostic build. Reached from GetAutoHideFlags, which
-// runs whatever the edge: the two "working correctly" cases are exactly the
-// ones the watcher never reports, because it needs a TrayUI pointer this hook
-// used to decline to publish on the edges it stands down for.
+// appearing to do nothing. Saying which one applies, once per session, answers
+// "is it broken?" without a diagnostic build. Called from GetAutoHideFlags,
+// which runs whatever the edge.
 void LogStateOnce(UINT edge, UINT stored) {
     static volatile LONG logged = 0;
     if (InterlockedExchange(&logged, 1) != 0) {
@@ -733,8 +732,8 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     // This function is reached on a base 8 bytes below the one the other calls
     // use, so it is a second source for the pointer the watcher needs. Without
     // it the watcher idles until a layout pass happens to run GetDockedRect.
-    // Published before the edge is judged: every caller re-checks the edge for
-    // itself, and standing down is the case whose pointer is hardest to come by.
+    // Captured before the edge is checked; every user of the pointer checks the
+    // edge for itself.
     if (!g_trayUI) {
         g_trayUI = (BYTE*)pThis + 8;
     }
@@ -769,37 +768,16 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
         effective = flags | ABS_ALWAYSONTOP;
     }
 
-    // Windows applies the taskbar's topmost state from these flags, and the
-    // mod clears ABS_ALWAYSONTOP on every reveal because it repurposed that bit
-    // as its hidden marker. Three of the four recorded demotions had the
-    // taskbar at exstyle 0x80 -- WS_EX_TOPMOST stripped -- so the question is
-    // whether this call is what strips it. Logged only when the style actually
-    // changes across the call, so a normal transition writes nothing.
-    const LONG exBefore =
-        g_trayWnd ? GetWindowLongW(g_trayWnd, GWL_EXSTYLE) : 0;
-
-    // A reveal Windows drives itself starts here, by clearing the hidden bit.
-    // Raising now keeps those reveals free of the same visible jump.
+    // Reveals that Windows drives itself -- the Windows key, a notification --
+    // start here, by clearing the hidden bit, and never pass through the
+    // watcher's reveal. Raise the taskbar now, while it is still off-screen, so
+    // it does not visibly slide up behind a window and then jump in front.
     if ((effective & ABS_AUTOHIDE) && !(effective & ABS_ALWAYSONTOP) &&
         edge < ABE_BOTTOM && EdgeEnabled(edge)) {
         RaiseTaskbarIfDemoted();
     }
 
     TrayUI_SetAutoHideFlags_Original(pThis, effective);
-
-    const LONG exAfter = g_trayWnd ? GetWindowLongW(g_trayWnd, GWL_EXSTYLE) : 0;
-    if (g_trayWnd && exBefore != exAfter) {
-        WCHAR text[256];
-        wsprintfW(text,
-                  L"SetAutoHideFlags(edge=%u) asked 0x%X applied 0x%X -- "
-                  L"taskbar exstyle 0x%08X%s -> 0x%08X%s",
-                  edge, flags, effective, (unsigned)exBefore,
-                  (exBefore & WS_EX_TOPMOST) ? L" TOPMOST" : L"",
-                  (unsigned)exAfter,
-                  (exAfter & WS_EX_TOPMOST) ? L" TOPMOST" : L"");
-        Wh_Log(L"%s", text);
-        ZLog(text);
-    }
 }
 
 UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
@@ -911,8 +889,6 @@ void ApplyDurationOverrides(void* pThis) {
         g_defaultHideDuration = *hide;
         g_defaultShowDuration = *show;
         g_defaultDurationsCaptured = true;
-        Wh_Log(L"captured default slide durations hide=%d show=%d",
-               g_defaultHideDuration, g_defaultShowDuration);
     }
 
     *hide = g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs
@@ -962,8 +938,9 @@ volatile LONG g_animRequested = 0;
 volatile LONG g_animOverride = 0;
 
 // A reveal arriving mid-hide would otherwise take turns with the slide over the
-// window position until the slide ran out, which is what spamming the Windows
-// key looked like. The reveal wins: it is the newer intent.
+// window position until the slide ran out, which shows up as the taskbar
+// stuttering when the Windows key is pressed repeatedly. The reveal wins: it is
+// the newer intent.
 volatile LONG g_animAbort = 0;
 RECT g_animFrom{}, g_animTo{};
 int g_animDurationMs = 400;
@@ -993,8 +970,9 @@ bool HiddenRectSpillsOntoAnotherDisplay(const RECT& hidden, UINT edge) {
     return there != nullptr && there != own;
 }
 
-// Set while the taskbar is parked as a clipped sliver, so the clamp can be held
-// against Windows reasserting its own hidden rect.
+// Set while the taskbar is parked fully off-screen ("Hide completely"), so its
+// position can be held against Windows moving it back to its own hidden rect,
+// which leaves a sliver on screen.
 volatile LONG g_clipHold = 0;
 RECT g_clipRect{};
 
@@ -1140,23 +1118,19 @@ void RunHideAnimation() {
     // Reachable only with "Skip edges facing another display" turned off: the
     // hiding direction runs into another display, so there is nowhere to slide.
     RECT mon{};
-    const bool haveMon = TrayMonitorRect(&mon);
-    const bool spills = HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
-    const bool clip = haveMon && spills;
-
+    const bool clip = TrayMonitorRect(&mon) &&
+                      HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
 
     if (clip) {
-        // Nowhere to slide to: every position beyond this edge is on the
-        // neighbouring display, and the taskbar's content renders past any clip
-        // we apply, so animating would just play the slide over there. Hide it
-        // outright instead.
+        // Every position beyond this edge is on the neighbouring display, and
+        // the taskbar's content renders past any clip applied to it, so
+        // animating would play the slide over there. Hide it outright instead.
         InterlockedExchange(&g_clipHold, 0);
         InterlockedExchange(&g_windowHidden, 1);
         ShowWindow(g_trayWnd, SW_HIDE);
         InterlockedExchange(&g_animOverride, 0);
         return;
     }
-
 
     const double start = NowMs();
     const double frameBudgetMs = 1000.0 / g_settings.frameRate;
@@ -1198,11 +1172,10 @@ void RunHideAnimation() {
     // clamp down first so the hold is the branch that runs.
     //
     // The animation clamp restores whatever position the caller asked for.
-    // That is right for the mod's own frames, but Windows repositions the
-    // taskbar to its own hidden rect as the slide ends, and the clamp then
-    // faithfully preserves Windows' position -- a sliver short of off-screen,
-    // which is the line this setting exists to remove. The hold forces the
-    // mod's position regardless of who asked.
+    // That is right for the mod's own frames, but Windows moves the taskbar to
+    // its own hidden rect as the slide ends -- a sliver short of off-screen --
+    // and the clamp would preserve that. The hold forces the mod's position
+    // whoever asked.
     if (g_settings.hideFully) {
         const LONG w = g_dockedBeforeHide.right - g_dockedBeforeHide.left;
         const LONG h = g_dockedBeforeHide.bottom - g_dockedBeforeHide.top;
@@ -1216,23 +1189,17 @@ void RunHideAnimation() {
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-// --------------------------------------------------------- z-order detector
+// ------------------------------------------------------------------ z-order
 
-// The taskbar revealing underneath other windows is not reproducible on demand,
-// so this runs from the watcher rather than in a sampling window.
-//
-// What it tests took three instruments to get right. WS_EX_TOPMOST is not it: a
-// snapshot taken while the symptom was live had the style bit set and the
-// taskbar sitting below a plain window all the same, so a style check reports
-// "fine" during the fault. The real state is the taskbar's position in the
-// z-order -- it had been demoted out of the topmost band while keeping the
-// style, and had put itself back by the time the next snapshot ran, which is
-// why the symptom comes and goes without the mod being touched.
-//
-// A visible, non-trivial window above the taskbar that is not itself topmost
-// means the band is broken. The walk skips the invisible tooltip and IME
-// siblings that sit above the taskbar even when it is at the top of the order,
-// and is bounded so a long sibling list cannot stall the watcher.
+// Windows can lower the taskbar out of the topmost band while it is hidden,
+// and TrayUI::Unhide does not raise it again, so on a side edge the taskbar
+// slides up underneath any window covering that edge. It keeps WS_EX_TOPMOST
+// throughout; what is lost is its position in the z-order, so the style bit
+// cannot be used to detect this.
+
+// The first visible window above the taskbar in the z-order, skipping the
+// invisible tooltip and IME windows that sit above it even when it is on top.
+// Bounded so a long window list cannot stall the watcher.
 HWND FirstRealWindowAbove(HWND wnd) {
     HWND h = wnd;
     for (int i = 0; i < 40 && h; i++) {
@@ -1253,82 +1220,16 @@ HWND FirstRealWindowAbove(HWND wnd) {
     return nullptr;
 }
 
-// Wh_Log goes to Windhawk's viewer and nothing else: it reaches no file, and a
-// mod whose log verbosity is turned off produces nothing at all. This fault
-// shows up once in days and cannot be provoked, so the one record of it must
-// not depend on a setting nobody checked. Written alongside Wh_Log, not
-// instead of it. Temporary -- it goes when the cause is found.
-void ZLog(PCWSTR text) {
-    WCHAR path[MAX_PATH];
-    const DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", path, MAX_PATH);
-    if (!n || n >= MAX_PATH - 40) {
-        return;
-    }
-    lstrcatW(path, L"\\windhawk-autohide-zorder.log");
-
-    SYSTEMTIME st{};
-    GetLocalTime(&st);
-    WCHAR line[1024];
-    wsprintfW(line, L"%04u-%02u-%02u %02u:%02u:%02u  %s\r\n", st.wYear,
-              st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, text);
-
-    HANDLE h = CreateFileW(path, FILE_APPEND_DATA,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    DWORD written = 0;
-    WriteFile(h, line, (DWORD)(lstrlenW(line) * sizeof(WCHAR)), &written,
-              nullptr);
-    CloseHandle(h);
-}
-
-// The windows that displace the taskbar have been short-lived: every pid
-// recorded so far was dead by the time the log was read, which makes a pid on
-// its own useless. Resolve the image name while the process still exists.
-void DescribeWnd(HWND h, PWSTR cls, int cch, DWORD* pid, PWSTR exe, int exeCch) {
-    lstrcpynW(cls, L"?", cch);
-    lstrcpynW(exe, L"?", exeCch);
-    *pid = 0;
-    if (!h) {
-        return;
-    }
-
-    GetClassNameW(h, cls, cch);
-    GetWindowThreadProcessId(h, pid);
-
-    HANDLE proc =
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, *pid);
-    if (!proc) {
-        return;
-    }
-    WCHAR full[MAX_PATH];
-    DWORD n = ARRAYSIZE(full);
-    if (QueryFullProcessImageNameW(proc, 0, full, &n)) {
-        PCWSTR leaf = full;
-        for (PCWSTR q = full; *q; q++) {
-            if (*q == L'\\') {
-                leaf = q + 1;
-            }
-        }
-        lstrcpynW(exe, leaf, exeCch);
-    }
-    CloseHandle(proc);
-}
-
-// Called on every watcher tick, hidden or shown: the fault was first caught
-// while the taskbar was hidden, so gating this on the shown state would have
-// missed it. Throttled, because the state persists for seconds at a time and
-// the walk is the most expensive thing the watcher does.
+// A window that is not topmost sitting above the taskbar means the taskbar has
+// lost its place in the topmost band.
 bool TaskbarDemoted() {
     HWND above = FirstRealWindowAbove(g_trayWnd);
     return above && (GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
 }
 
-// Windows lowers the taskbar out of the topmost band by design while a
-// full-screen window is in front. Telling the two cases apart is what keeps the
-// repair below from putting the taskbar over full-screen games and video.
+// Windows lowers the taskbar deliberately while a full-screen window is in
+// front. Leaving that case alone keeps the taskbar from being forced over
+// full-screen games and video.
 bool ForegroundFillsMonitor() {
     HWND fg = GetForegroundWindow();
     RECT r{};
@@ -1344,16 +1245,9 @@ bool ForegroundFillsMonitor() {
            r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
 }
 
-// Measured, not inferred: driving the pointer to the trigger strip and sampling
-// either side of the reveal gives demoted=1 before and demoted=1 after, with the
-// taskbar shown at 0,0-48,1440 and a plain window still above it. TrayUI::Unhide
-// does not restore the z-order, so the taskbar slides up behind whatever covers
-// that edge.
-//
-// Re-asserting HWND_TOPMOST rather than touching ABS_ALWAYSONTOP: the flags are
-// how Windows decides this for itself, and the earlier readings show it keeping
-// the style bit set throughout. This puts the window back in the band it already
-// claims to belong to.
+// Re-asserts HWND_TOPMOST rather than changing ABS_ALWAYSONTOP: the window
+// still claims the topmost style, so this only returns it to the band it
+// already belongs to.
 void RaiseTaskbarIfDemoted() {
     if (!g_settings.keepTaskbarOnTop || !g_trayWnd) {
         return;
@@ -1364,106 +1258,14 @@ void RaiseTaskbarIfDemoted() {
 
     SetWindowPos(g_trayWnd, HWND_TOPMOST, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-    static volatile LONG logged = 0;
-    if (InterlockedExchange(&logged, 1) == 0) {
-        Wh_Log(L"z-order: taskbar was revealed demoted, raised it back");
-        ZLog(L"taskbar was revealed demoted, raised it back (logged once)");
-    }
-}
-
-void CheckZOrder() {
-    if (!g_trayWnd) {
-        return;
-    }
-
-    static int ticks = 0;
-    if ((ticks++ % 8) != 0) {
-        return;
-    }
-
-    HWND above = FirstRealWindowAbove(g_trayWnd);
-    const bool demoted = TaskbarDemoted();
-
-    static int lastDemoted = -1;
-    if ((int)demoted == lastDemoted) {
-        return;
-    }
-    const bool first = lastDemoted < 0;
-    lastDemoted = (int)demoted;
-
-    if (!demoted) {
-        if (first) {
-            // Proof of life. Without it an empty log is indistinguishable from
-            // a logger that never worked, and this fault gives us one
-            // occurrence to catch.
-            ZLog(L"baseline: taskbar at the top of the band, detector live");
-        } else {
-            Wh_Log(L"z-order: taskbar is back at the top of the band");
-            ZLog(L"taskbar is back at the top of the band");
-        }
-        return;
-    }
-
-    WCHAR cls[128], exe[128];
-    DWORD pid = 0;
-    DescribeWnd(above, cls, ARRAYSIZE(cls), &pid, exe, ARRAYSIZE(exe));
-
-    const LONG trayEx = GetWindowLongW(g_trayWnd, GWL_EXSTYLE);
-    UINT stored = g_trayUI ? *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) : 0;
-
-    // Whether the taskbar was hidden at the time narrows which path to suspect.
-    RECT tray{};
-    GetWindowRect(g_trayWnd, &tray);
-
-    // Windows strips the taskbar's topmost state itself when a fullscreen window
-    // is in the foreground, and that is indistinguishable from the fault
-    // without knowing what was in front at the time. If the foreground window
-    // fills its monitor, this is Windows behaving as designed and the mod is
-    // not the actor.
-    HWND fg = GetForegroundWindow();
-    WCHAR fgCls[128], fgExe[128];
-    DWORD fgPid = 0;
-    DescribeWnd(fg, fgCls, ARRAYSIZE(fgCls), &fgPid, fgExe, ARRAYSIZE(fgExe));
-
-    RECT fgRect{};
-    bool fillsMonitor = false;
-    if (fg && GetWindowRect(fg, &fgRect)) {
-        HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
-        MONITORINFO mi{sizeof(mi)};
-        if (mon && GetMonitorInfoW(mon, &mi)) {
-            fillsMonitor = fgRect.left <= mi.rcMonitor.left &&
-                           fgRect.top <= mi.rcMonitor.top &&
-                           fgRect.right >= mi.rcMonitor.right &&
-                           fgRect.bottom >= mi.rcMonitor.bottom;
-        }
-    }
-
-    // A taskbar that is off-screen cannot be seen behind anything, so only a
-    // shown one is the reported symptom. Both are recorded, tagged, because a
-    // demotion that begins while hidden and survives the reveal would otherwise
-    // look like two unrelated events.
-    const bool shown = !(stored & ABS_ALWAYSONTOP);
-
-    WCHAR text[1024];
-    wsprintfW(text,
-              L"%s: taskbar DEMOTED below %s [%s] pid %u -- taskbar exstyle "
-              L"0x%08X%s, flags 0x%X, rect %d,%d-%d,%d; foreground %s [%s] "
-              L"pid %u rect %d,%d-%d,%d fillsMonitor=%d",
-              shown ? L"SHOWN" : L"hidden", cls, exe, pid, (unsigned)trayEx,
-              (trayEx & WS_EX_TOPMOST) ? L" TOPMOST" : L"", stored, tray.left,
-              tray.top, tray.right, tray.bottom, fgCls, fgExe, fgPid,
-              fgRect.left, fgRect.top, fgRect.right, fgRect.bottom,
-              fillsMonitor ? 1 : 0);
-    Wh_Log(L"z-order: %s", text);
-    ZLog(text);
 }
 
 // ------------------------------------------------------------ pointer watcher
 
 // Windows' cursor-at-edge detection does not run off-bottom, and none of the
 // hooked functions are called while the taskbar sits idle, so there is no
-// polling site. A timer on the taskbar's own thread supplies one.
+// polling site. The watch thread supplies one by posting a message that runs
+// this on the taskbar's own thread.
 void WatcherTick() {
     // No pointer yet: nothing has run GetDockedRect and no state change has run
     // GetAutoHideFlags. Force a recompute rather than waiting for the user to
@@ -1487,7 +1289,6 @@ void WatcherTick() {
     UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
     UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
     PublishAutoHideState(edge, stored);
-    CheckZOrder();
 
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
@@ -1536,33 +1337,14 @@ void WatcherTick() {
             ShowWindow(g_trayWnd, SW_SHOWNA);
         }
 
-        // If the taskbar was demoted while hidden, the reveal is the moment
-        // that has to undo it -- otherwise it comes back underneath whatever is
-        // sitting over the edge. Measured either side of the call rather than
-        // reasoned about: this is the transition, not the state after it.
-        const bool demotedBefore = TaskbarDemoted();
-
-        // Raised before the slide starts, not after it finishes. The taskbar is
-        // still off-screen here, so the correction is invisible; doing it
-        // afterwards means watching the taskbar slide up behind the window that
-        // covers the edge and then jump in front of it.
+        // Raise the taskbar before the slide starts, while it is still
+        // off-screen. Raised afterwards, it visibly slides up behind whatever
+        // covers the edge and then jumps in front.
         RaiseTaskbarIfDemoted();
 
         g_inWatcherCall = true;
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
-
-        const bool demotedAfter = TaskbarDemoted();
-        if (demotedBefore || demotedAfter) {
-            WCHAR text[256];
-            wsprintfW(text,
-                      L"reveal: demoted before=%d after=%d -- raised %s the "
-                      L"slide",
-                      demotedBefore ? 1 : 0, demotedAfter ? 1 : 0,
-                      demotedAfter ? L"but it fell back during" : L"before");
-            Wh_Log(L"%s", text);
-            ZLog(text);
-        }
         g_leaveTicks = 0;
         return;
     }
@@ -1579,6 +1361,8 @@ void WatcherTick() {
 
     g_lastDockedRect = docked;   // remembered so unload can restore it
 
+    // Covers anything that revealed the taskbar without passing through either
+    // raise above.
     RaiseTaskbarIfDemoted();
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
@@ -1611,9 +1395,9 @@ void WatcherTick() {
         TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
 
         // Windows stops a sliver short of off-screen so the pointer can find
-        // the taskbar. CursorAtRevealStrip does that here, so the sliver is
-        // only a line along the edge. Only left and top are set: the slide
-        // moves the window without resizing it.
+        // the taskbar. CursorAtRevealStrip does that job here, so hide it
+        // completely. Only left and top are set: the slide moves the window
+        // without resizing it.
         RECT mon{};
         if (g_settings.hideFully && TrayMonitorRect(&mon)) {
             const LONG w = docked.right - docked.left;
@@ -1641,8 +1425,8 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
         InterlockedCompareExchange(&g_clipHold, 0, 0) &&
         !InterlockedCompareExchange(&g_animOverride, 0, 0)) {
-        // Parked as a clipped sliver: Windows would otherwise put the window
-        // back at its own hidden rect, which is on the neighbouring display.
+        // Parked fully off-screen: Windows would otherwise move the window back
+        // to its own hidden rect, leaving a sliver on screen.
         WINDOWPOS* wp = (WINDOWPOS*)lParam;
         LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
         wp->x = g_clipRect.left;
@@ -1872,14 +1656,14 @@ PCWSTR SetUpHooks() {
         return L"taskbar.dll could not be loaded.";
     }
 
-    // Resolve GetAutoHideFlags on its own first, passing no hook function so
-    // the pointer receives the symbol address. Once a hook is registered, the
-    // same pointer is a trampoline: the engine's relocated copy of however many
-    // leading instructions the patch displaced, followed by a jump back. Its
-    // bytes are the engine's, not the function's, and how many of them are the
-    // function's varies by engine version -- which is why this check passed on
-    // one machine and failed on another running byte-identical taskbar.dll.
-    // Validating first also means an unrecognised build is never patched.
+    // Resolve the functions whose instructions are read on their own first,
+    // passing no hook function so the pointers receive the symbol addresses.
+    // Once a hook is registered, the pointer is a trampoline: the engine's
+    // relocated copy of however many leading instructions the patch displaced,
+    // followed by a jump back. How much of it matches the real function varies
+    // by engine version, so reading through it gives different answers on
+    // machines with identical taskbar.dll. Validating first also means an
+    // unrecognised build is never patched.
     WindhawkUtils::SYMBOL_HOOK resolveOnly[] = {
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))",
           LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
@@ -1901,11 +1685,7 @@ PCWSTR SetUpHooks() {
 
     g_offsetsVerified =
         ScanForOffsets((const BYTE*)TrayUI_GetAutoHideFlags_Address);
-    if (g_offsetsVerified) {
-        Wh_Log(L"member offsets read from GetAutoHideFlags: edge 0x%X, "
-               L"flags 0x%X",
-               g_getFlagsEdgeOffset, g_getFlagsFlagsOffset);
-    } else {
+    if (!g_offsetsVerified) {
         return L"This build of taskbar.dll does not match what the mod was "
                L"built against, so it cannot safely read the taskbar's state. "
                L"A Windows update most likely changed it, and the mod needs "
@@ -2001,9 +1781,8 @@ PCWSTR SetUpHooks() {
             0 &&
         memcmp(slide + kHideDurSigOffset, kHideDurSig, sizeof(kHideDurSig)) == 0;
     if (!g_durationOffsetsVerified) {
-        Wh_Log(L"slide duration offsets unverified, durations left alone");
-    } else {
-        Wh_Log(L"slide duration offsets verified");
+        Wh_Log(L"slide duration offsets unverified, the duration settings have "
+               L"no effect");
     }
 
     return nullptr;
@@ -2043,8 +1822,7 @@ BOOL Wh_ModInit() {
 // Unloading while the taskbar is hidden would strand it off-screen: Windows
 // stops believing auto-hide is active, so nothing brings it back. Restore it
 // before the hooks go away, using only plain Win32 from whichever thread this
-// runs on -- calling TrayUI methods cross-thread is what crashed an earlier
-// build.
+// runs on; calling TrayUI methods from another thread crashes the shell.
 void RestoreTaskbarIfHidden() {
     if (!g_trayUI || !g_offsetsVerified || !g_trayWnd) {
         return;

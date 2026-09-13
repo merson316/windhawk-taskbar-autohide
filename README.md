@@ -33,6 +33,9 @@ the masked result — `GetDockedRect` returns the hidden rect only when
 - Drives reveal and hide from a watch thread, because Windows' own
   cursor-at-edge detection does not run off-bottom.
 - Leaves the bottom edge's auto-hide entirely untouched.
+- Keeps the taskbar above other windows when it reveals. Windows can lower it
+  out of the always-on-top band while hidden and does not raise it again, so
+  otherwise it slides up behind whatever covers that edge.
 - Hides again a set time after a notification, which Windows otherwise refuses
   to do while a taskbar button is flashing. This applies on every edge and makes
   [Better Taskbar Autohide](https://windhawk.net/mods/taskbar-autohide-better)
@@ -48,7 +51,6 @@ Windows 11 build 26200 or newer, x86-64. Developed and tested against
 ```
 git clone https://github.com/merson316/windhawk-taskbar-autohide.git
 ```
-
 
 Windhawk → Create a new mod → replace the contents with
 [`src/taskbar-autohide-any-edge.wh.cpp`](src/taskbar-autohide-any-edge.wh.cpp) →
@@ -84,6 +86,22 @@ Autohide](https://windhawk.net/mods/taskbar-autohide-better); run one or the
 other, never both, as they hook the same function.
 
 To disable it and get stock Windows behaviour back, set the value to 0.
+
+### Keeping the taskbar on top
+
+Windows can lower the taskbar out of the always-on-top band while it is hidden,
+and `TrayUI::Unhide` does not raise it again, so on a side edge the taskbar
+slides up underneath any window covering that edge. The taskbar keeps
+`WS_EX_TOPMOST` throughout; what it loses is its position in the z-order.
+
+The mod re-asserts `HWND_TOPMOST` before the reveal slide starts, while the
+taskbar is still off-screen, so the correction is not visible. It does not
+touch the auto-hide flags, which are how Windows makes this decision itself.
+
+It is skipped while a full-screen window is in front. Windows lowers the
+taskbar there deliberately, and overriding that would put the taskbar over
+full-screen games and video. Turn off "Keep the taskbar above other windows" to
+leave z-order entirely to Windows.
 
 ### A note on the animation durations
 
@@ -123,10 +141,9 @@ In the order these actually turn out to be the cause:
    → Taskbar behaviours. On a non-bottom edge that toggle can read back as *off*
    even when the registry has it on -- that is the masked `GetAutoHideFlags`
    read this mod exists to fix, so a toggle that turns itself off means the mod
-   is not running. Because the same masked read backs the Settings toggle, a
-   session spent with the mod inert can leave the setting written back off, so
-   an install that failed once tends to fail the same way again. Since v1.13.0
-   the mod raises a dialog for this rather than only logging it.
+   is not running. A session with the mod inert can leave the setting written
+   back off, so an install that failed once can fail the same way again. The
+   mod raises a dialog when auto-hide is off.
 2. **The taskbar is on the bottom edge.** Windows already handles auto-hide
    there and the mod leaves it alone.
 3. **The edge faces another display**, so the mod skips it deliberately and that
@@ -134,36 +151,11 @@ In the order these actually turn out to be the cause:
 
 Cases 2 and 3 are the mod working correctly while appearing to do nothing. It
 writes which one applies to the Windhawk log once per session, so the answer
-does not need a diagnostic build. The line is written from the
-`GetAutoHideFlags` hook, which runs whatever the edge -- before v1.13.0 it was
-written from the watcher, which never reaches these two cases:
+does not need a diagnostic build:
 
 ```
 docked right, Windows auto-hide on -- a display sits beyond this edge, so it is skipped
 ```
-
-### The taskbar reveals behind other windows
-
-Windows lowers the taskbar out of the always-on-top band and `TrayUI::Unhide`
-does not put it back, so on a side edge the taskbar slides up underneath any
-window covering that edge. Driving the pointer to the trigger strip and sampling
-either side of the reveal shows it plainly:
-
-```
-before:    taskbar rect=-48,0-0,1440 hidden  first above='CASCADIA_HOSTING_WINDOW_CLASS' demoted=True
-revealed:  taskbar rect=0,0-48,1440  SHOWN   first above='CASCADIA_HOSTING_WINDOW_CLASS' demoted=True
-```
-
-The correction is applied before the slide starts, while the taskbar is still
-off-screen. Applying it afterwards works, but it is visible: the taskbar slides
-up behind the covering window and then jumps in front of it.
-
-The taskbar keeps `WS_EX_TOPMOST` throughout -- it is the position in the band
-that is lost, not the style -- so the fix re-asserts `HWND_TOPMOST` as the
-taskbar appears rather than touching the auto-hide flags, which is how Windows
-decides this for itself. It is skipped while a full-screen window is in front,
-because Windows lowers the taskbar there on purpose and overriding it would put
-the taskbar over full-screen games and video.
 
 ## Known limitations
 
@@ -192,7 +184,8 @@ Every failure mode leaves the taskbar behaving exactly as it does with no mod
 installed. That is indistinguishable from the mod working on a machine where
 nothing happens to hide, so a silent failure is worse than useless. When the mod
 cannot run it stays loaded but completely inert, and the watch thread raises a
-dialog naming the reason:
+dialog naming the reason. It also raises one when it is running but Windows'
+auto-hide setting is off:
 
 | Warning | Cause |
 |---|---|
@@ -202,7 +195,7 @@ dialog naming the reason:
 | A taskbar function could not be found | Symbols resolved but incompletely. Reloading the mod re-downloads them. |
 | `taskbar.dll` does not match | A Windows update recompiled `GetAutoHideFlags`, so the member offsets can no longer be trusted. The mod needs updating. |
 | Could not attach to the taskbar window | The taskbar never appeared, or subclassing it failed. |
-| Auto-hide is turned off in Windows | The mod is running correctly and has nothing to do. Historically the most common report of "it does not work". |
+| Auto-hide is turned off in Windows | The mod is running correctly and has nothing to do. The most common reason the mod appears not to work. |
 
 Failures are deliberately not fatal to loading. Returning `FALSE` from
 `Wh_ModInit` makes Windhawk unload the mod immediately, which would pull the DLL
