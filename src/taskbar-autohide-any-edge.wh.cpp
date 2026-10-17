@@ -1593,6 +1593,16 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
 //   33 C0                  xor  eax, eax
 //   EB 03                  jmp  .done
 //   8B 43 ??               mov  eax, [rbx+flags]
+//
+// 26100.9807 lays the same branch out the other way round, with the zero
+// return moved out of line after the ret:
+//
+//   83 BB ?? ?? ?? ?? 03   cmp dword [rbx+edge], 3
+//   75 ??                  jne  .return_zero
+//   8B 43 ??               mov  eax, [rbx+flags]
+//   ...
+//   .return_zero:
+//   33 C0                  xor  eax, eax
 bool ScanForOffsets(const BYTE* fn) {
     // Bound the search at the int3 padding that follows the function. Scanning
     // into the next one risks a false match that would be silently wrong.
@@ -1608,15 +1618,28 @@ bool ScanForOffsets(const BYTE* fn) {
     UINT edge = 0, flags = 0;
     int matches = 0;
 
-    for (size_t i = 0; i + 16 <= len; i++) {
+    for (size_t i = 0; i + 12 <= len; i++) {
         const BYTE* p = fn + i;
-        if (p[0] != 0x83 || p[1] != 0xBB || p[6] != 0x03 || p[7] != 0x74 ||
-            p[8] != 0x04 || p[9] != 0x33 || p[10] != 0xC0 || p[11] != 0xEB ||
-            p[12] != 0x03 || p[13] != 0x8B || p[14] != 0x43) {
+        if (p[0] != 0x83 || p[1] != 0xBB || p[6] != 0x03) {
+            continue;
+        }
+
+        if (i + 16 <= len && p[7] == 0x74 && p[8] == 0x04 && p[9] == 0x33 &&
+            p[10] == 0xC0 && p[11] == 0xEB && p[12] == 0x03 &&
+            p[13] == 0x8B && p[14] == 0x43) {
+            flags = p[15];
+        } else if (p[7] == 0x75 && p[9] == 0x8B && p[10] == 0x43) {
+            // The jump must land on the zero return, inside the function.
+            size_t zero = i + 9 + p[8];
+            if (p[8] >= 0x80 || zero + 2 > len || fn[zero] != 0x33 ||
+                fn[zero + 1] != 0xC0) {
+                continue;
+            }
+            flags = p[11];
+        } else {
             continue;
         }
         edge = *(const UINT*)(p + 2);
-        flags = p[15];
         matches++;
     }
 
