@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lwtsapi32
+// @compilerOptions -lcomctl32 -lwtsapi32 -lwinhttp
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -197,6 +197,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <initializer_list>
 
 #include <shellapi.h>
+#include <winhttp.h>
 #include <wtsapi32.h>
 
 // ABE_LEFT/TOP/RIGHT/BOTTOM and ABS_AUTOHIDE/ABS_ALWAYSONTOP come from
@@ -234,6 +235,16 @@ volatile LONG g_watchStop = 0;
 // under the thread that raises the warning. Every hook below stands down on
 // this, so staying loaded is inert.
 PCWSTR g_fatalReason = nullptr;
+
+// Set when the taskbar's symbols could not be resolved. The commonest cause is
+// a Windows update whose symbols Microsoft has not published yet, which the
+// warning asks the symbol server about before blaming the connection.
+HMODULE g_symbolsMissingFor = nullptr;
+
+// The symbol server request in flight, so StopWatchThread can cancel it:
+// closing a request handle ends a blocking WinHTTP call on another thread, and
+// unloading must not wait on a slow network.
+PVOID volatile g_symbolRequest = nullptr;
 
 // 1 while the taskbar sits on an edge this mod would act on but Windows'
 // auto-hide toggle is off. That is the most common reason the mod appears to do
@@ -1537,6 +1548,202 @@ void WarnNotRunning(PCWSTR reason) {
     WarnOnce(body);
 }
 
+// Builds the symbol server path of a module's PDB from its CodeView record:
+// /download/symbols/<pdb>/<GUID><age>/<pdb>.
+bool SymbolServerPath(HMODULE module, WCHAR (&path)[512]) {
+    auto base = (const BYTE*)module;
+    auto nt = (const IMAGE_NT_HEADERS*)(base +
+                                        ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    const IMAGE_DATA_DIRECTORY& dir =
+        nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
+    auto entries = (const IMAGE_DEBUG_DIRECTORY*)(base + dir.VirtualAddress);
+
+    struct CodeViewRsds {
+        DWORD signature;   // "RSDS"
+        GUID guid;
+        DWORD age;
+        char pdbPath[1];
+    };
+
+    for (DWORD i = 0; dir.VirtualAddress && i < dir.Size / sizeof(*entries);
+         i++) {
+        if (entries[i].Type != IMAGE_DEBUG_TYPE_CODEVIEW ||
+            !entries[i].AddressOfRawData) {
+            continue;
+        }
+        auto cv = (const CodeViewRsds*)(base + entries[i].AddressOfRawData);
+        if (cv->signature != 0x53445352) {
+            continue;
+        }
+
+        // The record can hold the build machine's full path.
+        PCSTR name = cv->pdbPath;
+        for (PCSTR c = cv->pdbPath; *c; c++) {
+            if (*c == '\\' || *c == '/') {
+                name = c + 1;
+            }
+        }
+        WCHAR pdb[MAX_PATH];
+        if (!MultiByteToWideChar(CP_ACP, 0, name, -1, pdb, ARRAYSIZE(pdb))) {
+            return false;
+        }
+
+        const GUID& g = cv->guid;
+        wsprintfW(path,
+                  L"/download/symbols/%s/%08lX%04X%04X%02X%02X%02X%02X%02X%02X"
+                  L"%02X%02X%lX/%s",
+                  pdb, g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1],
+                  g.Data4[2], g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6],
+                  g.Data4[7], cv->age, pdb);
+        return true;
+    }
+    return false;
+}
+
+enum class SymbolsOnServer { Unknown, Published, NotPublished };
+
+// Asks Microsoft's symbol server whether the PDB exists, without downloading
+// it. Redirects are not followed: the server answers a published PDB with a
+// redirect to its storage and an unpublished one with 404.
+SymbolsOnServer QuerySymbolServer(PCWSTR path) {
+    SymbolsOnServer result = SymbolsOnServer::Unknown;
+
+    HINTERNET session =
+        WinHttpOpen(L"Windhawk taskbar-autohide-any-edge",
+                    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                    WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    HINTERNET connect =
+        session ? WinHttpConnect(session, L"msdl.microsoft.com",
+                                 INTERNET_DEFAULT_HTTPS_PORT, 0)
+                : nullptr;
+    HINTERNET request =
+        connect ? WinHttpOpenRequest(connect, L"HEAD", path, nullptr,
+                                     WINHTTP_NO_REFERER,
+                                     WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                     WINHTTP_FLAG_SECURE)
+                : nullptr;
+
+    if (request) {
+        DWORD noRedirects = WINHTTP_DISABLE_REDIRECTS;
+        WinHttpSetOption(request, WINHTTP_OPTION_DISABLE_FEATURE, &noRedirects,
+                         sizeof(noRedirects));
+
+        // StopWatchThread sets the stop flag before taking the handle, so a
+        // request it missed is caught by the check here.
+        InterlockedExchangePointer(&g_symbolRequest, request);
+        bool answered =
+            !InterlockedCompareExchange(&g_watchStop, 0, 0) &&
+            WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                               WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+            WinHttpReceiveResponse(request, nullptr);
+
+        // Whoever takes the handle back closes it.
+        if (InterlockedExchangePointer(&g_symbolRequest, nullptr) == request) {
+            DWORD status = 0;
+            DWORD size = sizeof(status);
+            if (answered &&
+                WinHttpQueryHeaders(
+                    request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                    WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
+                    WINHTTP_NO_HEADER_INDEX)) {
+                if (status == 404) {
+                    result = SymbolsOnServer::NotPublished;
+                } else if (status == 200 || status == 302) {
+                    result = SymbolsOnServer::Published;
+                }
+            }
+            WinHttpCloseHandle(request);
+        }
+    }
+
+    if (connect) {
+        WinHttpCloseHandle(connect);
+    }
+    if (session) {
+        WinHttpCloseHandle(session);
+    }
+    return result;
+}
+
+// Names the taskbar build, for example " (taskbar.dll 10.0.26100.9807, dated
+// 17 October 2026)", or leaves the text empty when neither can be read.
+void DescribeTaskbarBuild(HMODULE taskbar, WCHAR (&text)[192]) {
+    text[0] = L'\0';
+
+    // VS_VERSIONINFO: three WORDs, the key "VS_VERSION_INFO", then the fixed
+    // info aligned to 4 bytes.
+    WCHAR version[48] = L"";
+    if (HRSRC res = FindResourceW(taskbar, MAKEINTRESOURCEW(VS_VERSION_INFO),
+                                  RT_VERSION)) {
+        auto data = (const BYTE*)LockResource(LoadResource(taskbar, res));
+        if (data && SizeofResource(taskbar, res) >=
+                        40 + sizeof(VS_FIXEDFILEINFO)) {
+            auto fixed = (const VS_FIXEDFILEINFO*)(data + 40);
+            if (fixed->dwSignature == 0xFEEF04BD) {
+                wsprintfW(version, L"%u.%u.%u.%u",
+                          HIWORD(fixed->dwFileVersionMS),
+                          LOWORD(fixed->dwFileVersionMS),
+                          HIWORD(fixed->dwFileVersionLS),
+                          LOWORD(fixed->dwFileVersionLS));
+            }
+        }
+    }
+
+    WCHAR date[64] = L"";
+    WCHAR file[MAX_PATH];
+    WIN32_FILE_ATTRIBUTE_DATA attrs;
+    SYSTEMTIME utc, local;
+    if (GetModuleFileNameW(taskbar, file, ARRAYSIZE(file)) &&
+        GetFileAttributesExW(file, GetFileExInfoStandard, &attrs) &&
+        FileTimeToSystemTime(&attrs.ftLastWriteTime, &utc) &&
+        SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) {
+        GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_LONGDATE, &local,
+                        nullptr, date, ARRAYSIZE(date), nullptr);
+    }
+
+    if (version[0] && date[0]) {
+        wsprintfW(text, L" (taskbar.dll %s, dated %s)", version, date);
+    } else if (version[0] || date[0]) {
+        wsprintfW(text, L" (taskbar.dll %s)", version[0] ? version : date);
+    }
+}
+
+// Runs on the watch thread, which has time to spare for the network. Falls
+// back to the general reason whenever the server cannot settle it.
+PCWSTR ExplainMissingSymbols(HMODULE taskbar) {
+    WCHAR path[512];
+    if (!SymbolServerPath(taskbar, path)) {
+        return g_fatalReason;
+    }
+
+    SymbolsOnServer state = QuerySymbolServer(path);
+    Wh_Log(L"symbol server %s: %s", path,
+           state == SymbolsOnServer::NotPublished ? L"not published"
+           : state == SymbolsOnServer::Published  ? L"published"
+                                                  : L"no answer");
+
+    if (state == SymbolsOnServer::Published) {
+        return L"Microsoft has published the taskbar's debug symbols, but "
+               L"Windhawk could not load them. Reload the mod in Windhawk to "
+               L"download them again.";
+    }
+    if (state != SymbolsOnServer::NotPublished) {
+        return g_fatalReason;
+    }
+
+    WCHAR build[192];
+    DescribeTaskbarBuild(taskbar, build);
+
+    static WCHAR reason[512];
+    wsprintfW(reason,
+              L"A Windows update replaced the taskbar%s, and Microsoft has not "
+              L"published the debug symbols the mod needs for this version "
+              L"yet.\n\nThe mod looks for them each time Windows starts, so it "
+              L"starts working again by itself once they are available.",
+              build);
+    return reason;
+}
+
 DWORD WINAPI WatchThreadProc(LPVOID) {
     const ULONGLONG started = GetTickCount64();
 
@@ -1550,7 +1757,13 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
             !InterlockedCompareExchange(&g_warned, 0, 0)) {
             if (g_fatalReason) {
                 if (ThisProcessOwnsTaskbar()) {
-                    WarnNotRunning(g_fatalReason);
+                    PCWSTR reason =
+                        g_symbolsMissingFor
+                            ? ExplainMissingSymbols(g_symbolsMissingFor)
+                            : g_fatalReason;
+                    if (!InterlockedCompareExchange(&g_watchStop, 0, 0)) {
+                        WarnNotRunning(reason);
+                    }
                 }
             } else if ((!g_trayWnd || !g_subclassed) &&
                        up > WARN_NO_TASKBAR_MS && ThisProcessOwnsTaskbar()) {
@@ -1700,6 +1913,7 @@ PCWSTR SetUpHooks() {
     if (!WindhawkUtils::HookSymbols(taskbar, resolveOnly,
                                     ARRAYSIZE(resolveOnly)) ||
         !TrayUI_GetAutoHideFlags_Address) {
+        g_symbolsMissingFor = taskbar;
         return L"The taskbar's debug symbols could not be resolved. "
                L"Windhawk downloads these from Microsoft the first time a mod "
                L"needs them, so check the internet connection and reload the "
@@ -1747,6 +1961,7 @@ PCWSTR SetUpHooks() {
     };
 
     if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
+        g_symbolsMissingFor = taskbar;
         return L"The taskbar's debug symbols could not be resolved. "
                L"Windhawk downloads these from Microsoft the first time a mod "
                L"needs them, so check the internet connection and reload the "
@@ -1882,6 +2097,11 @@ void RestoreTaskbarIfHidden() {
 
 void StopWatchThread() {
     InterlockedExchange(&g_watchStop, 1);
+
+    // A symbol server check in flight would hold the thread past the wait.
+    if (HINTERNET request = InterlockedExchangePointer(&g_symbolRequest, nullptr)) {
+        WinHttpCloseHandle(request);
+    }
     if (g_watchThread) {
         WaitForSingleObject(g_watchThread, 2000);
         CloseHandle(g_watchThread);
