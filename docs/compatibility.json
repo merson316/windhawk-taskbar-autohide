@@ -1,5 +1,23 @@
 [
   {
+    "os_build": "26300.9278",
+    "taskbar": "10.0.26100.9278",
+    "support": "symbols",
+    "tested_with": [
+      "1.15.0",
+      "1.16.0"
+    ]
+  },
+  {
+    "os_build": "26300.9549",
+    "taskbar": "10.0.26100.9549",
+    "support": "symbols",
+    "tested_with": [
+      "1.15.0",
+      "1.16.0"
+    ]
+  },
+  {
     "os_build": "26300.9807",
     "taskbar": "10.0.26100.9807",
     "support": "built-in",

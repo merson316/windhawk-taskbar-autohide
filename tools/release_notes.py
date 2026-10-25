@@ -16,29 +16,52 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from matcher.apply import known_builds  # noqa: E402
+from matcher.buildcheck import accepted_layouts, os_builds  # noqa: E402
 from matcher.pe import PE  # noqa: E402
 
 COMPAT = 'docs/compatibility.json'
+BUILDS = 'docs/builds.json'
 SRC = 'src/taskbar-autohide-any-edge.wh.cpp'
 OTHER_BUILDS = ("Other builds: works wherever Windhawk can download the taskbar's symbols, "
                 'unless an update changes the code the mod checks; in that case the mod shows '
                 'a warning instead of hooking.')
+WINVER_TIP = 'Find your OS build: press Win+R, type `winver`, and read the number after "OS Build".'
+SUPPORT = {'built-in': 'Built-in addresses (Microsoft has not published symbols)', 'symbols': "Microsoft's symbols"}
+SHOWN = 5
 INSTALL = ('Download `taskbar-autohide-any-edge.wh.cpp` below, then in Windhawk: '
            'Create a new mod → replace the contents → Compile → Enable.')
 
 
-def render(version, compat, known, changes):
+def should_work_for(layouts, builds, tested_taskbars):
+    """Builds this version should handle, newest first: symbols published and
+    resolving, and code passing the checks this version runs at load."""
+    ok = [b for b in builds if b['symbols'] and b['resolved'] and b['durations']
+          and b['layout'] in layouts and b['taskbar'] not in tested_taskbars]
+    return sorted(ok, key=lambda b: int(b['taskbar'].rsplit('.', 1)[1]), reverse=True)
+
+
+def _build_rows(builds):
+    return ['| OS build (winver) | taskbar.dll |', '|---|---|'] + \
+        [f'| {os_builds(b["taskbar"])} | {b["taskbar"]} |' for b in builds]
+
+
+def render(version, compat, known, changes, should_work=()):
     out = ['## Works with', '']
     tested = [c for c in compat if version in c['tested_with']]
     if tested:
-        out += ['Tested on:', '', '| OS build | taskbar.dll | Support |', '|---|---|---|']
-        out += [f'| {c["os_build"]} | {c["taskbar"]} | {c["support"]} |' for c in tested]
+        out += ['**Tested on**', '', '| OS build (winver) | taskbar.dll | How the mod finds the taskbar |',
+                '|---|---|---|']
+        out += [f'| {c["os_build"]} | {c["taskbar"]} | {SUPPORT[c["support"]]} |' for c in tested]
         out.append('')
-    if known:
-        out += ['Built-in support for builds without published symbols:', '']
-        out += [f'- taskbar.dll {k["version"]}' for k in known]
-        out.append('')
-    out += [OTHER_BUILDS, '', '## Changes', '']
+    if should_work:
+        out += ['**Should work on**: builds whose symbols Microsoft has published and whose code passes '
+                'the checks this version runs when it loads. Not tested by hand.', '']
+        out += _build_rows(should_work[:SHOWN]) + ['']
+        older = should_work[SHOWN:]
+        if older:
+            out += ['<details><summary>%d older builds</summary>' % len(older), '']
+            out += _build_rows(older) + ['', '</details>', '']
+    out += [OTHER_BUILDS, '', WINVER_TIP, '', '## Changes', '']
     out += [f'- {c}' for c in changes]
     out += ['', '## Install', '', INSTALL, '']
     return '\n'.join(out)
@@ -73,12 +96,16 @@ def draft_changes(version):
     return [s for s in _git('log', '--format=%s', span).splitlines() if s]
 
 
-def known_at(version):
+def source_at(version):
     tag = f'v{version}'
     if not _git('tag', '-l', tag):
-        return known_builds(SRC)
+        return open(SRC).read()
+    return _git('show', f'{tag}:{SRC}') + '\n'
+
+
+def known_at(version):
     with tempfile.NamedTemporaryFile('w', suffix='.cpp', delete=False) as f:
-        f.write(_git('show', f'{tag}:{SRC}') + '\n')
+        f.write(source_at(version))
     try:
         return known_builds(f.name)
     except ValueError:      # versions before 1.17.0 have no table
@@ -100,7 +127,10 @@ def main():
     compat = json.load(open(COMPAT)) if os.path.exists(COMPAT) else []
     changes = ([l.strip().lstrip('- ') for l in open(args.changes) if l.strip()]
                if args.changes else draft_changes(args.version))
-    print(render(args.version, compat, known_at(args.version), changes))
+    builds = json.load(open(BUILDS)) if os.path.exists(BUILDS) else []
+    tested = {c['taskbar'] for c in compat if args.version in c['tested_with']}
+    should_work = should_work_for(accepted_layouts(source_at(args.version)), builds, tested)
+    print(render(args.version, compat, known_at(args.version), changes, should_work))
 
 
 if __name__ == '__main__':

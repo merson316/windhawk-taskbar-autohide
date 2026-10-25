@@ -84,6 +84,12 @@ git tag -s "v$V" -m "v$V"
 git push -q origin "v$V"
 
 WORK=$(mktemp -d)
+.venv/bin/python tools/check-builds.py >/dev/null
+if [ -n "$(git status --porcelain docs/builds.json)" ]; then
+  git add docs/builds.json
+  git commit -q -S -m "docs: refresh the taskbar builds the mod should work on"
+  git push -q origin refs/heads/main:refs/heads/main
+fi
 .venv/bin/python tools/release_notes.py --version "$V" > "$WORK/notes.md"
 "${EDITOR:-nano}" "$WORK/notes.md"
 cp "$SRC" "$WORK/taskbar-autohide-any-edge.wh.cpp"
