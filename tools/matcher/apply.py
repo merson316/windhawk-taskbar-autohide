@@ -8,7 +8,7 @@ _ENTRY = re.compile(
     r'\{L"(?P<version>[\d.]+)",\s*'
     r'\{0x(?P<d1>[0-9A-Fa-f]{1,8}),\s*0x(?P<d2>[0-9A-Fa-f]{1,4}),\s*0x(?P<d3>[0-9A-Fa-f]{1,4}),\s*'
     r'\{(?P<d4>[^}]*)\}\},\s*(?P<age>\d+),\s*(?P<rvas>[0-9A-Fa-fx,\s]+)\}')
-_TABLE = re.compile(r'(const KnownBuild kKnownBuilds\[\] = \{\n)(?P<body>.*?)(\n\};)', re.S)
+_TABLE = re.compile(r'(const KnownBuild kKnownBuilds\[\] = \{\n)(?P<body>.*?)(^\};)', re.S | re.M)
 _VERSION = re.compile(r'^(// @version\s+)(\d+)\.(\d+)\.(\d+)$', re.M)
 _README_ROW = re.compile(r'^\| (10\.0\.\d+\.\d+) \| (10\.0\.\d+\.\d+) \|$', re.M)
 
@@ -45,8 +45,8 @@ def apply_entry(src_path, readme_path, entry_line, version, base_version):
             raise ValueError(f'{version}: already in kKnownBuilds as {m["version"]}')
 
     t = _table(text)
-    body = t.group('body').rstrip('\n') + '\n' + \
-        f'    // Matched against {base_version} by tools/match-build.py.\n' + entry_line.rstrip('\n')
+    body = t.group('body') + \
+        f'    // Matched against {base_version} by tools/match-build.py.\n' + entry_line.rstrip('\n') + '\n'
     text = text[:t.start('body')] + body + text[t.end('body'):]
 
     v = _VERSION.search(text)

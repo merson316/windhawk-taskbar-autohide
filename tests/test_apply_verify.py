@@ -62,3 +62,14 @@ def test_verify_against_9549_pdb(copies, dll_9549, pdb_9549):
     bad = subprocess.run(cmd, capture_output=True, text=True)
     assert bad.returncode == 1
     assert '| unhide | 0x924C1 | 0x924C0 | no |' in bad.stdout
+
+
+def test_apply_to_empty_table(copies):
+    src, readme = copies
+    text = src.read_text()
+    start = text.index('const KnownBuild kKnownBuilds[] = {\n') + len('const KnownBuild kKnownBuilds[] = {\n')
+    src.write_text(text[:start] + text[text.index('};', start):])
+    assert known_builds(src) == []
+    apply_entry(src, readme, FAKE, '10.0.26100.9999', '10.0.26100.9807')
+    assert [e['version'] for e in known_builds(src)] == ['10.0.26100.9999']
+    assert 'kKnownBuilds[] = {\n    // Matched against' in src.read_text()
