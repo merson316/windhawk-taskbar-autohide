@@ -2,6 +2,7 @@
 Windhawk's symbol cache, ours, or on Microsoft's symbol server."""
 import glob
 import os
+import struct
 import urllib.error
 import urllib.request
 
@@ -14,31 +15,69 @@ MSDL = os.environ.get('MSDL_BASE', 'https://msdl.microsoft.com/download/symbols'
 CACHE = os.path.expanduser('~/.cache/taskbar-matcher')
 
 
-def fetch_pdb(key):
-    """A PDB for this key from Windhawk's cache, ours, or msdl; None if unpublished."""
-    for path in (f'{SYMBOLS}/{key}/Taskbar.pdb', f'{CACHE}/{key}/Taskbar.pdb'):
-        if os.path.exists(path):
-            return path
-    req = urllib.request.Request(f'{MSDL}/Taskbar.pdb/{key}/Taskbar.pdb',
-                                 headers={'User-Agent': 'Microsoft-Symbol-Server/10.0.0.0'})
+PDB_MAGIC = b'Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0'
+_UA = {'User-Agent': 'Microsoft-Symbol-Server/10.0.0.0'}
+
+
+def _is_pdb(path):
+    with open(path, 'rb') as f:
+        return f.read(len(PDB_MAGIC)) == PDB_MAGIC
+
+
+def _is_pe(path):
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        PE(path).pdb_key()
+        return True
+    except (OSError, ValueError, struct.error):
+        return False
+
+
+def _download(url, dest, valid, what):
+    """Fetch url into dest only if the result passes `valid`; a partial or
+    error-page response never reaches the cache. None on 404."""
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=_UA), timeout=120) as r:
             data = r.read()
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return None
         raise
-    os.makedirs(f'{CACHE}/{key}', exist_ok=True)
-    path = f'{CACHE}/{key}/Taskbar.pdb'
-    with open(path, 'wb') as f:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + '.part'
+    with open(tmp, 'wb') as f:
         f.write(data)
-    return path
+    if not valid(tmp):
+        os.unlink(tmp)
+        raise ValueError(f'{url}: not a {what} ({len(data)} bytes)')
+    os.replace(tmp, dest)
+    return dest
+
+
+def fetch_pdb(key):
+    """A PDB for this key from Windhawk's cache, ours, or msdl; None if unpublished."""
+    for path in (f'{SYMBOLS}/{key}/Taskbar.pdb', f'{CACHE}/{key}/Taskbar.pdb'):
+        if os.path.exists(path) and _is_pdb(path):
+            return path
+    return _download(f'{MSDL}/Taskbar.pdb/{key}/Taskbar.pdb', f'{CACHE}/{key}/Taskbar.pdb', _is_pdb, 'PDB')
+
+
+def fetch_dll(timestamp, size):
+    """A taskbar.dll by its msdl key (timestamp + image size); None if absent."""
+    key = f'{timestamp:08X}{size:x}'
+    path = f'{CACHE}/dll/{key}/taskbar.dll'
+    if os.path.exists(path) and _is_pe(path):
+        return path
+    return _download(f'{MSDL}/taskbar.dll/{key}/taskbar.dll', path, _is_pe, 'PE file')
 
 
 def auto_reference(new):
     cands = []
     for dll in glob.glob(f'{WINSXS}/amd64_microsoft-windows-taskbar-dll_*/Taskbar.dll'):
-        pe = PE(dll)
+        try:
+            pe = PE(dll)
+            pe.pdb_key()
+        except (OSError, ValueError, struct.error):
+            continue   # one unreadable copy must not stop the search
         if pe.pdb_key() == new.pdb_key():
             continue
         pdb = fetch_pdb(pe.pdb_key())
