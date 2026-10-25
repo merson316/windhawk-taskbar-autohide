@@ -32,20 +32,27 @@ INSTALL = ('Download `taskbar-autohide-any-edge.wh.cpp` below, then in Windhawk:
            'Create a new mod → replace the contents → Compile → Enable.')
 
 
-def should_work_for(layouts, builds, tested_taskbars):
+def should_work_for(layouts, builds, tested_taskbars, known=()):
     """Builds this version should handle, newest first: symbols published and
-    resolving, and code passing the checks this version runs at load."""
+    resolving with code passing this version's load-time checks, plus the
+    builds its kKnownBuilds table carries. Builds already tested are left out."""
     ok = [b for b in builds if b['symbols'] and b['resolved'] and b['durations']
           and b['layout'] in layouts and b['taskbar'] not in tested_taskbars]
+    ok += [{'taskbar': k['version'], 'built_in': True} for k in known
+           if k['version'] not in tested_taskbars]
     return sorted(ok, key=lambda b: int(b['taskbar'].rsplit('.', 1)[1]), reverse=True)
 
 
-def _build_rows(builds):
-    return ['| OS build (winver) | taskbar.dll |', '|---|---|'] + \
-        [f'| {os_builds(b["taskbar"])} | {b["taskbar"]} |' for b in builds]
+def _build_rows(builds, how):
+    if not how:
+        return ['| OS build (winver) | taskbar.dll |', '|---|---|'] + \
+            [f'| {os_builds(b["taskbar"])} | {b["taskbar"]} |' for b in builds]
+    return ['| OS build (winver) | taskbar.dll | How the mod finds the taskbar |', '|---|---|---|'] + \
+        [f'| {os_builds(b["taskbar"])} | {b["taskbar"]} | '
+         f'{"Built-in addresses" if b.get("built_in") else SUPPORT["symbols"]} |' for b in builds]
 
 
-def render(version, compat, known, changes, should_work=()):
+def render(version, compat, changes, should_work=()):
     out = ['## Works with', '']
     tested = [c for c in compat if version in c['tested_with']]
     if tested:
@@ -56,11 +63,14 @@ def render(version, compat, known, changes, should_work=()):
     if should_work:
         out += ['**Should work on**: builds whose symbols Microsoft has published and whose code passes '
                 'the checks this version runs when it loads. Not tested by hand.', '']
-        out += _build_rows(should_work[:SHOWN]) + ['']
+        # The approved layout has two columns; a third appears only when some
+        # rows rely on built-in addresses rather than symbols.
+        how = any(b.get('built_in') for b in should_work)
+        out += _build_rows(should_work[:SHOWN], how) + ['']
         older = should_work[SHOWN:]
         if older:
             out += ['<details><summary>%d older builds</summary>' % len(older), '']
-            out += _build_rows(older) + ['', '</details>', '']
+            out += _build_rows(older, how) + ['', '</details>', '']
     out += [OTHER_BUILDS, '', WINVER_TIP, '', '## Changes', '']
     out += [f'- {c}' for c in changes]
     out += ['', '## Install', '', INSTALL, '']
@@ -129,8 +139,9 @@ def main():
                if args.changes else draft_changes(args.version))
     builds = json.load(open(BUILDS)) if os.path.exists(BUILDS) else []
     tested = {c['taskbar'] for c in compat if args.version in c['tested_with']}
-    should_work = should_work_for(accepted_layouts(source_at(args.version)), builds, tested)
-    print(render(args.version, compat, known_at(args.version), changes, should_work))
+    known = known_at(args.version)
+    should_work = should_work_for(accepted_layouts(source_at(args.version)), builds, tested, known)
+    print(render(args.version, compat, changes, should_work))
 
 
 if __name__ == '__main__':

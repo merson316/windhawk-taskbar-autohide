@@ -8,7 +8,7 @@ KNOWN = [{'version': '10.0.26100.9807', 'pdb_key': '1AF71656D4C04FBD463BFF7E4ED1
 
 
 def test_render_1_17_0():
-    notes = render('1.17.0', COMPAT, KNOWN, ['Works on taskbar.dll 10.0.26100.9807 without its symbols.'])
+    notes = render('1.17.0', COMPAT, ['Works on taskbar.dll 10.0.26100.9807 without its symbols.'])
     assert '## Works with' in notes
     assert '| OS build (winver) | taskbar.dll | How the mod finds the taskbar |' in notes
     assert '| 26300.9807 | 10.0.26100.9807 | Built-in addresses (Microsoft has not published symbols) |' in notes
@@ -23,7 +23,7 @@ def test_render_1_17_0():
 
 
 def test_render_no_tested():
-    notes = render('1.16.0', COMPAT, [], ['Says when symbols are not published yet.'])
+    notes = render('1.16.0', COMPAT, ['Says when symbols are not published yet.'])
     assert 'Tested on' not in notes
     assert 'Should work on' not in notes
     assert OTHER_BUILDS in notes
@@ -64,10 +64,23 @@ def test_should_work_for_respects_layouts_and_tested():
 
 def test_render_should_work_folds_older_builds():
     sw = should_work_for({'old', 'inverted'}, BUILDS, {'10.0.26100.9807'})
-    notes = render('1.17.0', COMPAT, KNOWN, ['x'], sw)
+    notes = render('1.17.0', COMPAT, ['x'], sw)
     assert '**Should work on**' in notes
     assert '| 26200.9999 / 26300.9999 | 10.0.26100.9999 |' in notes
     visible, folded = notes.split('<details>')
     assert visible.count('| 26200.') == 5
     assert '<summary>6 older builds</summary>' in folded
     assert notes.index('Should work on') < notes.index(OTHER_BUILDS) < notes.index('## Changes')
+
+
+def test_built_in_builds_listed_when_not_retested():
+    # 1.18.0 still carries 9807's addresses; a 9807 user must see that.
+    sw = should_work_for({'old', 'inverted'}, BUILDS, set(), KNOWN)
+    assert '10.0.26100.9807' in [b['taskbar'] for b in sw]
+    notes = render('1.18.0', COMPAT, ['x'], sw)
+    assert '| 26200.9807 / 26300.9807 | 10.0.26100.9807 | Built-in addresses |' in notes
+
+
+def test_built_in_build_not_repeated_when_tested():
+    sw = should_work_for({'old', 'inverted'}, BUILDS, {'10.0.26100.9807'}, KNOWN)
+    assert '10.0.26100.9807' not in [b['taskbar'] for b in sw]
