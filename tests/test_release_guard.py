@@ -3,6 +3,7 @@ that could change what runs: from a fork, touching anything but src/ and
 README.md in any commit, containing a merge or a non-regular file."""
 import json
 import os
+import re
 import subprocess
 
 import pytest
@@ -32,7 +33,7 @@ def open_pr(author, build):
     return sha
 
 
-def run_release(tmp_path, origin, pr):
+def run_release(tmp_path, origin, pr, extra_env=None):
     rel = tmp_path / 'releaser'
     subprocess.run(['git', 'clone', '-q', str(origin), str(rel)], check=True)
     subprocess.run(['cp', os.path.join(REPO, 'tools/release.sh'), rel / 'tools/release.sh'], check=True)
@@ -41,9 +42,11 @@ def run_release(tmp_path, origin, pr):
     bin_dir.mkdir(exist_ok=True)
     (bin_dir / 'gh').write_text(f"#!/bin/sh\ncat <<'JSON'\n{json.dumps(pr)}\nJSON\n")
     (bin_dir / 'gh').chmod(0o755)
-    env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}'}
-    return subprocess.run(['tools/release.sh', '9.9.9', '--pr', '7'], cwd=rel, env=env,
-                          capture_output=True, text=True, input='no\n')
+    env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', **(extra_env or {})}
+    p = subprocess.run(['tools/release.sh', '9.9.9', '--pr', '7'], cwd=rel, env=env,
+                       capture_output=True, text=True, input='no\n')
+    p.main_moved = git(rel, 'rev-parse', 'main') != git(rel, 'rev-parse', 'origin/main')
+    return p
 
 
 def pr_json(sha, cross=False):
@@ -103,10 +106,17 @@ def test_refuses_symlink_under_src(setup):
     assert p.returncode != 0 and 'src/link' in p.stderr
 
 
+def bump_version(repo, version='9.9.9'):
+    src = repo / 'src/taskbar-autohide-any-edge.wh.cpp'
+    src.write_text(re.sub(r'(?m)^(// @version\s+)\S+$', rf'\g<1>{version}', src.read_text()))
+    git(repo, 'commit', '-q', '-am', f'test: version {version}')
+
+
 def test_clean_pr_reaches_confirmation(setup):
     tmp, origin, author = setup
 
     def build(repo):
+        bump_version(repo)
         commit_file('src/x.txt', 'x')(repo)
         git(repo, 'rm', '-q', 'src/x.txt')
         git(repo, 'commit', '-q', '-m', 'test: delete under src')   # deletions are allowed
@@ -130,3 +140,22 @@ def test_tag_named_main_cannot_hide_commits(setup):
     assert p.returncode != 0
     assert 'not confirmed' not in p.stderr, 'reached the confirmation with the hidden commit unchecked'
     assert 'tools/evil.sh' in p.stderr or 'refusing' in p.stderr
+
+
+def test_refuses_without_signing_before_touching_anything(setup):
+    tmp, origin, author = setup
+
+    def build(repo):
+        bump_version(repo)
+    no_signer = {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'gpg.ssh.program', 'GIT_CONFIG_VALUE_0': '/bin/false'}
+    p = run_release(tmp, origin, pr_json(open_pr(author, build)), no_signer)
+    assert p.returncode != 0 and 'signing is unavailable' in p.stderr
+    assert not p.main_moved
+
+
+def test_refuses_wrong_version_before_rebasing(setup):
+    tmp, origin, author = setup
+    p = run_release(tmp, origin, pr_json(open_pr(author, commit_file('src/x.txt', 'x'))))
+    assert p.returncode != 0 and 'not at version 9.9.9' in p.stderr
+    assert 'not confirmed' not in p.stderr
+    assert not p.main_moved

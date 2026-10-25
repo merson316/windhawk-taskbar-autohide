@@ -10,6 +10,9 @@
 # --os-build records that this version was tested on that build, with the
 # taskbar.dll installed on this PC. The notes open in $EDITOR before
 # publishing: rewrite the Changes draft in plain language there.
+#
+# Everything that can fail runs before the first push. If the release itself
+# fails after the tag is pushed, re-run the same command to finish it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,7 +28,15 @@ done
 SRC=src/taskbar-autohide-any-edge.wh.cpp
 
 [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty" >&2; exit 1; }
-! git rev-parse -q --verify "refs/tags/v$V" >/dev/null || { echo "tag v$V already exists" >&2; exit 1; }
+can_sign() {   # sign a scratch file exactly as git would, through gpg.ssh.program
+  local d prog key rc
+  prog=$(git config gpg.ssh.program || echo ssh-keygen); prog=${prog/#\~/$HOME}
+  key=$(git config user.signingkey) || return 1; key=${key/#\~/$HOME}
+  d=$(mktemp -d); echo probe > "$d/p"
+  "$prog" -Y sign -n git -f "$key" "$d/p" >/dev/null 2>&1; rc=$?
+  rm -rf "$d"; return $rc
+}
+can_sign || { echo "signing is unavailable: run bin/keys-load.sh, then retry" >&2; exit 1; }
 # Every use of main below goes through BASE, resolved once from the branch
 # itself: a tag named main would otherwise win and could hide commits.
 git show-ref -q --verify refs/tags/main && { echo "a tag named main exists; refusing" >&2; exit 1; }
@@ -33,8 +44,17 @@ git switch -q main
 git fetch -q --no-tags origin refs/heads/main
 git merge -q --ff-only FETCH_HEAD
 BASE=$(git rev-parse --verify -q 'refs/heads/main^{commit}')
+RESUME=""
+if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
+  # Only an earlier run of this script, stopped after pushing its tag.
+  [ "$(git rev-parse "v$V^{commit}")" = "$BASE" ] && git tag -v "v$V" >/dev/null 2>&1 ||
+    { echo "tag v$V already exists and is not this release's tag on main" >&2; exit 1; }
+  ! gh release view "v$V" >/dev/null 2>&1 || { echo "release v$V already exists" >&2; exit 1; }
+  RESUME=1
+  echo "resuming v$V: the tag is pushed, publishing the release"
+fi
 
-if [ -n "$PR" ]; then
+if [ -n "$PR" ] && [ -z "$RESUME" ]; then
   # This runs with the signing key loaded, so the PR must not be able to
   # change what runs: same repo only, src/ and README.md only, and exactly
   # the commit shown here.
@@ -44,7 +64,7 @@ if [ -n "$PR" ]; then
   [ "$(field "d['baseRefName']")" = main ] || { echo "PR #$PR does not target main; refusing" >&2; exit 1; }
   SHA=$(field "d['headRefOid']")
   if [ -z "$OSB" ]; then
-    OSB=$(field "d['body']" | sed -n 's/.*Tested on OS build (winver): `\([0-9][0-9.]*\)`.*/\1/p')
+    OSB=$(field "d['body']" | sed -n 's/.*Tested on OS build (winver): `\([0-9][0-9.]*\)`.*/\1/p' | head -1)
   fi
   [ -n "$OSB" ] || { echo "PR #$PR does not record the tested OS build" >&2; exit 1; }
   git fetch -q --no-tags origin "refs/pull/$PR/head"
@@ -58,6 +78,8 @@ if [ -n "$PR" ]; then
   }
   BAD=$(git log --format= --raw --no-renames "$BASE..$SHA" | check_paths | sort -u)
   [ -z "$BAD" ] || { printf 'PR #%s refused:\n%s\n' "$PR" "$BAD" >&2; exit 1; }
+  git show "$SHA:$SRC" | grep -E "^// @version +$V\$" >/dev/null ||
+    { echo "PR #$PR's $SRC is not at version $V" >&2; exit 1; }
   git log --stat --format='%h %s' "$BASE..$SHA"
   read -r -p "Rebase and sign exactly these commits (${SHA:0:12})? Type yes: " OK
   [ "$OK" = yes ] || { echo "not confirmed" >&2; exit 1; }
@@ -73,28 +95,28 @@ fi
 
 grep -qE "^// @version +$V\$" "$SRC" || { echo "$SRC is not at version $V" >&2; exit 1; }
 
-if [ -n "$OSB" ]; then
-  .venv/bin/python tools/release_notes.py --version "$V" --record "$OSB"
-  git add docs/compatibility.json
-  git commit -q -S -m "docs: record $V as tested on $OSB"
-fi
-
-git push -q origin refs/heads/main:refs/heads/main
-git tag -s "v$V" -m "v$V"
-git push -q origin "v$V"
-
 WORK=$(mktemp -d)
-.venv/bin/python tools/check-builds.py >/dev/null
-if [ -n "$(git status --porcelain docs/builds.json)" ]; then
+trap 'rm -rf "$WORK"' EXIT
+if [ -z "$RESUME" ]; then
+  if [ -n "$OSB" ]; then
+    .venv/bin/python tools/release_notes.py --version "$V" --record "$OSB"
+    git add docs/compatibility.json
+    git diff --cached --quiet || git commit -q -S -m "docs: record $V as tested on $OSB"
+  fi
+  .venv/bin/python tools/check-builds.py >/dev/null
   git add docs/builds.json
-  git commit -q -S -m "docs: refresh the taskbar builds the mod should work on"
-  git push -q origin refs/heads/main:refs/heads/main
+  git diff --cached --quiet || git commit -q -S -m "docs: refresh the taskbar builds the mod should work on"
 fi
 .venv/bin/python tools/release_notes.py --version "$V" > "$WORK/notes.md"
 "${EDITOR:-nano}" "$WORK/notes.md"
 cp "$SRC" "$WORK/taskbar-autohide-any-edge.wh.cpp"
+
+if [ -z "$RESUME" ]; then
+  git push -q origin refs/heads/main:refs/heads/main
+  git tag -s "v$V" -m "v$V"
+  git push -q origin "v$V"
+fi
 gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp"
 if [ -n "$PR" ]; then
   gh pr close "$PR" --comment "Rebased onto main with signed commits and released in v$V." --delete-branch
 fi
-rm -rf "$WORK"
