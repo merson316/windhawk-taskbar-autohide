@@ -49,9 +49,10 @@ def run_release(tmp_path, origin, pr, extra_env=None):
     return p
 
 
-def pr_json(sha, cross=False):
-    return {'isCrossRepository': cross, 'headRefOid': sha, 'headRefName': 'build/test', 'baseRefName': 'main',
-            'body': 'Tested on OS build (winver): `26300.9999`'}
+def pr_json(sha, cross=False, draft=False,
+            body='- [x] Compiled\n- [x] Works\nTested on OS build (winver): `26300.9999`'):
+    return {'isCrossRepository': cross, 'isDraft': draft, 'headRefOid': sha, 'headRefName': 'build/test',
+            'baseRefName': 'main', 'body': body}
 
 
 def commit_file(path, text):
@@ -158,4 +159,19 @@ def test_refuses_wrong_version_before_rebasing(setup):
     p = run_release(tmp, origin, pr_json(open_pr(author, commit_file('src/x.txt', 'x'))))
     assert p.returncode != 0 and 'not at version 9.9.9' in p.stderr
     assert 'not confirmed' not in p.stderr
+    assert not p.main_moved
+
+
+def test_refuses_draft_pr(setup):
+    tmp, origin, author = setup
+    p = run_release(tmp, origin, pr_json(open_pr(author, bump_version), draft=True))
+    assert p.returncode != 0 and 'still a draft' in p.stderr
+    assert not p.main_moved
+
+
+def test_refuses_unticked_checklist(setup):
+    tmp, origin, author = setup
+    body = '- [x] Compiled\n- [ ] Works\nTested on OS build (winver): `26300.9999`'
+    p = run_release(tmp, origin, pr_json(open_pr(author, bump_version), body=body))
+    assert p.returncode != 0 and 'unticked' in p.stderr
     assert not p.main_moved

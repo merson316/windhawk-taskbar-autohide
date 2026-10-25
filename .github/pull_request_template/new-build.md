@@ -11,4 +11,4 @@ This PR adds the build to `kKnownBuilds` and bumps the mod to **{mod_version}**.
 - [ ] Windhawk's log shows "using the built-in addresses for taskbar.dll {version}"
 - Tested on OS build (winver): `_____`
 
-Merge with `tools/release.sh {mod_version} --pr <this PR's number>`, not the merge button, so every commit stays signed with the owner's key.
+Once every box is ticked and the build is filled in, mark the PR ready for review, then merge with `tools/release.sh {mod_version} --pr <this PR's number>`, not the merge button, so every commit stays signed with the owner's key.

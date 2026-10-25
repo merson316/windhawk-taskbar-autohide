@@ -58,10 +58,14 @@ if [ -n "$PR" ] && [ -z "$RESUME" ]; then
   # This runs with the signing key loaded, so the PR must not be able to
   # change what runs: same repo only, src/ and README.md only, and exactly
   # the commit shown here.
-  INFO=$(gh pr view "$PR" --json isCrossRepository,headRefOid,baseRefName,body)
+  INFO=$(gh pr view "$PR" --json isCrossRepository,isDraft,headRefOid,baseRefName,body)
   field() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" <<<"$INFO"; }
   [ "$(field "d['isCrossRepository']")" = False ] || { echo "PR #$PR is from a fork; refusing" >&2; exit 1; }
   [ "$(field "d['baseRefName']")" = main ] || { echo "PR #$PR does not target main; refusing" >&2; exit 1; }
+  [ "$(field "d['isDraft']")" = False ] || { echo "PR #$PR is still a draft; mark it ready once tested" >&2; exit 1; }
+  if field "d['body']" | grep -E '^[[:space:]]*- \[ \]' >/dev/null; then
+    echo "PR #$PR has unticked checklist items; finish testing first" >&2; exit 1
+  fi
   SHA=$(field "d['headRefOid']")
   if [ -z "$OSB" ]; then
     OSB=$(field "d['body']" | sed -n 's/.*Tested on OS build (winver): `\([0-9][0-9.]*\)`.*/\1/p' | head -1)
