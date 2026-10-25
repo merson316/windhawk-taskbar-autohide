@@ -144,6 +144,10 @@ def main(argv):
     if published:
         print(f'symbols published ({status}): {version}')
         return 0
+    if status != 404:
+        # A 503 or 429 says nothing about the build; try again next sign-in.
+        print(f'symbol server answered {status}; trying again next time')
+        return 5
     branch = f'build/{version}'
     if git('ls-remote', '--exit-code', '--heads', 'origin', branch, check=False).returncode == 0:
         print(f'pending PR: {branch}')

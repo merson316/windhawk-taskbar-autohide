@@ -147,3 +147,13 @@ def test_watch_failure_notifies_and_cleans_up(checkout, dll_9807, msdl):
     # and the next sign-in tries again rather than reporting known or pending
     p2, _ = run(checkout, dll_9807, msdl, '--dry-run')
     assert 'would open draft PR' in p2.stdout
+
+
+@pytest.mark.parametrize('msdl', [503, 429, 403], indirect=True)
+def test_watch_waits_on_server_errors(checkout, dll_9807, msdl):
+    # Only a 404 means "not published"; anything else must not lead to a PR.
+    p, notes = run(checkout, dll_9807, msdl)
+    assert p.returncode == 5, p.stdout + p.stderr
+    assert 'symbol server answered' in p.stdout
+    assert notes == ''
+    assert 'build/' not in remote_branches(checkout)
