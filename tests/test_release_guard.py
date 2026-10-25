@@ -116,3 +116,17 @@ def test_clean_pr_reaches_confirmation(setup):
     # and the empty answer is refused.
     assert 'test: src/y.txt' in p.stdout
     assert p.returncode == 1 and 'not confirmed' in p.stderr
+
+
+def test_tag_named_main_cannot_hide_commits(setup):
+    tmp, origin, author = setup
+
+    def build(repo):
+        commit_file('tools/evil.sh', 'x')(repo)
+        git(repo, 'tag', '-a', '-m', 'decoy', 'main')   # makes "main" resolve to the evil commit
+        git(repo, 'push', '-q', 'origin', 'refs/tags/main')
+        commit_file('src/x.txt', 'x')(repo)
+    p = run_release(tmp, origin, pr_json(open_pr(author, build)))
+    assert p.returncode != 0
+    assert 'not confirmed' not in p.stderr, 'reached the confirmation with the hidden commit unchecked'
+    assert 'tools/evil.sh' in p.stderr or 'refusing' in p.stderr

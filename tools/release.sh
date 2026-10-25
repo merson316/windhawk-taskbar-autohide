@@ -26,8 +26,13 @@ SRC=src/taskbar-autohide-any-edge.wh.cpp
 
 [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty" >&2; exit 1; }
 ! git rev-parse -q --verify "refs/tags/v$V" >/dev/null || { echo "tag v$V already exists" >&2; exit 1; }
+# Every use of main below goes through BASE, resolved once from the branch
+# itself: a tag named main would otherwise win and could hide commits.
+git show-ref -q --verify refs/tags/main && { echo "a tag named main exists; refusing" >&2; exit 1; }
 git switch -q main
-git pull -q --ff-only origin main
+git fetch -q --no-tags origin refs/heads/main
+git merge -q --ff-only FETCH_HEAD
+BASE=$(git rev-parse --verify -q 'refs/heads/main^{commit}')
 
 if [ -n "$PR" ]; then
   # This runs with the signing key loaded, so the PR must not be able to
@@ -42,23 +47,24 @@ if [ -n "$PR" ]; then
     OSB=$(field "d['body']" | sed -n 's/.*Tested on OS build (winver): `\([0-9][0-9.]*\)`.*/\1/p')
   fi
   [ -n "$OSB" ] || { echo "PR #$PR does not record the tested OS build" >&2; exit 1; }
-  git fetch -q origin "refs/pull/$PR/head"
+  git fetch -q --no-tags origin "refs/pull/$PR/head"
   [ "$(git rev-parse FETCH_HEAD)" = "$SHA" ] || { echo "PR #$PR moved while releasing; refusing" >&2; exit 1; }
   # Judge the commits that will be applied, not GitHub's (truncatable) file list.
-  [ -z "$(git rev-list --merges "main..$SHA")" ] || { echo "PR #$PR contains a merge commit; refusing" >&2; exit 1; }
+  [ -z "$(git rev-list --merges "$BASE..$SHA")" ] || { echo "PR #$PR contains a merge commit; refusing" >&2; exit 1; }
   check_paths() {   # stdin: git --raw lines; refuse paths outside src/ and README.md, and non-regular files
     awk -F'\t' '{ split($1, f, " "); mode = (f[2] == "000000") ? substr(f[1], 2) : f[2]; path = $NF
                    if (path !~ /^src\// && path != "README.md") print "outside src/ and README.md: " path
                    else if (mode != "100644" && mode != "100755") print "not a regular file: " path }'
   }
-  BAD=$(git log --format= --raw --no-renames "main..$SHA" | check_paths | sort -u)
+  BAD=$(git log --format= --raw --no-renames "$BASE..$SHA" | check_paths | sort -u)
   [ -z "$BAD" ] || { printf 'PR #%s refused:\n%s\n' "$PR" "$BAD" >&2; exit 1; }
-  git log --stat --format='%h %s' "main..$SHA"
+  git log --stat --format='%h %s' "$BASE..$SHA"
   read -r -p "Rebase and sign exactly these commits (${SHA:0:12})? Type yes: " OK
   [ "$OK" = yes ] || { echo "not confirmed" >&2; exit 1; }
   git switch -q -c "release-$V" "$SHA"
-  git rebase -q --gpg-sign main
-  BAD=$(git diff --raw --no-renames main HEAD | check_paths)
+  git rebase -q --gpg-sign "$BASE"
+  git merge-base --is-ancestor "$BASE" HEAD || { echo "rebase did not land on main; refusing" >&2; git switch -q main; exit 1; }
+  BAD=$(git diff --raw --no-renames "$BASE" HEAD | check_paths)
   [ -z "$BAD" ] || { printf 'rebased PR #%s refused:\n%s\n' "$PR" "$BAD" >&2; git switch -q main; exit 1; }
   git switch -q main
   git merge -q --ff-only "release-$V"
@@ -73,7 +79,7 @@ if [ -n "$OSB" ]; then
   git commit -q -S -m "docs: record $V as tested on $OSB"
 fi
 
-git push -q origin main
+git push -q origin refs/heads/main:refs/heads/main
 git tag -s "v$V" -m "v$V"
 git push -q origin "v$V"
 
