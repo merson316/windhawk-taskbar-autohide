@@ -46,6 +46,17 @@ the masked result — `GetDockedRect` returns the hidden rect only when
 Windows 11 build 26200 or newer, x86-64. Developed and tested against
 10.0.26300.9278.
 
+The mod finds the taskbar's functions through Microsoft's debug symbols, which
+Windhawk downloads on first use. Microsoft sometimes publishes them days after a
+Windows update. For builds where that has happened, the mod carries the function
+addresses itself, matched by hand against the previous build's symbols, and
+uses them only on that exact `taskbar.dll` and only when the symbols cannot be
+resolved:
+
+| `taskbar.dll` | Matched against |
+|---|---|
+| 10.0.26100.9807 | 10.0.26100.9549 |
+
 ## Installation
 
 ```

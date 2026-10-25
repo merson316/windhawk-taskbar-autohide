@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.16.0
+// @version         1.17.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1548,22 +1548,22 @@ void WarnNotRunning(PCWSTR reason) {
     WarnOnce(body);
 }
 
-// Builds the symbol server path of a module's PDB from its CodeView record:
-// /download/symbols/<pdb>/<GUID><age>/<pdb>.
-bool SymbolServerPath(HMODULE module, WCHAR (&path)[512]) {
+// The PDB identity a module was linked with. Every build of a module has its
+// own GUID, so this names one exact file.
+struct CodeViewRsds {
+    DWORD signature;   // "RSDS"
+    GUID guid;
+    DWORD age;
+    char pdbPath[1];
+};
+
+const CodeViewRsds* FindCodeView(HMODULE module) {
     auto base = (const BYTE*)module;
     auto nt = (const IMAGE_NT_HEADERS*)(base +
                                         ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
     const IMAGE_DATA_DIRECTORY& dir =
         nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DEBUG];
     auto entries = (const IMAGE_DEBUG_DIRECTORY*)(base + dir.VirtualAddress);
-
-    struct CodeViewRsds {
-        DWORD signature;   // "RSDS"
-        GUID guid;
-        DWORD age;
-        char pdbPath[1];
-    };
 
     for (DWORD i = 0; dir.VirtualAddress && i < dir.Size / sizeof(*entries);
          i++) {
@@ -1572,32 +1572,41 @@ bool SymbolServerPath(HMODULE module, WCHAR (&path)[512]) {
             continue;
         }
         auto cv = (const CodeViewRsds*)(base + entries[i].AddressOfRawData);
-        if (cv->signature != 0x53445352) {
-            continue;
+        if (cv->signature == 0x53445352) {
+            return cv;
         }
-
-        // The record can hold the build machine's full path.
-        PCSTR name = cv->pdbPath;
-        for (PCSTR c = cv->pdbPath; *c; c++) {
-            if (*c == '\\' || *c == '/') {
-                name = c + 1;
-            }
-        }
-        WCHAR pdb[MAX_PATH];
-        if (!MultiByteToWideChar(CP_ACP, 0, name, -1, pdb, ARRAYSIZE(pdb))) {
-            return false;
-        }
-
-        const GUID& g = cv->guid;
-        wsprintfW(path,
-                  L"/download/symbols/%s/%08lX%04X%04X%02X%02X%02X%02X%02X%02X"
-                  L"%02X%02X%lX/%s",
-                  pdb, g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1],
-                  g.Data4[2], g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6],
-                  g.Data4[7], cv->age, pdb);
-        return true;
     }
-    return false;
+    return nullptr;
+}
+
+// Builds the symbol server path of a module's PDB from its CodeView record:
+// /download/symbols/<pdb>/<GUID><age>/<pdb>.
+bool SymbolServerPath(HMODULE module, WCHAR (&path)[512]) {
+    const CodeViewRsds* cv = FindCodeView(module);
+    if (!cv) {
+        return false;
+    }
+
+    // The record can hold the build machine's full path.
+    PCSTR name = cv->pdbPath;
+    for (PCSTR c = cv->pdbPath; *c; c++) {
+        if (*c == '\\' || *c == '/') {
+            name = c + 1;
+        }
+    }
+    WCHAR pdb[MAX_PATH];
+    if (!MultiByteToWideChar(CP_ACP, 0, name, -1, pdb, ARRAYSIZE(pdb))) {
+        return false;
+    }
+
+    const GUID& g = cv->guid;
+    wsprintfW(path,
+              L"/download/symbols/%s/%08lX%04X%04X%02X%02X%02X%02X%02X%02X"
+              L"%02X%02X%lX/%s",
+              pdb, g.Data1, g.Data2, g.Data3, g.Data4[0], g.Data4[1],
+              g.Data4[2], g.Data4[3], g.Data4[4], g.Data4[5], g.Data4[6],
+              g.Data4[7], cv->age, pdb);
+    return true;
 }
 
 enum class SymbolsOnServer { Unknown, Published, NotPublished };
@@ -1874,6 +1883,76 @@ void Wh_ModSettingsChanged() {
     LoadSettings();
 }
 
+// Function addresses for taskbar builds whose symbols Microsoft has not
+// published, matched by hand against the previous build's PDB. Keyed by PDB
+// identity, so an entry applies to that exact file and nothing else, and only
+// once symbols have failed: published symbols always win.
+struct KnownBuild {
+    PCWSTR version;
+    GUID pdbGuid;
+    DWORD pdbAge;
+    DWORD getStuckPlace;
+    DWORD getAutoHideFlags;
+    DWORD setAutoHideFlags;
+    DWORD getDockedRect;
+    DWORD unhide;
+    DWORD slideWindow;
+    DWORD permitAutoHide;
+};
+
+const KnownBuild kKnownBuilds[] = {
+    // Matched against 10.0.26100.9549 with Ghidra. GetStuckPlace,
+    // SetAutoHideFlags and GetDockedRect are instruction-identical; Unhide,
+    // SlideWindow and PermitAutoHide differ only in stack layout and inlining,
+    // with the same imports and member offsets.
+    {L"10.0.26100.9807",
+     {0x1AF71656, 0xD4C0, 0x4FBD, {0x46, 0x3B, 0xFF, 0x7E, 0x4E, 0xD1, 0x69, 0xCE}},
+     1, 0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40},
+};
+
+const KnownBuild* FindKnownBuild(HMODULE module) {
+    const CodeViewRsds* cv = FindCodeView(module);
+    if (!cv) {
+        return nullptr;
+    }
+    for (const KnownBuild& b : kKnownBuilds) {
+        if (IsEqualGUID(cv->guid, b.pdbGuid) && cv->age == b.pdbAge) {
+            return &b;
+        }
+    }
+    return nullptr;
+}
+
+// The same hooks HookSymbols would set, at the tabled addresses.
+bool HookKnownBuild(HMODULE taskbar, const KnownBuild& b) {
+    auto at = [taskbar](DWORD rva) { return (void*)((BYTE*)taskbar + rva); };
+
+    TrayUI_GetStuckPlace_Original =
+        (TrayUI_GetStuckPlace_t)at(b.getStuckPlace);
+
+    return WindhawkUtils::SetFunctionHook(
+               (TrayUI_GetAutoHideFlags_t)at(b.getAutoHideFlags),
+               TrayUI_GetAutoHideFlags_Hook,
+               &TrayUI_GetAutoHideFlags_Original) &&
+           WindhawkUtils::SetFunctionHook(
+               (TrayUI_SetAutoHideFlags_t)at(b.setAutoHideFlags),
+               TrayUI_SetAutoHideFlags_Hook,
+               &TrayUI_SetAutoHideFlags_Original) &&
+           WindhawkUtils::SetFunctionHook(
+               (TrayUI_GetDockedRect_t)at(b.getDockedRect),
+               TrayUI_GetDockedRect_Hook, &TrayUI_GetDockedRect_Original) &&
+           WindhawkUtils::SetFunctionHook((TrayUI_Unhide_t)at(b.unhide),
+                                          TrayUI_Unhide_Hook,
+                                          &TrayUI_Unhide_Original) &&
+           WindhawkUtils::SetFunctionHook(
+               (TrayUI_SlideWindow_t)at(b.slideWindow),
+               TrayUI_SlideWindow_Hook, &TrayUI_SlideWindow_Original) &&
+           WindhawkUtils::SetFunctionHook(
+               (CTaskListWnd_PermitAutoHide_t)at(b.permitAutoHide),
+               CTaskListWnd_PermitAutoHide_Hook,
+               &CTaskListWnd_PermitAutoHide_Original);
+}
+
 // Returns nullptr when the mod is ready, or a reason fit to put in front of a
 // user.
 PCWSTR SetUpHooks() {
@@ -1910,14 +1989,24 @@ PCWSTR SetUpHooks() {
          &TrayUI_SlideWindow_Address, nullptr, true},
     };
 
+    const KnownBuild* known = nullptr;
     if (!WindhawkUtils::HookSymbols(taskbar, resolveOnly,
                                     ARRAYSIZE(resolveOnly)) ||
         !TrayUI_GetAutoHideFlags_Address) {
-        g_symbolsMissingFor = taskbar;
-        return L"The taskbar's debug symbols could not be resolved. "
-               L"Windhawk downloads these from Microsoft the first time a mod "
-               L"needs them, so check the internet connection and reload the "
-               L"mod.";
+        known = FindKnownBuild(taskbar);
+        if (!known) {
+            g_symbolsMissingFor = taskbar;
+            return L"The taskbar's debug symbols could not be resolved. "
+                   L"Windhawk downloads these from Microsoft the first time a "
+                   L"mod needs them, so check the internet connection and "
+                   L"reload the mod.";
+        }
+        Wh_Log(L"no symbols, using the built-in addresses for taskbar.dll %s",
+               known->version);
+        TrayUI_GetAutoHideFlags_Address =
+            (TrayUI_GetAutoHideFlags_t)((BYTE*)taskbar + known->getAutoHideFlags);
+        TrayUI_SlideWindow_Address =
+            (TrayUI_SlideWindow_t)((BYTE*)taskbar + known->slideWindow);
     }
 
     g_offsetsVerified =
@@ -1960,7 +2049,11 @@ PCWSTR SetUpHooks() {
          CTaskListWnd_PermitAutoHide_Hook, true},
     };
 
-    if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
+    if (known) {
+        if (!HookKnownBuild(taskbar, *known)) {
+            return L"The mod could not hook the taskbar's functions.";
+        }
+    } else if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
         g_symbolsMissingFor = taskbar;
         return L"The taskbar's debug symbols could not be resolved. "
                L"Windhawk downloads these from Microsoft the first time a mod "
