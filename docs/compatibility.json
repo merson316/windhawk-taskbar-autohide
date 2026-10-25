@@ -1,0 +1,10 @@
+[
+  {
+    "os_build": "26300.9807",
+    "taskbar": "10.0.26100.9807",
+    "support": "built-in",
+    "tested_with": [
+      "1.17.0"
+    ]
+  }
+]
