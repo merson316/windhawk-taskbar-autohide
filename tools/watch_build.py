@@ -2,8 +2,11 @@
 taskbar.dll that the mod cannot handle -- no published symbols, not in
 kKnownBuilds, no PR yet -- match it and open a draft PR for the owner to test.
 
+All git work happens in a temporary worktree of origin/main: the owner's
+checkout, and any uncommitted edits in it, are never touched.
+
 Exit codes: 0 nothing to do or PR opened, 3 match failed, 4 signing
-unavailable, 5 symbol server unreachable."""
+unavailable, 5 symbol server unreachable, 6 anything else failed (notified)."""
 import os
 import shlex
 import subprocess
@@ -61,18 +64,67 @@ def git(*args, check=True):
 
 
 def signing_available():
+    """Sign a scratch file exactly as git would, through gpg.ssh.program (the
+    owner's wrapper picks its own agent, so asking ssh-add proves nothing)."""
     key = os.path.expanduser(git('config', 'user.signingkey', check=False).stdout.strip())
+    program = git('config', 'gpg.ssh.program', check=False).stdout.strip() or 'ssh-keygen'
     if not key:
         return False
-    if not key.startswith('ssh-'):
-        path = key if key.endswith('.pub') or not os.path.exists(key + '.pub') else key + '.pub'
+    with tempfile.TemporaryDirectory() as d:
+        probe = os.path.join(d, 'probe')
+        with open(probe, 'w') as f:
+            f.write('signing probe\n')
         try:
-            key = open(path).read()
-        except OSError:
+            return subprocess.run([os.path.expanduser(program), '-Y', 'sign', '-n', 'git', '-f', key, probe],
+                                  capture_output=True, timeout=30).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
             return False
-    blob = key.split()[1] if len(key.split()) > 1 else key
-    agent = subprocess.run(['ssh-add', '-L'], capture_output=True, text=True)
-    return agent.returncode == 0 and blob in agent.stdout
+
+
+def known_on_main():
+    """kKnownBuilds as origin/main has it, not as the checkout happens to be."""
+    with tempfile.NamedTemporaryFile('w', suffix='.cpp', delete=False) as f:
+        f.write(git('show', f'origin/main:{SRC}').stdout)
+    try:
+        return known_builds(f.name)
+    finally:
+        os.unlink(f.name)
+
+
+def open_pr(version, branch, ref_version, entry, evidence):
+    """Commit the entry on a new branch from origin/main in a temporary
+    worktree, push it and open a draft PR. Undoes the branch on failure so
+    the next sign-in tries again."""
+    tree = tempfile.mkdtemp(prefix='taskbar-watch-')
+    pushed = False
+    git('worktree', 'add', '-q', '-b', branch, tree, 'origin/main')
+    try:
+        mod_version = apply_entry(os.path.join(tree, SRC), os.path.join(tree, README),
+                                  entry, version, ref_version)
+        git('-C', tree, 'commit', '-q', '-S', '-m',
+            f'feat: built-in addresses for taskbar.dll {version}\n\n'
+            f'Matched against {ref_version} by tools/match-build.py.\n\n{evidence}\n', '--', SRC, README)
+        git('-C', tree, 'push', '-q', '-u', 'origin', branch)
+        pushed = True
+        body = open(TEMPLATE).read().format(version=version, reference=ref_version,
+                                            mod_version=mod_version, evidence=evidence)
+        with tempfile.NamedTemporaryFile('w', suffix='.md', delete=False) as f:
+            f.write(body)
+        try:
+            return subprocess.run(['gh', 'pr', 'create', '--draft', '--head', branch,
+                                   '--title', f'taskbar.dll {version}: built-in addresses', '--body-file', f.name],
+                                  capture_output=True, text=True, check=True, cwd=tree).stdout.strip()
+        finally:
+            os.unlink(f.name)
+    except BaseException:
+        if pushed:
+            git('push', '-q', 'origin', '--delete', branch, check=False)
+        raise
+    finally:
+        # The pushed branch is what matters; leave the owner's checkout as it was.
+        git('worktree', 'remove', '--force', tree, check=False)
+        git('worktree', 'prune', check=False)
+        git('branch', '-q', '-D', branch, check=False)
 
 
 def main(argv):
@@ -80,7 +132,8 @@ def main(argv):
     pe = PE(DLL)
     version, key = pe.file_version(), pe.pdb_key()
 
-    if any(e['pdb_key'] == key for e in known_builds(SRC)):
+    git('fetch', '-q', '--no-tags', 'origin')
+    if any(e['pdb_key'] == key for e in known_on_main()):
         print(f'known: {version}')
         return 0
     try:
@@ -92,13 +145,15 @@ def main(argv):
         print(f'symbols published ({status}): {version}')
         return 0
     branch = f'build/{version}'
-    if git('rev-parse', '--verify', '-q', f'refs/heads/{branch}', check=False).returncode == 0 or \
-            git('ls-remote', '--exit-code', '--heads', 'origin', branch, check=False).returncode == 0:
+    if git('ls-remote', '--exit-code', '--heads', 'origin', branch, check=False).returncode == 0:
         print(f'pending PR: {branch}')
         return 0
 
     ref, ref_pdb = auto_reference(pe)
     found = publics(ref_pdb, list(HOOKED.values()))
+    missing = [f for f, n in HOOKED.items() if n not in found]
+    if missing:
+        raise RuntimeError(f'reference {ref.file_version()} PDB lacks {", ".join(missing)}')
     result = match_build(pe, ref, {f: found[n] for f, n in HOOKED.items()})
     evidence = evidence_table(result)
     print(f'new {version}, reference {ref.file_version()}\n{evidence}')
@@ -115,26 +170,20 @@ def main(argv):
         notify(f'Taskbar {version} matched but signing is unavailable',
                'run bin/keys-load.sh wsl, then tools/watch-build.sh')
         return 4
-
-    git('fetch', '-q', 'origin')
-    git('switch', '-q', '-c', branch, 'origin/main')
-    mod_version = apply_entry(SRC, README, entry, version, ref.file_version())
-    git('commit', '-q', '-S', '-am', f'feat: built-in addresses for taskbar.dll {version}\n\n'
-        f'Matched against {ref.file_version()} by tools/match-build.py.\n\n{evidence}\n')
-    git('push', '-q', '-u', 'origin', branch)
-    body = open(TEMPLATE).read().format(version=version, reference=ref.file_version(),
-                                        mod_version=mod_version, evidence=evidence)
-    with tempfile.NamedTemporaryFile('w', suffix='.md', delete=False) as f:
-        f.write(body)
-    url = subprocess.run(['gh', 'pr', 'create', '--draft', '--head', branch,
-                          '--title', f'taskbar.dll {version}: built-in addresses', '--body-file', f.name],
-                         capture_output=True, text=True, check=True).stdout.strip()
-    os.unlink(f.name)
-    git('switch', '-q', '-')
+    url = open_pr(version, branch, ref.file_version(), entry, evidence)
     notify(f'Taskbar {version}: draft PR ready to test', url)
     print(url)
     return 0
 
 
+def run(argv):
+    try:
+        return main(argv)
+    except Exception as e:   # unattended: never fail without telling the owner
+        print(f'watcher failed: {e!r}', file=sys.stderr)
+        notify('Taskbar watcher failed', f'{type(e).__name__}: {e} (see ~/.cache/taskbar-matcher/watch.log)')
+        return 6
+
+
 if __name__ == '__main__':
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(run(sys.argv[1:]))
