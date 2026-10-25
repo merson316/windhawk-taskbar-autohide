@@ -4,6 +4,8 @@ the function, by comparing with the reference build."""
 import re
 import struct
 
+from . import scan
+
 GET_STUCK_PLACE = bytes.fromhex('8B811C010000 83F8FF 7506 8B8110010000 C3')
 SHOW_DURATION = bytes.fromhex('448BB36C010000')   # mov r14d,[rbx+16Ch], at +0xA6
 HIDE_DURATION = bytes.fromhex('448BB368010000')   # mov r14d,[rbx+168h], at +0x123
@@ -71,7 +73,10 @@ def get_auto_hide_flags(pe):
                 if m.group(1)[0] >= 0x80 or blob[zero:zero + 2] != b'\x33\xC0':
                     continue
             sites.append(va + m.start())
-    return _starts(pe, sites)
+    # The regex only finds where to look; accept a function only if the
+    # mod's own ScanForOffsets would accept it.
+    return [f for f in _starts(pe, sites)
+            if scan.scan_for_offsets(pe.read(f, 0x100), {'old', 'inverted'}) is not None]
 
 
 def get_stuck_place(pe):

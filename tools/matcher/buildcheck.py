@@ -1,12 +1,8 @@
 """Whether a taskbar build should work with a mod version: its symbols resolve,
 and its code passes the checks the mod runs when it loads."""
-import re
-
-from . import HOOKED
+from . import HOOKED, scan
 from .pdb import publics
 
-_OLD = re.compile(rb'\x83\xBB....\x03\x74\x04\x33\xC0\xEB\x03\x8B\x43.', re.S)
-_INVERTED = re.compile(rb'\x83\xBB....\x03\x75.\x8B\x43.', re.S)
 SHOW_DURATION = (0xA6, bytes.fromhex('448BB36C010000'))
 HIDE_DURATION = (0x123, bytes.fromhex('448BB368010000'))
 
@@ -20,13 +16,9 @@ def accepted_layouts(src_text):
 
 
 def layout(pe, rva):
-    fn = pe.read(rva, 0x100)
-    pad = fn.find(b'\xCC' * 4)
-    fn = fn[:pad if pad >= 0 else len(fn)]
-    old, inverted = len(_OLD.findall(fn)), len(_INVERTED.findall(fn))
-    if old + inverted != 1:
-        return None
-    return 'old' if old else 'inverted'
+    """The GetAutoHideFlags layout at rva, judged exactly as the mod judges it."""
+    found = scan.scan_for_offsets(pe.read(rva, 0x100), {'old', 'inverted'})
+    return found[0] if found else None
 
 
 def check_build(pe, pdb_path, rvas=None):
