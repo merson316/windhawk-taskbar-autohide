@@ -50,7 +50,7 @@ the neighbour, which reads as the taskbar flying in from the wrong screen.
 
 A proper fix means the taskbar not occupying the neighbouring display while
 hidden, which is the same problem as the hide spilling over there. An attempt at
-this is preserved in `research/broken-multimonitor-attempt.wh.cpp`; it ended in a
+this is preserved at `v1.17.0:research/broken-multimonitor-attempt.wh.cpp`; it ended in a
 loop that flickered the taskbar between three positions and was reverted. The
 one reusable discovery from it: `SetWindowRgn` clips the taskbar's XAML child
 content, where resizing the window does not.

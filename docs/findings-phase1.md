@@ -4,8 +4,8 @@ Date: 2026-08-28
 Build: 10.0.26300.9278 (26H2), Taskbar.dll at 00007FFFE3950000
 Instrumentation: 14/14 symbols resolved
 
-Traces: `research/trace-left.log` (broken, 97 lines),
-`research/trace-bottom.log` (working control, 910 lines).
+Traces: `v1.17.0:research/trace-left.log` (broken, 97 lines),
+`v1.17.0:research/trace-bottom.log` (working control, 910 lines).
 
 ## Result
 
@@ -365,7 +365,7 @@ in `Taskbar.View.dll`. Note that `ViewCoordinator` is already ruled out -- its
 hooks bound and never fired, because it implements collapse-to-smaller-size, not
 auto-hide.
 
-The experimental mod is kept at `dev/taskbar-autohide-anim-experiment.wh.cpp` as
+The experimental mod is kept at `v1.17.0:dev/taskbar-autohide-anim-experiment.wh.cpp` as
 the record of this test.
 
 ## Why the hide slide is invisible: position enforcement

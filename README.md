@@ -229,8 +229,11 @@ and those have no taskbar to manage.
 
 Windhawk's engine injects into processes broadly by default, so a mod's
 `@include` is not what keeps it out of games. If you play games with kernel
-anti-cheat, add your game library paths to Windhawk's process exclusion list.
-See [`docs/windhawk-config.md`](docs/windhawk-config.md).
+anti-cheat, add your game library roots to Windhawk's process exclusion list
+(Settings → Advanced settings → More advanced settings → Process exclusion
+list), one per line, for example `D:\SteamLibrary\*` and `C:\XboxGames\*`. The
+list adds to Windhawk's built-in exclusions, and games installed under a listed
+root are covered automatically.
 
 ## Development notes
 
@@ -242,10 +245,13 @@ crash and a silent no-op.
 `tools/whcompile.sh` compiles and links a mod using Windhawk's own clang, so
 build errors surface before pasting into the editor.
 
-Layout: `src/` holds the mod that ships. `dev/` holds the read-only diagnostic
-builds and an experiment build with its own `@id`, so they can be installed
-alongside the real one. `research/` keeps the traces and the abandoned attempts,
-which are worth reading before retrying either.
+Layout: `src/` holds the mod that ships. `tools/` holds the build check, the
+matcher for taskbar builds without published symbols, the sign-in watcher and
+the release script; `tests/` covers them (`.venv/bin/pytest tests`). The
+diagnostic builds, raw traces and abandoned attempts from the original
+investigation were removed from the tree after v1.17.0; `git show
+v1.17.0:<path>` brings any of them back, and they are worth reading before
+retrying either.
 
 ## License
 
