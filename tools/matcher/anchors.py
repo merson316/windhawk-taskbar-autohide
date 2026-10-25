@@ -79,8 +79,11 @@ def get_stuck_place(pe):
 
 
 def slide_window(pe):
+    # The loads sit at fixed offsets from the function start; a build that
+    # shifts the body shifts them too, so require the start itself.
     return [r - 0xA6 for r in find_bytes(pe, SHOW_DURATION)
-            if pe.read(r - 0xA6 + 0x123, len(HIDE_DURATION)) == HIDE_DURATION]
+            if pe.function_containing(r) == r - 0xA6
+            and pe.read(r - 0xA6 + 0x123, len(HIDE_DURATION)) == HIDE_DURATION]
 
 
 def permit_auto_hide(pe):

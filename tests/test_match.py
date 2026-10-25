@@ -55,3 +55,18 @@ def test_pick_reference_newest_below(dll_9278, dll_9549, dll_9807):
     assert pick_reference(PE(dll_9549), cands)[1] == 'a.pdb'
     with pytest.raises(LookupError):
         pick_reference(PE(dll_9278), cands)
+
+
+def test_candidate_off_function_start_rejected(monkeypatch, dll_9549, pdb_9549, dll_9807):
+    # A build that shifts SlideWindow's body would move the duration loads with it;
+    # the anchor would then point a few bytes into the function. Never emit that.
+    from matcher import anchors
+    monkeypatch.setattr(anchors, 'slide_window', lambda pe: [0x41263])
+    result = match_build(PE(dll_9807), PE(dll_9549), fields(pdb_9549))
+    assert result.rvas is None
+    assert 'slideWindow' in result.reason
+
+
+def test_slide_window_anchor_requires_function_start(dll_9807):
+    from matcher import anchors
+    assert anchors.slide_window(PE(dll_9807)) == [0x41260]

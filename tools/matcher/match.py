@@ -62,7 +62,14 @@ def match_build(new, ref, ref_rvas):
         row = Row(name, anchor, cands)
         ref_fn = Function(ref, ref_rvas[name])
         accepted = []
+        starts = {start for start, _ in new.functions()}
         for c in cands:
+            # Hooking a few bytes into a function passes every similarity
+            # gate and crashes Explorer. Only getStuckPlace, a leaf with no
+            # unwind data, is exempt: its anchor is an exact whole-function match.
+            if name != 'getStuckPlace' and c not in starts:
+                row.verdict = f'{c:#x} is not a function start'
+                continue
             fn = Function(new, c)
             ok, sim, imp, off = _accept(name, fn, ref_fn)
             if ok:
