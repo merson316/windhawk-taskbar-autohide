@@ -33,11 +33,10 @@ if [ -n "$PR" ]; then
   # This runs with the signing key loaded, so the PR must not be able to
   # change what runs: same repo only, src/ and README.md only, and exactly
   # the commit shown here.
-  INFO=$(gh pr view "$PR" --json isCrossRepository,headRefOid,headRefName,files,body)
+  INFO=$(gh pr view "$PR" --json isCrossRepository,headRefOid,baseRefName,body)
   field() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" <<<"$INFO"; }
   [ "$(field "d['isCrossRepository']")" = False ] || { echo "PR #$PR is from a fork; refusing" >&2; exit 1; }
-  OTHER=$(field "'\\n'.join(f['path'] for f in d['files'] if f['path'] not in ('README.md',) and not f['path'].startswith('src/'))")
-  [ -z "$OTHER" ] || { printf 'PR #%s changes files outside src/ and README.md; refusing:\n%s\n' "$PR" "$OTHER" >&2; exit 1; }
+  [ "$(field "d['baseRefName']")" = main ] || { echo "PR #$PR does not target main; refusing" >&2; exit 1; }
   SHA=$(field "d['headRefOid']")
   if [ -z "$OSB" ]; then
     OSB=$(field "d['body']" | sed -n 's/.*Tested on OS build (winver): `\([0-9][0-9.]*\)`.*/\1/p')
@@ -45,11 +44,22 @@ if [ -n "$PR" ]; then
   [ -n "$OSB" ] || { echo "PR #$PR does not record the tested OS build" >&2; exit 1; }
   git fetch -q origin "refs/pull/$PR/head"
   [ "$(git rev-parse FETCH_HEAD)" = "$SHA" ] || { echo "PR #$PR moved while releasing; refusing" >&2; exit 1; }
+  # Judge the commits that will be applied, not GitHub's (truncatable) file list.
+  [ -z "$(git rev-list --merges "main..$SHA")" ] || { echo "PR #$PR contains a merge commit; refusing" >&2; exit 1; }
+  check_paths() {   # stdin: git --raw lines; refuse paths outside src/ and README.md, and non-regular files
+    awk -F'\t' '{ split($1, f, " "); mode = (f[2] == "000000") ? substr(f[1], 2) : f[2]; path = $NF
+                   if (path !~ /^src\// && path != "README.md") print "outside src/ and README.md: " path
+                   else if (mode != "100644" && mode != "100755") print "not a regular file: " path }'
+  }
+  BAD=$(git log --format= --raw --no-renames "main..$SHA" | check_paths | sort -u)
+  [ -z "$BAD" ] || { printf 'PR #%s refused:\n%s\n' "$PR" "$BAD" >&2; exit 1; }
   git log --stat --format='%h %s' "main..$SHA"
   read -r -p "Rebase and sign exactly these commits (${SHA:0:12})? Type yes: " OK
   [ "$OK" = yes ] || { echo "not confirmed" >&2; exit 1; }
   git switch -q -c "release-$V" "$SHA"
   git rebase -q --gpg-sign main
+  BAD=$(git diff --raw --no-renames main HEAD | check_paths)
+  [ -z "$BAD" ] || { printf 'rebased PR #%s refused:\n%s\n' "$PR" "$BAD" >&2; git switch -q main; exit 1; }
   git switch -q main
   git merge -q --ff-only "release-$V"
   git branch -q -D "release-$V"
