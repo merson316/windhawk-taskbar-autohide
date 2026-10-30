@@ -4,8 +4,13 @@ import re
 import shutil
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
+
+from matcher import HOOKED
+from matcher.pdb import publics
+from matcher.pe import PE
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -17,8 +22,6 @@ def msdl(request):
     class H(http.server.BaseHTTPRequestHandler):
         def _reply(self):
             self.send_response(status)
-            if status == 302:
-                self.send_header('Location', 'https://example.invalid/pdb')
             self.end_headers()
         do_HEAD = do_GET = _reply
 
@@ -31,18 +34,54 @@ def msdl(request):
     srv.shutdown()
 
 
+@pytest.fixture
+def symbol_server():
+    """A stand-in symbol server that has the PDBs in `published` (key -> path)
+    and answers 404 for everything else."""
+    published = {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def _reply(self, body):
+            parts = self.path.split('/')   # /Taskbar.pdb/<key>/Taskbar.pdb
+            pdb = published.get(parts[2]) if len(parts) > 2 else None
+            self.send_response(200 if pdb else 404)
+            self.end_headers()
+            if pdb and body:
+                self.wfile.write(open(pdb, 'rb').read())
+
+        def do_HEAD(self):
+            self._reply(False)
+
+        def do_GET(self):
+            self._reply(True)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(('127.0.0.1', 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield SimpleNamespace(url=f'http://127.0.0.1:{srv.server_port}', published=published)
+    srv.shutdown()
+
+
+def stage(tmp_path, dll, ver):
+    """Put a taskbar.dll in the test WinSxS, as Windows does before the restart."""
+    d = tmp_path / f'WinSxS/amd64_microsoft-windows-taskbar-dll_31bf3856ad364e35_10.0.26100.{ver}_none_0'
+    d.mkdir(parents=True)
+    os.symlink(dll, d / 'Taskbar.dll')
+
+
 @pytest.fixture(autouse=True)
 def reference_build(tmp_path, monkeypatch, dll_9549, pdb_9549):
     """A WinSxS and symbol cache holding only 9549 with its PDB, so the
     watcher's reference search sees the same thing on any machine."""
-    sxs = tmp_path / 'WinSxS/amd64_microsoft-windows-taskbar-dll_31bf3856ad364e35_10.0.26100.9549_none_0'
-    sxs.mkdir(parents=True)
-    os.symlink(dll_9549, sxs / 'Taskbar.dll')
+    stage(tmp_path, dll_9549, 9549)
     sym = tmp_path / 'symbols/0A5DD95BEF53208B28B2F3D8586E64261'
     sym.mkdir(parents=True)
     os.symlink(pdb_9549, sym / 'Taskbar.pdb')
     monkeypatch.setenv('WINSXS', str(tmp_path / 'WinSxS'))
     monkeypatch.setenv('WINDHAWK_SYMBOLS', str(tmp_path / 'symbols'))
+    monkeypatch.setenv('TASKBAR_CACHE', str(tmp_path / 'cache'))
 
 
 @pytest.fixture
@@ -101,11 +140,11 @@ def test_watch_known_build(tmp_path, dll_9807, msdl):
     assert 'known: 10.0.26100.9807' in p.stdout
 
 
-@pytest.mark.parametrize('msdl', [302], indirect=True)
-def test_watch_skips_when_pdb_published(checkout, dll_9807, msdl):
-    p, notes = run(checkout, dll_9807, msdl)
+def test_watch_skips_when_pdb_published(checkout, dll_9807, pdb_9807, symbol_server):
+    symbol_server.published[PE(dll_9807).pdb_key()] = pdb_9807
+    p, notes = run(checkout, dll_9807, symbol_server.url)
     assert p.returncode == 0, p.stderr
-    assert 'symbols published' in p.stdout
+    assert 'symbols published, mod checks pass: 10.0.26100.9807' in p.stdout
     assert notes == ''
 
 
@@ -171,3 +210,38 @@ def test_watch_waits_on_server_errors(checkout, dll_9807, msdl):
     assert 'symbol server answered' in p.stdout
     assert notes == ''
     assert 'build/' not in remote_branches(checkout)
+
+
+def test_watch_checks_a_build_staged_for_the_restart(checkout, tmp_path, dll_9549, dll_9807, pdb_9549,
+                                                      symbol_server):
+    # 9549 is running and has symbols; Windows has staged 9807, which has none.
+    symbol_server.published[PE(dll_9549).pdb_key()] = pdb_9549
+    stage(tmp_path, dll_9807, 9807)
+    p, notes = run(checkout, dll_9549, symbol_server.url, '--dry-run')
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert 'symbols published, mod checks pass: 10.0.26100.9549' in p.stdout
+    assert 'staged for restart: 10.0.26100.9807' in p.stdout
+    assert 'would open draft PR "taskbar.dll 10.0.26100.9807' in p.stdout
+
+
+def test_watch_warns_once_when_a_published_build_breaks_the_mod(checkout, tmp_path, dll_9549, pdb_9549,
+                                                                   symbol_server):
+    # Symbols are published, but SlideWindow no longer loads the durations
+    # where the mod reads them: it would refuse to load after the restart.
+    pe = PE(dll_9549)
+    slide = publics(pdb_9549, [HOOKED['slideWindow']])[HOOKED['slideWindow']]
+    name, va, _, ptr, _, _ = next(s for s in pe.sections if s[1] <= slide + 0xA6 < s[1] + s[2])
+    data = bytearray(open(dll_9549, 'rb').read())
+    off = ptr + slide + 0xA6 - va
+    data[off:off + 7] = b'\x90' * 7
+    broken = tmp_path / 'broken.dll'
+    broken.write_bytes(data)
+    symbol_server.published[pe.pdb_key()] = pdb_9549
+
+    p, notes = run(checkout, str(broken), symbol_server.url)
+    assert p.returncode == 7, p.stdout + p.stderr
+    assert 'Taskbar 10.0.26100.9549 will break auto-hide' in notes
+    assert 'SlideWindow' in notes
+    p2, notes2 = run(checkout, str(broken), symbol_server.url)
+    assert p2.returncode == 7
+    assert notes2 == notes, 'warned again on the next run'

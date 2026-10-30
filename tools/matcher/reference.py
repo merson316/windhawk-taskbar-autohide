@@ -12,7 +12,7 @@ from .pe import PE
 WINSXS = os.environ.get('WINSXS', '/mnt/c/Windows/WinSxS')
 SYMBOLS = os.environ.get('WINDHAWK_SYMBOLS', '/mnt/c/ProgramData/Windhawk/Engine/Symbols/Taskbar.pdb')
 MSDL = os.environ.get('MSDL_BASE', 'https://msdl.microsoft.com/download/symbols')
-CACHE = os.path.expanduser('~/.cache/taskbar-matcher')
+CACHE = os.environ.get('TASKBAR_CACHE', os.path.expanduser('~/.cache/taskbar-matcher'))
 
 
 PDB_MAGIC = b'Microsoft C/C++ MSF 7.00\r\n\x1aDS\0\0\0'

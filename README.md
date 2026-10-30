@@ -248,7 +248,8 @@ exact arguments Windhawk uses, so build errors surface before pasting into the
 editor. CI runs the same script on every push and pull request.
 
 Layout: `src/` holds the mod that ships. `tools/` holds the build check, the
-matcher for taskbar builds without published symbols, the sign-in watcher and
+matcher for taskbar builds without published symbols, the build watcher (at
+sign-in and hourly, including builds an update has staged for the restart) and
 the release script; `tests/` covers them (`.venv/bin/pytest tests`). The
 diagnostic builds, raw traces and abandoned attempts from the original
 investigation were removed from the tree after v1.17.0; `git show

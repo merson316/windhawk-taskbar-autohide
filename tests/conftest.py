@@ -18,7 +18,8 @@ WINSXS = os.environ.get('WINSXS', '/mnt/c/Windows/WinSxS')
 
 # version: (TimeDateStamp, SizeOfImage) -- the symbol server's key for the DLL.
 DLLS = {9278: (0x32859388, 0x304000), 9549: (0xE8E4B3D1, 0x308000), 9807: (0x7BA9A532, 0x31A000)}
-PDBS = {9278: 'EB0D05FD4C8B8C721BFCBF0624FCD2881', 9549: '0A5DD95BEF53208B28B2F3D8586E64261'}
+PDBS = {9278: 'EB0D05FD4C8B8C721BFCBF0624FCD2881', 9549: '0A5DD95BEF53208B28B2F3D8586E64261',
+        9807: '1AF71656D4C04FBD463BFF7E4ED169CE1'}
 
 
 def _missing(what):
@@ -77,3 +78,8 @@ def pdb_9278():
 @pytest.fixture
 def pdb_9549():
     return _pdb(9549)
+
+
+@pytest.fixture
+def pdb_9807():
+    return _pdb(9807)

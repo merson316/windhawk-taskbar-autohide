@@ -1,14 +1,24 @@
-"""Runs at sign-in (see install-watch-task.ps1). If Windows has installed a
-taskbar.dll that the mod cannot handle -- no published symbols, not in
-kKnownBuilds, no PR yet -- match it and open a draft PR for the owner to test.
+"""Runs at sign-in and hourly (see install-watch-task.ps1). Looks at the
+running taskbar.dll and at any newer one Windows has staged in WinSxS for the
+next restart, so a problem is known before the restart rather than after.
+
+For each: if Microsoft has published its symbols, check the mod's load checks
+pass on it, and warn once if they will not. If not -- and it is not in
+kKnownBuilds and has no PR yet -- match it and open a draft PR for the owner
+to test.
 
 All git work happens in a temporary worktree of origin/main: the owner's
-checkout, and any uncommitted edits in it, are never touched.
+checkout, and any uncommitted edits in it, are never touched. Each warning is
+raised once (see notify_once), so the hourly runs do not repeat it.
 
 Exit codes: 0 nothing to do or PR opened, 3 match failed, 4 signing
-unavailable, 5 symbol server unreachable, 6 anything else failed (notified)."""
+unavailable, 5 symbol server unreachable or PDB not downloadable yet, 6
+anything else failed (notified), 7 a published build fails the mod's checks."""
+import datetime
+import glob
 import os
 import shlex
+import struct
 import subprocess
 import sys
 import tempfile
@@ -17,12 +27,13 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from matcher import HOOKED  # noqa: E402
+from matcher import HOOKED, reference  # noqa: E402
 from matcher.apply import apply_entry, known_builds  # noqa: E402
+from matcher.buildcheck import accepted_layouts, check_build  # noqa: E402
 from matcher.match import evidence_table, format_entry, match_build  # noqa: E402
 from matcher.pdb import publics  # noqa: E402
 from matcher.pe import PE  # noqa: E402
-from matcher.reference import auto_reference  # noqa: E402
+from matcher.reference import auto_reference, fetch_pdb  # noqa: E402
 
 REPO = os.getcwd()
 SRC = 'src/taskbar-autohide-any-edge.wh.cpp'
@@ -42,6 +53,18 @@ def notify(title, message):
         argv = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', toast,
                 '-Title', title, '-Message', message]
     subprocess.run(argv, check=False)
+
+
+def notify_once(tag, title, message):
+    """notify, unless a warning with this tag was already raised."""
+    state = os.path.join(reference.CACHE, 'notified')
+    seen = open(state).read().split() if os.path.exists(state) else []
+    if tag in seen:
+        return
+    notify(title, message)
+    os.makedirs(reference.CACHE, exist_ok=True)
+    with open(state, 'a') as f:
+        f.write(tag + '\n')
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -127,13 +150,75 @@ def open_pr(version, branch, ref_version, entry, evidence):
         git('branch', '-q', '-D', branch, check=False)
 
 
+def _version(pe):
+    return tuple(int(x) for x in pe.file_version().split('.'))
+
+
+def staged_build(current):
+    """The newest taskbar.dll in WinSxS if it is newer than the running one:
+    an update has staged it, and it takes over at the next restart."""
+    newest = None
+    for path in glob.glob(f'{reference.WINSXS}/amd64_microsoft-windows-taskbar-dll_*/Taskbar.dll'):
+        try:
+            pe = PE(path)
+            pe.pdb_key()
+        except (OSError, ValueError, struct.error):
+            continue
+        if _version(pe) > _version(current) and (newest is None or _version(pe) > _version(newest)):
+            newest = pe
+    return newest
+
+
+def check_published(pe, key, layouts, staged):
+    """Symbols are out, so the mod resolves this build itself; what remains is
+    whether its load checks pass on it."""
+    version = pe.file_version()
+    try:
+        pdb = fetch_pdb(key)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        pdb, why = None, e
+    else:
+        why = 'not served yet'
+    if not pdb:
+        print(f'symbols published but the PDB could not be downloaded ({why}); trying next time: {version}')
+        return 5
+    r = check_build(pe, pdb)
+    problems = []
+    if not r['resolved']:
+        problems.append('its symbols lack a function the mod hooks')
+    if r['layout'] not in layouts:
+        problems.append('GetAutoHideFlags changed shape, so ScanForOffsets will refuse it')
+    if not r['durations']:
+        problems.append('SlideWindow no longer loads the slide durations where the mod reads them')
+    if not problems:
+        print(f'symbols published, mod checks pass: {version}')
+        return 0
+    when = 'after the next restart' if staged else 'now'
+    message = f'The mod will refuse to load {when}: ' + '; '.join(problems) + '.'
+    print(message)
+    notify_once(f'breaks:{key}', f'Taskbar {version} will break auto-hide', message)
+    return 7
+
+
 def main(argv):
     dry_run = '--dry-run' in argv
-    pe = PE(DLL)
-    version, key = pe.file_version(), pe.pdb_key()
+    running = PE(DLL)
 
     git('fetch', '-q', '--no-tags', 'origin')
-    if any(e['pdb_key'] == key for e in known_on_main()):
+    known = known_on_main()
+    layouts = accepted_layouts(git('show', f'origin/main:{SRC}').stdout)
+    builds = [(running, False)]
+    staged = staged_build(running)
+    if staged:
+        print(f'staged for restart: {staged.file_version()}')
+        builds.append((staged, True))
+    codes = [check(pe, is_staged, known, layouts, dry_run) for pe, is_staged in builds]
+    return next((c for c in codes if c), 0)
+
+
+def check(pe, staged, known, layouts, dry_run):
+    version, key = pe.file_version(), pe.pdb_key()
+    if any(e['pdb_key'] == key for e in known):
         print(f'known: {version}')
         return 0
     try:
@@ -142,8 +227,7 @@ def main(argv):
         print(f'symbol server unreachable: {e}')
         return 5
     if published:
-        print(f'symbols published ({status}): {version}')
-        return 0
+        return check_published(pe, key, layouts, staged)
     if status != 404:
         # A 503 or 429 says nothing about the build; try again next sign-in.
         print(f'symbol server answered {status}; trying again next time')
@@ -162,7 +246,7 @@ def main(argv):
     evidence = evidence_table(result)
     print(f'new {version}, reference {ref.file_version()}\n{evidence}')
     if result.rvas is None:
-        notify(f'Taskbar {version}: automatic match failed', result.reason)
+        notify_once(f'nomatch:{key}', f'Taskbar {version}: automatic match failed', result.reason)
         return 3
     entry = format_entry(pe, result.rvas)
     print(entry)
@@ -171,7 +255,7 @@ def main(argv):
         print(f'would open draft PR "taskbar.dll {version}: built-in addresses" from {branch}')
         return 0
     if not signing_available():
-        notify(f'Taskbar {version} matched but signing is unavailable',
+        notify_once(f'nosign:{key}:{datetime.date.today()}', f'Taskbar {version} matched but signing is unavailable',
                'run bin/keys-load.sh wsl, then tools/watch-build.sh')
         return 4
     url = open_pr(version, branch, ref.file_version(), entry, evidence)
@@ -185,7 +269,9 @@ def run(argv):
         return main(argv)
     except Exception as e:   # unattended: never fail without telling the owner
         print(f'watcher failed: {e!r}', file=sys.stderr)
-        notify('Taskbar watcher failed', f'{type(e).__name__}: {e} (see ~/.cache/taskbar-matcher/watch.log)')
+        # Once a day per kind of failure: a run every hour must not toast every hour.
+        notify_once(f'failed:{type(e).__name__}:{datetime.date.today()}', 'Taskbar watcher failed',
+                    f'{type(e).__name__}: {e} (see ~/.cache/taskbar-matcher/watch.log)')
         return 6
 
 

@@ -1,5 +1,7 @@
-# Registers a sign-in task that runs tools/watch-build.sh in WSL five minutes
-# after logon, so a new taskbar.dll without published symbols gets a draft PR.
+# Registers a task that runs tools/watch-build.sh in WSL five minutes after
+# logon and then hourly. Windows stages an update's taskbar.dll in WinSxS well
+# before it asks to restart, so the hourly run usually has a draft PR ready, or
+# a warning raised, before the new taskbar.dll is in use.
 # From a PowerShell prompt:
 #
 #   .\tools\install-watch-task.ps1
@@ -24,9 +26,14 @@ $log = "~/.cache/taskbar-matcher/watch.log"
 $cmd = "sleep 300; mkdir -p ~/.cache/taskbar-matcher && cd $RepoPath && { date; tools/watch-build.sh; } >> $log 2>&1"
 # conhost --headless keeps a console window from flashing up at sign-in.
 $action = New-ScheduledTaskAction -Execute "conhost.exe" -Argument "--headless wsl.exe -e bash -lc `"$cmd`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+$triggers = @(
+    New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 1)
+)
+# A run already in progress (still in its five-minute wait, say) makes the next
+# one a no-op, and a run missed while the PC slept happens on waking.
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
-Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Force `
-    -Description "Opens a draft PR when Windows installs a taskbar.dll the auto-hide mod has no symbols for." | Out-Null
+    -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Settings $settings -Force `
+    -Description "Checks running and staged taskbar.dll builds for the auto-hide mod; opens a draft PR or warns." | Out-Null
 Get-ScheduledTask -TaskName $name | Select-Object TaskName, State
