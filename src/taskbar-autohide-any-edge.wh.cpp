@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.17.0
+// @version         1.18.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1923,6 +1923,45 @@ const KnownBuild* FindKnownBuild(HMODULE module) {
     return nullptr;
 }
 
+// The table's addresses come from matching, not from symbols. Before patching
+// any of them, check each one lands where the matcher said it would: a
+// function start in the unwind table, or for GetStuckPlace, a leaf with no
+// unwind data, its exact body. A wrong entry then fails with a message instead
+// of patching the middle of a function and taking Explorer down with it.
+bool KnownBuildLooksRight(HMODULE taskbar, const KnownBuild& b) {
+    const BYTE* base = (const BYTE*)taskbar;
+    auto* nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
+    DWORD size = nt->OptionalHeader.SizeOfImage;
+
+    static const BYTE kGetStuckPlace[] = {
+        0x8B, 0x81, 0x1C, 0x01, 0x00, 0x00,  // mov eax,[rcx+11Ch]
+        0x83, 0xF8, 0xFF,                    // cmp eax,-1
+        0x75, 0x06,                          // jne ret
+        0x8B, 0x81, 0x10, 0x01, 0x00, 0x00,  // mov eax,[rcx+110h]
+        0xC3,                                // ret
+    };
+    if (b.getStuckPlace >= size - sizeof(kGetStuckPlace) ||
+        memcmp(base + b.getStuckPlace, kGetStuckPlace,
+               sizeof(kGetStuckPlace)) != 0) {
+        return false;
+    }
+
+    const DWORD starts[] = {b.getAutoHideFlags, b.setAutoHideFlags,
+                            b.getDockedRect,    b.unhide,
+                            b.slideWindow,      b.permitAutoHide};
+    for (DWORD rva : starts) {
+        DWORD64 imageBase = 0;
+        PRUNTIME_FUNCTION fn =
+            rva < size ? RtlLookupFunctionEntry((DWORD64)(base + rva),
+                                                &imageBase, nullptr)
+                       : nullptr;
+        if (!fn || imageBase != (DWORD64)base || fn->BeginAddress != rva) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // The same hooks HookSymbols would set, at the tabled addresses.
 bool HookKnownBuild(HMODULE taskbar, const KnownBuild& b) {
     auto at = [taskbar](DWORD rva) { return (void*)((BYTE*)taskbar + rva); };
@@ -2000,6 +2039,13 @@ PCWSTR SetUpHooks() {
                    L"Windhawk downloads these from Microsoft the first time a "
                    L"mod needs them, so check the internet connection and "
                    L"reload the mod.";
+        }
+        if (!KnownBuildLooksRight(taskbar, *known)) {
+            Wh_Log(L"built-in addresses for taskbar.dll %s failed the check",
+                   known->version);
+            return L"The mod's built-in addresses for this taskbar.dll did "
+                   L"not check out, so it has left the taskbar alone. Please "
+                   L"report this; the mod needs updating to match.";
         }
         Wh_Log(L"no symbols, using the built-in addresses for taskbar.dll %s",
                known->version);

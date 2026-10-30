@@ -205,6 +205,7 @@ auto-hide setting is off:
 | Microsoft has not published the debug symbols for this version yet | A Windows update replaced `taskbar.dll`, and Microsoft's symbol server does not have its PDB yet. The mod tries again each time Windows starts and recovers by itself once the PDB is published. |
 | Microsoft has published the debug symbols, but Windhawk could not load them | The symbol server has the PDB, but the download or load failed. Reloading the mod downloads it again. |
 | Debug symbols could not be resolved | The symbol server could not be reached to say which of the above applies. Usually no internet, a firewall, or a blocked symbol server. |
+| The built-in addresses did not check out | No symbols are published, the mod carries addresses for this exact build, but one of them is not where a function starts. The mod leaves the taskbar alone rather than patch the wrong code. Please report it. |
 | A taskbar function could not be found | Symbols resolved but incompletely. Reloading the mod re-downloads them. |
 | `taskbar.dll` does not match | A Windows update recompiled `GetAutoHideFlags`, so the member offsets can no longer be trusted. The mod needs updating. |
 | Could not attach to the taskbar window | The taskbar never appeared, or subclassing it failed. |
