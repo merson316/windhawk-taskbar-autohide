@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      # The release and watcher tests clone this repo and work on its main
+      # branch, so main must be the commit under test (a PR checks out detached).
+      - run: git switch -q -C main
+      # They also sign commits and tags, as the real tools refuse to without
+      # signing. A key made here and thrown away with the runner is enough.
+      - name: Git identity and a throwaway signing key
+        run: |
+          ssh-keygen -q -t ed25519 -N '' -C ci -f ~/ci-signing
+          git config --global user.name CI
+          git config --global user.email ci@example.invalid
+          git config --global gpg.format ssh
+          git config --global user.signingkey ~/ci-signing
+          git config --global commit.gpgsign true
+          git config --global tag.gpgsign true
+      - run: python -m venv .venv && .venv/bin/pip install -q -r tools/requirements.txt
+      # Real taskbar.dll builds and PDBs come from Microsoft's symbol server;
+      # a test that cannot get one fails here instead of skipping.
+      - run: .venv/bin/pytest tests -q -rs
+        env:
+          TASKBAR_FIXTURES: required
+
+  compile:
+    name: Compile with Windhawk's compiler
+    runs-on: windows-latest
+    env:
+      WINDHAWK_VERSION: v1.7.3
+      WINDHAWK_SHA256: 4d93016570f982326eebdfc9068e924ff21f6448534ea32672bb4c1d52a8193b
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      # The offline installer carries the same compiler and engine a user's
+      # Windhawk compiles the mod with. It is unpacked, never run.
+      - name: Unpack Windhawk ${{ env.WINDHAWK_VERSION }}
+        run: |
+          # D:/a/... form: Git Bash and the Windows Python both read it.
+          WINDHAWK_DIR="$(cygpath -m "$RUNNER_TEMP")/windhawk"
+          echo "WINDHAWK_DIR=$WINDHAWK_DIR" >> "$GITHUB_ENV"
+          curl -sSfL -o "$RUNNER_TEMP/setup.exe" \
+            "https://github.com/ramensoftware/windhawk/releases/download/$WINDHAWK_VERSION/windhawk_setup_offline.exe"
+          echo "$WINDHAWK_SHA256  $RUNNER_TEMP/setup.exe" | sha256sum -c -
+          7z x -y -bso0 -o"$WINDHAWK_DIR" "$RUNNER_TEMP/setup.exe"
+          ls "$WINDHAWK_DIR"
+          ls "$WINDHAWK_DIR"/Compiler/bin/clang++.exe "$WINDHAWK_DIR"/Engine/*/64/windhawk.lib
+      - run: tools/compile-mod.sh
+      - run: python -m pip install -q -r tools/requirements.txt
+      # The mod's check on its built-in addresses, compiled and run against the
+      # real taskbar.dll each entry was matched for.
+      - run: python -m pytest tests/test_mod_guard.py -q -rs
+        env:
+          TASKBAR_FIXTURES: required

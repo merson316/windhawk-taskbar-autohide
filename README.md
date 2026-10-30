@@ -242,8 +242,9 @@ including the wrong turns: three attempts assumed the flag *store* was refused
 when it never was, and the pointer-base table there explains both an Explorer
 crash and a silent no-op.
 
-`tools/whcompile.sh` compiles and links a mod using Windhawk's own clang, so
-build errors surface before pasting into the editor.
+`tools/compile-mod.sh` compiles the mod with Windhawk's own compiler and the
+exact arguments Windhawk uses, so build errors surface before pasting into the
+editor. CI runs the same script on every push and pull request.
 
 Layout: `src/` holds the mod that ships. `tools/` holds the build check, the
 matcher for taskbar builds without published symbols, the sign-in watcher and

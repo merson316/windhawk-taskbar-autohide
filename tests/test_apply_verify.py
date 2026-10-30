@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import sys
@@ -31,13 +32,18 @@ def test_known_builds_parses_9807():
     assert [entry[f] for f in HOOKED] == [0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40]
 
 
+def next_minor():
+    major, minor, _ = re.search(r'(?m)^// @version\s+(\S+)$', open(SRC).read()).group(1).split('.')
+    return f'{major}.{int(minor) + 1}.0'
+
+
 def test_apply_to_temp_copy(copies):
     src, readme = copies
-    assert apply_entry(src, readme, FAKE, '10.0.26100.9999', '10.0.26100.9807') == '1.18.0'
+    assert apply_entry(src, readme, FAKE, '10.0.26100.9999', '10.0.26100.9807') == next_minor()
     assert len(known_builds(src)) == 2
-    assert '@version         1.18.0' in src.read_text()
+    assert f'@version         {next_minor()}' in src.read_text()
     assert '| 10.0.26100.9999 | 10.0.26100.9807 |' in readme.read_text()
-    assert subprocess.run(['tools/whcompile.sh', str(src)]).returncode == 0
+    assert subprocess.run(['tools/compile-mod.sh', str(src)]).returncode == 0
 
 
 def test_apply_duplicate_refused(copies):
