@@ -31,6 +31,20 @@ def msdl(request):
     srv.shutdown()
 
 
+@pytest.fixture(autouse=True)
+def reference_build(tmp_path, monkeypatch, dll_9549, pdb_9549):
+    """A WinSxS and symbol cache holding only 9549 with its PDB, so the
+    watcher's reference search sees the same thing on any machine."""
+    sxs = tmp_path / 'WinSxS/amd64_microsoft-windows-taskbar-dll_31bf3856ad364e35_10.0.26100.9549_none_0'
+    sxs.mkdir(parents=True)
+    os.symlink(dll_9549, sxs / 'Taskbar.dll')
+    sym = tmp_path / 'symbols/0A5DD95BEF53208B28B2F3D8586E64261'
+    sym.mkdir(parents=True)
+    os.symlink(pdb_9549, sym / 'Taskbar.pdb')
+    monkeypatch.setenv('WINSXS', str(tmp_path / 'WinSxS'))
+    monkeypatch.setenv('WINDHAWK_SYMBOLS', str(tmp_path / 'symbols'))
+
+
 @pytest.fixture
 def checkout(tmp_path):
     """The owner's checkout of a repo whose origin/main lacks 9807, as if it
