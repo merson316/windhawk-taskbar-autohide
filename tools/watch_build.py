@@ -1,6 +1,7 @@
-"""Runs at sign-in and hourly (see install-watch-task.ps1). Looks at the
-running taskbar.dll and at any newer one Windows has staged in WinSxS for the
-next restart, so a problem is known before the restart rather than after.
+"""Runs at sign-in and when an update is waiting for a restart (see
+install-watch-task.ps1). Looks at the running taskbar.dll and at any newer one
+Windows has staged in WinSxS for the next restart, so a problem is known
+before the restart rather than after.
 
 For each: if Microsoft has published its symbols, check the mod's load checks
 pass on it, and warn once if they will not. If not -- and it is not in
@@ -9,7 +10,7 @@ to test.
 
 All git work happens in a temporary worktree of origin/main: the owner's
 checkout, and any uncommitted edits in it, are never touched. Each warning is
-raised once (see notify_once), so the hourly runs do not repeat it.
+raised once (see notify_once), so later runs do not repeat it.
 
 Exit codes: 0 nothing to do or PR opened, 3 match failed, 4 signing
 unavailable, 5 symbol server unreachable or PDB not downloadable yet, 6
@@ -269,7 +270,7 @@ def run(argv):
         return main(argv)
     except Exception as e:   # unattended: never fail without telling the owner
         print(f'watcher failed: {e!r}', file=sys.stderr)
-        # Once a day per kind of failure: a run every hour must not toast every hour.
+        # Once a day per kind of failure: a lasting problem must not toast on every run.
         notify_once(f'failed:{type(e).__name__}:{datetime.date.today()}', 'Taskbar watcher failed',
                     f'{type(e).__name__}: {e} (see ~/.cache/taskbar-matcher/watch.log)')
         return 6
