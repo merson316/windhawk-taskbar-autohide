@@ -24,5 +24,13 @@
     "tested_with": [
       "1.17.0"
     ]
+  },
+  {
+    "os_build": "26300.9818",
+    "taskbar": "10.0.26100.9818",
+    "support": "symbols",
+    "tested_with": [
+      "1.18.0"
+    ]
   }
 ]
