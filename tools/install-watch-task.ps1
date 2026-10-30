@@ -1,7 +1,7 @@
-# Registers a task that runs tools/watch-build.sh in WSL five minutes after
-# logon, and whenever a Windows update has been staged and is waiting for a
-# restart. The new taskbar.dll is in WinSxS by then, so a draft PR is opened,
-# or a warning raised, before the restart puts it in use.
+# Registers a task that runs tools/watch-build.sh in WSL at logon, and whenever
+# a Windows update has been staged and is waiting for a restart. The new
+# taskbar.dll is in WinSxS by then, so a draft PR is opened, or a warning
+# raised, before the restart puts it in use.
 # From a PowerShell prompt:
 #
 #   .\tools\install-watch-task.ps1
@@ -18,11 +18,9 @@ if ($Uninstall) {
 }
 
 $log = "~/.cache/taskbar-matcher/watch.log"
-# The wait runs inside WSL, not on the trigger: WSL may have shut down by the
-# time a trigger delay ends, and the watcher's git fetch then races the SSH
-# keys still loading in the fresh instance. Starting WSL at logon and waiting
-# there gives the keys and the network time to come up first.
-$cmd = "sleep 300; mkdir -p ~/.cache/taskbar-matcher && cd $RepoPath && { date; tools/watch-build.sh; } >> $log 2>&1"
+# No fixed wait at logon: the watcher retries its first git fetch until the
+# SSH key and the network are ready (see fetch_when_reachable).
+$cmd = "mkdir -p ~/.cache/taskbar-matcher && cd $RepoPath && { date; tools/watch-build.sh; } >> $log 2>&1"
 # conhost --headless keeps a console window from flashing up at sign-in.
 $action = New-ScheduledTaskAction -Execute "conhost.exe" -Argument "--headless wsl.exe -e bash -lc `"$cmd`""
 # Servicing event 4, "A reboot is necessary before package ... can be changed
@@ -39,7 +37,7 @@ $triggers = @(
     $staged
 )
 # One update logs event 4 for several packages at once: while a run is in
-# progress (or in its five-minute wait) the others are dropped.
+# progress the others are dropped.
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Settings $settings -Force `

@@ -245,3 +245,28 @@ def test_watch_warns_once_when_a_published_build_breaks_the_mod(checkout, tmp_pa
     p2, notes2 = run(checkout, str(broken), symbol_server.url)
     assert p2.returncode == 7
     assert notes2 == notes, 'warned again on the next run'
+
+
+def test_watch_waits_for_github_rather_than_a_fixed_time(tmp_path, dll_9807, msdl):
+    # At sign-in the SSH key or the network can take a moment: the first fetch
+    # fails, and the watcher must keep trying rather than give up or sleep blind.
+    repo = tmp_path / 'r'
+    clone_working_copy(repo)
+    origin = subprocess.run(['git', '-C', str(repo), 'remote', 'get-url', 'origin'],
+                            capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', str(tmp_path / 'later.git')], check=True)
+    threading.Timer(1.5, lambda: subprocess.run(['git', 'clone', '-q', '--bare', origin,
+                                                 str(tmp_path / 'later.git')], check=True)).start()
+    p, notes = run(repo, dll_9807, msdl, env={'FETCH_EVERY': '0.5', 'FETCH_WAIT': '30'})
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert 'known: 10.0.26100.9807' in p.stdout
+    assert notes == ''
+
+
+def test_watch_gives_up_on_github_after_the_wait(tmp_path, dll_9807, msdl):
+    repo = tmp_path / 'r'
+    clone_working_copy(repo)
+    subprocess.run(['git', '-C', str(repo), 'remote', 'set-url', 'origin', str(tmp_path / 'never.git')], check=True)
+    p, notes = run(repo, dll_9807, msdl, env={'FETCH_EVERY': '0.2', 'FETCH_WAIT': '1'})
+    assert p.returncode == 6
+    assert 'could not reach origin for 1s' in notes

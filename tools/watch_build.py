@@ -23,6 +23,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -42,6 +43,8 @@ README = 'README.md'
 TEMPLATE = '.github/pull_request_template/new-build.md'
 DLL = os.environ.get('TASKBAR_DLL', '/mnt/c/Windows/System32/taskbar.dll')
 MSDL = os.environ.get('MSDL_BASE', 'https://msdl.microsoft.com/download/symbols')
+FETCH_WAIT = float(os.environ.get('FETCH_WAIT', 600))   # seconds to keep trying GitHub
+FETCH_EVERY = float(os.environ.get('FETCH_EVERY', 10))
 
 
 def notify(title, message):
@@ -85,6 +88,19 @@ def pdb_published(key):
 
 def git(*args, check=True):
     return subprocess.run(['git', *args], capture_output=True, text=True, check=check)
+
+
+def fetch_when_reachable():
+    """At sign-in the network or the SSH key may not be ready yet. Keep trying
+    until origin answers, rather than guess how long that takes."""
+    deadline = time.monotonic() + FETCH_WAIT
+    while True:
+        r = git('fetch', '-q', '--no-tags', 'origin', check=False)
+        if r.returncode == 0:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(f'could not reach origin for {FETCH_WAIT:g}s: {r.stderr.strip()}')
+        time.sleep(FETCH_EVERY)
 
 
 def signing_available():
@@ -205,7 +221,7 @@ def main(argv):
     dry_run = '--dry-run' in argv
     running = PE(DLL)
 
-    git('fetch', '-q', '--no-tags', 'origin')
+    fetch_when_reachable()
     known = known_on_main()
     layouts = accepted_layouts(git('show', f'origin/main:{SRC}').stdout)
     builds = [(running, False)]
