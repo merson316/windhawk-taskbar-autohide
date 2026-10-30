@@ -19,6 +19,8 @@ def git(cwd, *args):
 def setup(tmp_path):
     origin = tmp_path / 'origin.git'
     subprocess.run(['git', 'clone', '-q', '--bare', REPO, str(origin)], check=True)
+    # Clones check out main even when this repo is on a feature branch.
+    git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main')
     author = tmp_path / 'author'
     subprocess.run(['git', 'clone', '-q', str(origin), str(author)], check=True)
     return tmp_path, origin, author
