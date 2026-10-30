@@ -65,6 +65,9 @@ jobs:
             "https://github.com/ramensoftware/windhawk/releases/download/$WINDHAWK_VERSION/windhawk_setup_offline.exe"
           echo "$WINDHAWK_SHA256  $RUNNER_TEMP/setup.exe" | sha256sum -c -
           7z x -y -bso0 -o"$WINDHAWK_DIR" "$RUNNER_TEMP/setup.exe"
+          # The installer names the engine folder at install time; unpacked, it
+          # keeps the NSIS variable's name.
+          mv "$WINDHAWK_DIR/Engine/\$R1" "$WINDHAWK_DIR/Engine/${WINDHAWK_VERSION#v}"
           ls "$WINDHAWK_DIR"
           ls "$WINDHAWK_DIR"/Compiler/bin/clang++.exe "$WINDHAWK_DIR"/Engine/*/64/windhawk.lib
       - run: tools/compile-mod.sh

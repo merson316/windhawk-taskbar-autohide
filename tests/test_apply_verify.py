@@ -1,3 +1,4 @@
+import os
 import re
 import shutil
 import subprocess
@@ -43,7 +44,10 @@ def test_apply_to_temp_copy(copies):
     assert len(known_builds(src)) == 2
     assert f'@version         {next_minor()}' in src.read_text()
     assert '| 10.0.26100.9999 | 10.0.26100.9807 |' in readme.read_text()
-    assert subprocess.run(['tools/compile-mod.sh', str(src)]).returncode == 0
+    # The copy still compiles, where Windhawk is installed (CI's Windows job
+    # compiles the real mod instead).
+    if os.path.isdir(os.path.join(os.environ.get('WINDHAWK_DIR', '/mnt/c/Program Files/Windhawk'), 'Compiler')):
+        assert subprocess.run(['tools/compile-mod.sh', str(src)]).returncode == 0
 
 
 def test_apply_duplicate_refused(copies):
