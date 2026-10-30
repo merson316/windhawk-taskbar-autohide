@@ -247,6 +247,14 @@ crash and a silent no-op.
 exact arguments Windhawk uses, so build errors surface before pasting into the
 editor. CI runs the same script on every push and pull request.
 
+`.github/rulesets/` holds the rules for `main`. `main: history` blocks
+force-pushes and deletion and requires signed commits, with no exceptions.
+`main: CI` requires both CI jobs to pass, but admins can bypass it, because
+`tools/release.sh` pushes its compatibility-record commits straight to `main`.
+GitHub only offers rulesets on public repos (or with Pro); to apply them:
+
+    for f in .github/rulesets/*.json; do gh api -X POST repos/{owner}/{repo}/rulesets --input "$f"; done
+
 Layout: `src/` holds the mod that ships. `tools/` holds the build check, the
 matcher for taskbar builds without published symbols, the build watcher (at
 sign-in, and when an update has staged a new build and is waiting to restart) and

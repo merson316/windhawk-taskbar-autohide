@@ -1,0 +1,16 @@
+{
+  "name": "main: CI",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+  "rules": [
+    {"type": "required_status_checks", "parameters": {
+      "strict_required_status_checks_policy": false,
+      "required_status_checks": [
+        {"context": "Python tests", "integration_id": 15368},
+        {"context": "Compile with Windhawk's compiler", "integration_id": 15368}
+      ]
+    }}
+  ],
+  "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]
+}
