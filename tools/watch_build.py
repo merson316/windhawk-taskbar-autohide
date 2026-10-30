@@ -35,14 +35,13 @@ from matcher.buildcheck import accepted_layouts, check_build  # noqa: E402
 from matcher.match import evidence_table, format_entry, match_build  # noqa: E402
 from matcher.pdb import publics  # noqa: E402
 from matcher.pe import PE  # noqa: E402
-from matcher.reference import auto_reference, fetch_pdb  # noqa: E402
+from matcher.reference import auto_reference, fetch_pdb, pdb_published  # noqa: E402
 
 REPO = os.getcwd()
 SRC = 'src/taskbar-autohide-any-edge.wh.cpp'
 README = 'README.md'
 TEMPLATE = '.github/pull_request_template/new-build.md'
 DLL = os.environ.get('TASKBAR_DLL', '/mnt/c/Windows/System32/taskbar.dll')
-MSDL = os.environ.get('MSDL_BASE', 'https://msdl.microsoft.com/download/symbols')
 FETCH_WAIT = float(os.environ.get('FETCH_WAIT', 600))   # seconds to keep trying GitHub
 FETCH_EVERY = float(os.environ.get('FETCH_EVERY', 10))
 
@@ -69,21 +68,6 @@ def notify_once(tag, title, message):
     os.makedirs(reference.CACHE, exist_ok=True)
     with open(state, 'a') as f:
         f.write(tag + '\n')
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-
-def pdb_published(key):
-    req = urllib.request.Request(f'{MSDL}/Taskbar.pdb/{key}/Taskbar.pdb', method='HEAD',
-                                 headers={'User-Agent': 'Microsoft-Symbol-Server/10.0.0.0'})
-    try:
-        status = urllib.request.build_opener(_NoRedirect).open(req, timeout=30).status
-    except urllib.error.HTTPError as e:
-        status = e.code
-    return status in (200, 302), status
 
 
 def git(*args, check=True):

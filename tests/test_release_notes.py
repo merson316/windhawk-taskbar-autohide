@@ -84,3 +84,20 @@ def test_built_in_builds_listed_when_not_retested():
 def test_built_in_build_not_repeated_when_tested():
     sw = should_work_for({'old', 'inverted'}, BUILDS, {'10.0.26100.9807'}, KNOWN)
     assert '10.0.26100.9807' not in [b['taskbar'] for b in sw]
+
+
+def test_built_in_build_shows_symbols_once_published():
+    # Microsoft published 9807's PDB after 1.17.0: Windhawk now resolves it from
+    # symbols, and the table entry is only a fallback.
+    sw = should_work_for({'old', 'inverted'}, BUILDS, set(), KNOWN, published={KNOWN[0]['pdb_key']})
+    notes = render('1.18.0', COMPAT, ['x'], sw)
+    # With no built-in rows left, the table drops its "How" column.
+    assert '| 26200.9807 / 26300.9807 | 10.0.26100.9807 |\n' in notes
+    assert 'Built-in addresses' not in notes
+
+
+def test_built_in_build_listed_once_when_winbindex_has_it_too():
+    listed = BUILDS + [{'taskbar': '10.0.26100.9807', 'symbols': True, 'resolved': True,
+                        'durations': True, 'layout': 'inverted'}]
+    sw = should_work_for({'old', 'inverted'}, listed, set(), KNOWN, published={KNOWN[0]['pdb_key']})
+    assert [b['taskbar'] for b in sw].count('10.0.26100.9807') == 1

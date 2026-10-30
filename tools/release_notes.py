@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from matcher.apply import known_builds  # noqa: E402
 from matcher.buildcheck import accepted_layouts, os_builds  # noqa: E402
 from matcher.pe import PE  # noqa: E402
+from matcher.reference import pdb_published  # noqa: E402
 
 COMPAT = 'docs/compatibility.json'
 BUILDS = 'docs/builds.json'
@@ -32,14 +33,17 @@ INSTALL = ('Download `taskbar-autohide-any-edge.wh.cpp` below, then in Windhawk:
            'Create a new mod → replace the contents → Compile → Enable.')
 
 
-def should_work_for(layouts, builds, tested_taskbars, known=()):
+def should_work_for(layouts, builds, tested_taskbars, known=(), published=()):
     """Builds this version should handle, newest first: symbols published and
     resolving with code passing this version's load-time checks, plus the
-    builds its kKnownBuilds table carries. Builds already tested are left out."""
+    builds its kKnownBuilds table carries. Builds already tested are left out.
+    A table build whose PDB key is in `published` is resolved from symbols
+    now, so it is labelled that way, and listed once."""
     ok = [b for b in builds if b['symbols'] and b['resolved'] and b['durations']
           and b['layout'] in layouts and b['taskbar'] not in tested_taskbars]
-    ok += [{'taskbar': k['version'], 'built_in': True} for k in known
-           if k['version'] not in tested_taskbars]
+    listed = {b['taskbar'] for b in ok}
+    ok += [{'taskbar': k['version'], 'built_in': k['pdb_key'] not in published} for k in known
+           if k['version'] not in tested_taskbars and k['version'] not in listed]
     return sorted(ok, key=lambda b: int(b['taskbar'].rsplit('.', 1)[1]), reverse=True)
 
 
@@ -140,7 +144,8 @@ def main():
     builds = json.load(open(BUILDS)) if os.path.exists(BUILDS) else []
     tested = {c['taskbar'] for c in compat if args.version in c['tested_with']}
     known = known_at(args.version)
-    should_work = should_work_for(accepted_layouts(source_at(args.version)), builds, tested, known)
+    published = {k['pdb_key'] for k in known if pdb_published(k['pdb_key'])[0]}
+    should_work = should_work_for(accepted_layouts(source_at(args.version)), builds, tested, known, published)
     print(render(args.version, compat, changes, should_work))
 
 

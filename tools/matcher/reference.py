@@ -53,6 +53,22 @@ def _download(url, dest, valid, what):
     return dest
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def pdb_published(key):
+    """(published, HTTP status) for this PDB key on the symbol server. Only a
+    404 means not published; callers treat other errors as unknown."""
+    req = urllib.request.Request(f'{MSDL}/Taskbar.pdb/{key}/Taskbar.pdb', method='HEAD', headers=_UA)
+    try:
+        status = urllib.request.build_opener(_NoRedirect).open(req, timeout=30).status
+    except urllib.error.HTTPError as e:
+        status = e.code
+    return status in (200, 302), status
+
+
 def fetch_pdb(key):
     """A PDB for this key from Windhawk's cache, ours, or msdl; None if unpublished."""
     for path in (f'{SYMBOLS}/{key}/Taskbar.pdb', f'{CACHE}/{key}/Taskbar.pdb'):
