@@ -58,12 +58,17 @@ case "$1 $2" in
   "release create")
     tag=$3
     while [ $# -gt 0 ]; do [ "$1" = --notes-file ] && cp "$2" "$GH_DIR/notes.md"; shift; done
-    [ -e "$GH_DIR/fail-release" ] && { echo "boom" >&2; exit 1; }
+    if [ -e "$GH_DIR/fail-release" ]; then
+      [ -e "$GH_DIR/leave-draft" ] && touch "$GH_DIR/draft-$tag"
+      echo "boom" >&2; exit 1
+    fi
     touch "$GH_DIR/released-$tag"
     echo "https://github.com/example/repo/releases/tag/$tag" ;;
   "release view")
-    [ -e "$GH_DIR/released-$3" ] || exit 1
-    echo "{\\"url\\": \\"https://github.com/example/repo/releases/tag/$3\\"}" ;;
+    draft=false
+    [ -e "$GH_DIR/draft-$3" ] && draft=true
+    [ -e "$GH_DIR/released-$3" ] || [ $draft = true ] || exit 1
+    echo "{\\"url\\": \\"https://github.com/example/repo/releases/tag/$3\\", \\"isDraft\\": $draft}" ;;
   *) exit 0 ;;
 esac
 """
@@ -445,3 +450,38 @@ def test_auto_does_not_resume_another_prs_release(setup, msdl):
     assert p.returncode == 1, p.stdout + p.stderr
     assert "another PR's release" in p.stderr
     assert p.gh_log.count('release create') == 1, 'published'
+
+
+def failed_publish(tmp, origin, author, msdl, leave_draft=False):
+    v, head, pr, args = auto(tmp, origin, author)
+    (tmp / 'gh').mkdir()
+    (tmp / 'gh/fail-release').write_text('')
+    if leave_draft:
+        (tmp / 'gh/leave-draft').write_text('')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 11, p.stderr
+    (tmp / 'gh/fail-release').unlink()
+    return v, pr, p.stderr.split('finish with: ', 1)[1].strip().split()
+
+
+def test_finish_command_works_from_a_checkout_without_the_tag(setup, msdl):
+    # The watcher pushed the tag from its throwaway clone; the owner runs the
+    # printed command from a checkout that never fetched it.
+    tmp, origin, author = setup
+    v, pr, finish = failed_publish(tmp, origin, author, msdl)
+    assert finish[0] == 'tools/release.sh' and finish[1] == v
+    git(tmp / 'releaser', 'tag', '-d', f'v{v}')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, finish[2:], finish[1])
+    assert p.returncode == 0, p.stderr
+    assert 'resuming' in p.stdout
+    assert p.gh_log.count(f'release create v{v}') == 2
+
+
+def test_draft_release_left_behind_is_not_taken_as_released(setup, msdl):
+    tmp, origin, author = setup
+    v, pr, finish = failed_publish(tmp, origin, author, msdl, leave_draft=True)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, finish[2:], finish[1])
+    assert p.returncode == 11, p.stdout + p.stderr
+    assert 'already released' not in p.stdout
+    assert f'a draft release v{v} exists' in p.stderr and 'tagged but not published' in p.stderr
+    assert p.gh_log.count('release create') == 1

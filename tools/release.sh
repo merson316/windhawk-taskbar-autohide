@@ -63,6 +63,8 @@ SRC=src/taskbar-autohide-any-edge.wh.cpp
 R=1 D=1 U=1; [ -z "$AUTO" ] || R=3 D=10 U=11
 if [ -n "$AUTO" ]; then CLOSE="Released automatically in v$V once CI passed."
 else CLOSE="Rebased onto main with signed commits and released in v$V."; fi
+if [ -n "$AUTO" ]; then FINISH="tools/release.sh $V --pr $PR --auto --sha $PINNED"
+else FINISH="tools/release.sh $V${PR:+ --pr $PR}"; fi
 jget() { python3 -c "import json,sys; v=json.load(sys.stdin).get('$1'); print('' if v is None else v)"; }
 warn() { echo "warning: $*" >&2; }
 finish() {   # $1 = new: the release was just made. Best effort: it exists either way.
@@ -103,6 +105,10 @@ git fetch -q --no-tags origin refs/heads/main
 git merge -q --ff-only FETCH_HEAD
 BASE=$(git rev-parse --verify -q 'refs/heads/main^{commit}')
 RESUME=""
+# An earlier run may have pushed the tag from another clone (the watcher's
+# throwaway one): fetch it so the resume below sees it. No +: a different
+# local tag of that name is kept, and refused below.
+git fetch -q --no-tags origin "refs/tags/v$V:refs/tags/v$V" 2>/dev/null || true
 if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
   # Only an earlier run of this script, stopped after pushing its tag.
   [ "$(git rev-parse "v$V^{commit}")" = "$BASE" ] && git tag -v "v$V" >/dev/null 2>&1 ||
@@ -116,7 +122,12 @@ if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
       [ "$(git rev-parse "$PINNED:$SRC")" = "$(git rev-parse "v$V:$SRC")" ] ||
       { echo "v$V on main is another PR's release, not PR #$PR's; not resuming" >&2; exit 1; }
   fi
-  if VIEW=$(gh release view "v$V" --json url 2>/dev/null); then
+  if VIEW=$(gh release view "v$V" --json url,isDraft 2>/dev/null); then
+    # A failed `gh release create` can leave a draft, perhaps without its
+    # asset. Publishing it could ship it half-made, and deleting it could
+    # lose the owner's edits: leave that call to the owner.
+    [ "$(jget isDraft <<<"$VIEW")" != True ] ||
+      { echo "v$V is tagged but not published: a draft release v$V exists; publish or delete it on GitHub, then finish with: $FINISH" >&2; exit "$U"; }
     echo "v$V is already released"
     jget url <<<"$VIEW"
     finish || true
@@ -221,8 +232,6 @@ if [ -z "$RESUME" ]; then
   git tag -s "v$V" -m "v$V"
   git push -q origin "v$V"
 fi
-if [ -n "$AUTO" ]; then FINISH="tools/release.sh $V --pr $PR --auto --sha $PINNED"
-else FINISH="tools/release.sh $V${PR:+ --pr $PR}"; fi
 gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp" ||
   { echo "v$V is tagged but not published; finish with: $FINISH" >&2; exit "$U"; }
 finish new || true

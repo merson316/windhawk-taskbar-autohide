@@ -102,7 +102,7 @@ def main(args):
         if args[2] not in state.get('releases', []):
             print('release not found', file=sys.stderr)
             return 1
-        print(json.dumps({'url': f'https://github.com/example/repo/releases/tag/{args[2]}'}))
+        print(json.dumps({'url': f'https://github.com/example/repo/releases/tag/{args[2]}', 'isDraft': False}))
     with open(path, 'w') as f:
         json.dump(state, f)
     return 0

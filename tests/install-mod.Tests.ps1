@@ -168,5 +168,29 @@ Test 'A failed runtime copy leaves the installed one in place' {
     Assert ((Get-ItemProperty $key).Version -eq '1.18.0') 'Version unchanged'
 }
 
+Test 'A failed final rename puts the old runtime back' {
+    param($t)
+    $mods = "$($t.Data)\Engine\Mods\64"
+    [IO.File]::WriteAllText("$mods\libc++.whl", 'libc++ old')
+    Request $t '1.19.0'
+    [IO.File]::WriteAllText("$($t.Staging)\libc++.whl", 'libc++ new')
+    # Shadows the cmdlet for the script run from here: moving the new
+    # runtime into place fails, every other move goes through.
+    function Move-Item {
+        param([string]$LiteralPath, [Parameter(Position = 0)][string]$Path,
+              [Parameter(Position = 1)][string]$Destination, [switch]$Force)
+        if ($LiteralPath -and $Path -and -not $Destination) { $Destination = $Path; $Path = '' }
+        $src = if ($LiteralPath) { $LiteralPath } else { $Path }
+        if ($src -like '*.whl.tmp') { throw 'injected rename failure' }
+        Microsoft.PowerShell.Management\Move-Item -LiteralPath $src -Destination $Destination -Force:$Force
+    }
+    $r = Run $t
+    Assert (-not $r.ok) 'refused'
+    Assert ($r.error -match 'cannot put libc\+\+\.whl in place') "error: $($r.error)"
+    Assert ((Get-Content -Raw "$mods\libc++.whl") -eq 'libc++ old') 'old runtime back in place'
+    Assert (-not (Test-Path "$mods\libc++_temp1.whl")) 'old runtime left aside'
+    Assert ((Get-ItemProperty $key).Version -eq '1.18.0') 'Version unchanged'
+}
+
 if ($failed) { Write-Host "$failed failed"; exit 1 }
 Write-Host 'all passed'

@@ -73,12 +73,19 @@ function Install {
             Remove-Item -LiteralPath $incoming -Force -ErrorAction SilentlyContinue
             throw "cannot copy $lib.whl into ${mods}: $($_.Exception.Message)"
         }
+        $aside = $null
         if (Test-Path -LiteralPath $target) {
             $n = 1
             while (Test-Path -LiteralPath (Join-Path $mods "${lib}_temp$n.whl")) { $n++ }
-            Move-Item -LiteralPath $target (Join-Path $mods "${lib}_temp$n.whl")
+            $aside = Join-Path $mods "${lib}_temp$n.whl"
+            Move-Item -LiteralPath $target $aside
         }
-        Move-Item -LiteralPath $incoming $target
+        try {
+            Move-Item -LiteralPath $incoming $target
+        } catch {
+            if ($aside) { Move-Item -LiteralPath $aside $target -ErrorAction SilentlyContinue }
+            throw "cannot put $lib.whl in place: $($_.Exception.Message)"
+        }
     }
     do {
         $name = "${mod}_${version}_$(Get-Random -Minimum 100000 -Maximum 1000000).dll"
