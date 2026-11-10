@@ -123,7 +123,7 @@ def run(cwd, dll, msdl_base, *args, env=None, gh_exit=0):
     notes = cwd.parent / 'notify.log'
     bin_dir = cwd.parent / 'bin'
     bin_dir.mkdir(exist_ok=True)
-    (bin_dir / 'gh').write_text(f'#!/bin/sh\necho https://github.com/example/repo/pull/42\nexit {gh_exit}\n')
+    (bin_dir / 'gh').write_text(f'#!/bin/sh\necho "$@" >> {cwd.parent / "gh.log"}\necho https://github.com/example/repo/pull/42\nexit {gh_exit}\n')
     (bin_dir / 'gh').chmod(0o755)
     e = {**os.environ, 'TASKBAR_DLL': dll, 'MSDL_BASE': msdl_base, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
          'NOTIFY_CMD': f'sh -c \'echo "$*" >> {notes}\' notify', **(env or {})}
@@ -146,6 +146,13 @@ def test_watch_skips_when_pdb_published(checkout, dll_9807, pdb_9807, symbol_ser
     assert p.returncode == 0, p.stderr
     assert 'symbols published, mod checks pass: 10.0.26100.9807' in p.stdout
     assert notes == ''
+
+
+def test_watch_opens_ready_pr(checkout, dll_9807, msdl):
+    p, _ = run(checkout, dll_9807, msdl)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (checkout.parent / 'gh.log').read_text()
+    assert 'pr create' in log and '--draft' not in log
 
 
 def test_watch_dry_run_new_build(checkout, dll_9807, msdl):

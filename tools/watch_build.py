@@ -5,8 +5,8 @@ before the restart rather than after.
 
 For each: if Microsoft has published its symbols, check the mod's load checks
 pass on it, and warn once if they will not. If not -- and it is not in
-kKnownBuilds and has no PR yet -- match it and open a draft PR for the owner
-to test.
+kKnownBuilds and has no PR yet -- match it and open a ready PR; it
+releases itself once CI passes.
 
 All git work happens in a temporary worktree of origin/main: the owner's
 checkout, and any uncommitted edits in it, are never touched. Each warning is
@@ -117,7 +117,8 @@ def known_on_main():
 
 def open_pr(version, branch, ref_version, entry, evidence):
     """Commit the entry on a new branch from origin/main in a temporary
-    worktree, push it and open a draft PR. Undoes the branch on failure so
+    worktree, push it and open a ready PR (not a draft: it releases itself
+    once CI passes). Undoes the branch on failure so
     the next sign-in tries again."""
     tree = tempfile.mkdtemp(prefix='taskbar-watch-')
     pushed = False
@@ -135,7 +136,7 @@ def open_pr(version, branch, ref_version, entry, evidence):
         with tempfile.NamedTemporaryFile('w', suffix='.md', delete=False) as f:
             f.write(body)
         try:
-            return subprocess.run(['gh', 'pr', 'create', '--draft', '--head', branch,
+            return subprocess.run(['gh', 'pr', 'create', '--head', branch,
                                    '--title', f'taskbar.dll {version}: built-in addresses', '--body-file', f.name],
                                   capture_output=True, text=True, check=True, cwd=tree).stdout.strip()
         finally:

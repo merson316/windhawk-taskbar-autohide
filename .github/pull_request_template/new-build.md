@@ -4,11 +4,14 @@ Windows installed taskbar.dll **{version}**, and Microsoft has not published its
 
 This PR adds the build to `kKnownBuilds` and bumps the mod to **{mod_version}**.
 
-## Before merging
+## Release
+
+This PR releases itself as **v{mod_version}** once both CI checks pass, and installs itself in your Windhawk.
+
+To stop that, convert this PR to a draft or close it.
+
+Optional checks by hand:
 
 - [ ] Compiled this PR's `src/taskbar-autohide-any-edge.wh.cpp` in Windhawk
 - [ ] Auto-hide works on a side edge
 - [ ] Windhawk's log shows "using the built-in addresses for taskbar.dll {version}"
-- Tested on OS build (winver): `_____`
-
-Once every box is ticked and the build is filled in, mark the PR ready for review, then merge with `tools/release.sh {mod_version} --pr <this PR's number>`, not the merge button, so every commit stays signed with the owner's key.
