@@ -13,8 +13,9 @@
 # publishing: rewrite the Changes draft in plain language there.
 #
 # --auto is for the build watcher: no prompts and no editor. The PR must be
-# exactly SHA, ready (not a draft), and pass tools/check_build_pr.py (signed
-# by this PC's key, one kKnownBuilds entry, nothing else). The caller has
+# exactly SHA, from a build/ branch, ready (not a draft), and pass
+# tools/check_build_pr.py (signed by this PC's key, one kKnownBuilds entry,
+# nothing else). The caller has
 # already seen CI pass on SHA. It skips the checklist and the tested-OS-build
 # requirement, writes no docs/compatibility.json entry, and says in the notes
 # that the build was matched automatically and not tested by hand.
@@ -74,9 +75,12 @@ if [ -n "$PR" ] && [ -z "$RESUME" ]; then
   # This runs with the signing key loaded, so the PR must not be able to
   # change what runs: same repo only, src/ and README.md only, and exactly
   # the commit shown here.
-  INFO=$(gh pr view "$PR" --json isCrossRepository,isDraft,headRefOid,baseRefName,body)
+  INFO=$(gh pr view "$PR" --json isCrossRepository,isDraft,headRefOid,headRefName,baseRefName,body)
   field() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)" <<<"$INFO"; }
   [ "$(field "d['isCrossRepository']")" = False ] || { echo "PR #$PR is from a fork; refusing" >&2; exit 1; }
+  if [ -n "$AUTO" ] && [[ "$(field "d['headRefName']")" != build/* ]]; then
+    echo "PR #$PR is not from a build/ branch; refusing" >&2; exit 1
+  fi
   [ "$(field "d['baseRefName']")" = main ] || { echo "PR #$PR does not target main; refusing" >&2; exit 1; }
   [ "$(field "d['isDraft']")" = False ] || { echo "PR #$PR is still a draft; mark it ready once tested" >&2; exit 1; }
   if [ -z "$AUTO" ] && field "d['body']" | grep -E '^[[:space:]]*- \[ \]' >/dev/null; then

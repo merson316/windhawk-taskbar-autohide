@@ -105,8 +105,8 @@ def run_release(tmp_path, origin, pr, extra_env=None, args=('--pr', '7'), versio
 
 
 def pr_json(sha, cross=False, draft=False,
-            body='- [x] Compiled\n- [x] Works\nTested on OS build (winver): `26300.9999`'):
-    return {'isCrossRepository': cross, 'isDraft': draft, 'headRefOid': sha, 'headRefName': 'build/test',
+            body='- [x] Compiled\n- [x] Works\nTested on OS build (winver): `26300.9999`', branch='build/test'):
+    return {'isCrossRepository': cross, 'isDraft': draft, 'headRefOid': sha, 'headRefName': branch,
             'baseRefName': 'main', 'body': body}
 
 
@@ -264,6 +264,14 @@ def test_auto_refuses_draft(setup, msdl):
     v, head, pr, args = auto(tmp, origin, author, draft=True)
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
     assert p.returncode == 1 and 'still a draft' in p.stderr
+    assert not p.main_moved
+
+
+def test_auto_refuses_branch_outside_build(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, branch='feature/build/x')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 1 and 'PR #7 is not from a build/ branch; refusing' in p.stderr
     assert not p.main_moved
 
 
