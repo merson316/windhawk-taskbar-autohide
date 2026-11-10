@@ -12,10 +12,9 @@ from matcher.match import format_entry
 from matcher.pdb import publics
 from matcher.pe import PE
 
+from conftest import FAKE
+
 SRC, README = 'src/taskbar-autohide-any-edge.wh.cpp', 'README.md'
-FAKE = ('    {L"10.0.26100.9999",\n'
-        '     {0x11111111, 0x1111, 0x1111, {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}},\n'
-        '     1, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7},\n')
 
 
 @pytest.fixture
