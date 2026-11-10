@@ -37,6 +37,11 @@ jobs:
           git config --global tag.gpgsign true
           echo "* namespaces=\"git\" $(cat ~/ci-signing.pub)" > ~/ci-allowed-signers
           git config --global gpg.ssh.allowedSignersFile ~/ci-allowed-signers
+          # A push into the tests' throwaway repos starts git's background
+          # maintenance there, and a local clone that runs into its lock
+          # file fails ("failed to copy file ... maintenance.lock").
+          git config --global maintenance.auto false
+          git config --global gc.auto 0
       - run: python -m venv .venv && .venv/bin/pip install -q -r tools/requirements.txt
       # Real taskbar.dll builds and PDBs come from Microsoft's symbol server;
       # a test that cannot get one fails here instead of skipping.
