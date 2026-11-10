@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -252,3 +253,69 @@ def test_watcher_exits_8_when_a_release_is_refused(world, ar, monkeypatch):
     world.pr(5, signed=False)
     assert watch_build.main([]) == 8
     assert watch_build.main(['--dry-run']) == 0
+
+
+def run_watcher(world, tmp_path, msdl, dll_9549, dll_9807, pdb_9549):
+    stage(tmp_path, dll_9549, 9549)
+    sym = tmp_path / 'symbols/0A5DD95BEF53208B28B2F3D8586E64261'
+    sym.mkdir(parents=True)
+    os.symlink(pdb_9549, sym / 'Taskbar.pdb')
+    env = {**os.environ, **world.env(msdl), 'TASKBAR_DLL': dll_9807, 'WINSXS': str(tmp_path / 'WinSxS'),
+           'WINDHAWK_SYMBOLS': str(tmp_path / 'symbols'), 'TASKBAR_CACHE': str(tmp_path / 'cache')}
+    return subprocess.run([str(world.checkout / 'tools/watch-build.sh')], cwd=world.checkout,
+                          capture_output=True, text=True, env=env)
+
+
+def test_draft_not_superseded(world, tmp_path, msdl, dll_9549, dll_9807, pdb_9549):
+    # The owner made 9807's PR a draft to stop it. Another PR releasing must
+    # not close it, or the watcher would reopen it as ready and release it.
+    world.pr(5)
+    first = world.next_version()
+    world.pr(6, build='10.0.26100.9807', created='2026-02-01T00:00:00Z', draft=True)
+    p = run_watcher(world, tmp_path, msdl, dll_9549, dll_9807, pdb_9549)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert git(world.origin, 'cat-file', '-t', f'v{first}') == 'tag'
+    log = world.log()
+    assert 'pr close 6' not in log
+    assert 'pr create' not in log
+    assert 'refs/heads/build/10.0.26100.9807' in git(world.origin, 'show-ref')
+
+
+def test_release_failure_is_retried_not_refused(world, ar, monkeypatch):
+    # gh fails after the tag is pushed: not a refusal. The next run resumes.
+    import watch_build
+    monkeypatch.setattr(watch_build, 'PE', lambda path: None)
+    monkeypatch.setattr(watch_build, 'staged_build', lambda running: None)
+    monkeypatch.setattr(watch_build, 'check_builds', lambda builds, dry_run: ([0], set()))
+    world.pr(5)
+    v = world.next_version()
+    world.gh(fail=['release create'])
+    assert watch_build.main([]) == 6
+    assert watch_build.main([]) == 6
+    notes = world.notified()
+    assert 'release refused' not in notes
+    assert notes.count('Taskbar 10.0.26100.9999: release failed, will retry') == 1
+    assert git(world.origin, 'cat-file', '-t', f'v{v}') == 'tag'
+    world.gh(fail=[])
+    assert ar.release_pending(set()) == [v]
+    assert f'v{v} released for taskbar 10.0.26100.9999' in world.notified()
+
+
+def test_moved_head_is_left_quietly(world, ar):
+    world.pr(5)
+    state = world.gh()
+    state['prs'][0]['headRefOid'] = '1' * 40   # pushed over since `pr list`
+    world.gh(prs=state['prs'])
+    assert ar.release_pending(set()) == []
+    assert world.notified() == ''
+    assert 'pr view' not in world.log(), 'release.sh ran'
+
+
+def test_release_step_has_a_deadline(world, ar, monkeypatch):
+    a, b = world.pr(5), world.pr(6, build='10.0.26100.9998', created='2026-02-01T00:00:00Z')
+    world.gh(checks={a: 'in_progress', b: 'in_progress'})
+    monkeypatch.setenv('CI_WAIT', '5')
+    monkeypatch.setenv('RELEASE_DEADLINE', '0.5')
+    start = time.monotonic()
+    assert ar.release_pending({5, 6}) == []
+    assert time.monotonic() - start < 2, 'waited past the deadline'

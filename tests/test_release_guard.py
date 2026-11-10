@@ -263,7 +263,7 @@ def test_auto_refuses_draft(setup, msdl):
     tmp, origin, author = setup
     v, head, pr, args = auto(tmp, origin, author, draft=True)
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 1 and 'still a draft' in p.stderr
+    assert p.returncode == 3 and 'still a draft' in p.stderr
     assert not p.main_moved
 
 
@@ -271,7 +271,7 @@ def test_auto_refuses_branch_outside_build(setup, msdl):
     tmp, origin, author = setup
     v, head, pr, args = auto(tmp, origin, author, branch='feature/build/x')
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 1 and 'PR #7 is not from a build/ branch; refusing' in p.stderr
+    assert p.returncode == 3 and 'PR #7 is not from a build/ branch; refusing' in p.stderr
     assert not p.main_moved
 
 
@@ -286,7 +286,7 @@ def test_auto_refuses_moved_sha(setup, msdl):
     tmp, origin, author = setup
     v, head, pr, args = auto(tmp, origin, author, sha='0' * 40)
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 1 and 'moved' in p.stderr
+    assert p.returncode == 3 and 'moved' in p.stderr
     assert not p.main_moved
 
 
@@ -294,7 +294,7 @@ def test_auto_refuses_untrusted(setup, msdl):
     tmp, origin, author = setup
     v, head, pr, args = auto(tmp, origin, author, build=lambda r: watcher_pr(r, signed=False))
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 1 and 'not signed by this PC' in p.stderr
+    assert p.returncode == 3 and 'not signed by this PC' in p.stderr
     assert not p.main_moved
 
 
@@ -330,7 +330,7 @@ def test_auto_refuses_when_build_unknown(setup, msdl):
         git(repo, 'commit', '-q', '-am', 'feat: add a build')
     v, head, pr, args = auto(tmp, origin, author, build=build)
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 1 and 'refused' in p.stderr
+    assert p.returncode == 3 and 'refused' in p.stderr
     assert not p.main_moved
 
 
@@ -340,7 +340,7 @@ def test_auto_resumes_after_tag(setup, msdl):
     (tmp / 'gh').mkdir()
     (tmp / 'gh/fail-release').write_text('')
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode != 0
+    assert p.returncode not in (0, 3), 'a failed gh call is not a refusal'
     assert git(origin, 'tag', '-l', f'v{v}') == f'v{v}'
     (tmp / 'gh/fail-release').unlink()
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
@@ -349,6 +349,15 @@ def test_auto_resumes_after_tag(setup, msdl):
     assert git(origin, 'tag', '-l', 'v*').split().count(f'v{v}') == 1
     assert p.gh_log.count(f'release create v{v}') == 2
     assert 'Not tested by hand.' in p.notes
+
+
+def test_auto_without_signing_is_a_failure_not_a_refusal(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author)
+    no_signer = {'MSDL_BASE': msdl, 'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': 'gpg.ssh.program',
+                 'GIT_CONFIG_VALUE_0': '/bin/false'}
+    p = run_release(tmp, origin, pr, no_signer, args, v)
+    assert p.returncode == 1 and 'signing is unavailable' in p.stderr
 
 
 def test_auto_needs_sha(setup, msdl):

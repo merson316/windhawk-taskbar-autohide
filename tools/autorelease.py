@@ -6,7 +6,11 @@ releases the others are stale and are closed for the watcher to reopen from
 the new main.
 
 A gh or git network error while listing PRs or reading CI is printed and
-skipped: the next run tries again."""
+skipped: the next run tries again. So is a PR whose head moved, and a
+release that failed for any reason other than release.sh refusing it (that
+also toasts once a day). The whole step stops waiting after RELEASE_DEADLINE
+seconds (default 1200), so a run stays inside the scheduled task's limit."""
+import datetime
 import json
 import os
 import re
@@ -24,7 +28,18 @@ FAILED = ('failure', 'cancelled', 'timed_out')
 
 
 class ReleaseRefused(Exception):
-    """release.sh refused the PR (exit 1); the message is its stderr."""
+    """release.sh refused the PR (exit 3 under --auto); the message is its
+    stderr. The PR will not release as it is."""
+
+
+class ReleaseFailed(Exception):
+    """The release failed for another reason (network, signing key not
+    loaded, ...); a later run may get past it."""
+
+
+class Moved(Exception):
+    """The PR's head is no longer the commit CI was read on."""
+
 
 
 class Unreachable(Exception):
@@ -80,40 +95,49 @@ def _release(pr):
     """Run release.sh --auto for pr in a fresh clone; return (version, url)."""
     clone = tempfile.mkdtemp(prefix='taskbar-release-')
     try:
-        def g(*args):
-            return wb.git('-C', clone, *args).stdout.strip()
-        wb.git('clone', '-q', '--no-checkout', wb.REPO, clone)
-        g('remote', 'set-url', 'origin', wb.git('-C', wb.REPO, 'remote', 'get-url', 'origin').stdout.strip())
-        for key in ('user.name', 'user.email'):   # commit as the owner's checkout does
-            value = wb.git('-C', wb.REPO, 'config', key, check=False).stdout.strip()
-            if value:
-                g('config', key, value)
-        # release.sh, and the tools it runs, come from origin's main, not
-        # from whatever the owner's checkout has.
-        g('fetch', '-q', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main',
-          f'+refs/pull/{pr.number}/head:refs/remotes/origin/pr')
-        g('checkout', '-q', '-B', 'main', 'origin/main')
-        os.symlink(os.path.join(wb.REPO, '.venv'), os.path.join(clone, '.venv'))
-        with open(os.path.join(clone, '.git/info/exclude'), 'a') as f:
-            f.write('.venv\n')
-        # The version is the PR's own @version, read at the commit CI passed on.
-        src = wb.git('-C', clone, 'show', f'{pr.sha}:{wb.SRC}', check=False)
-        m = re.search(r'(?m)^// @version\s+(\S+)$', src.stdout)
-        if not m:
-            raise ReleaseRefused(f'PR #{pr.number} has no @version at {pr.sha[:12]}')
-        version = m[1]
-        r = subprocess.run(['tools/release.sh', version, '--pr', str(pr.number), '--auto', '--sha', pr.sha],
-                           cwd=clone, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-        print(r.stdout, end='')
-        print(r.stderr, end='')
-        if r.returncode == 1:
-            raise ReleaseRefused(r.stderr.strip())
-        if r.returncode != 0:
-            raise RuntimeError(f'release.sh {version} --pr {pr.number} exited {r.returncode}: {r.stderr.strip()}')
-        url = next((line for line in reversed(r.stdout.splitlines()) if '/releases/tag/' in line), f'v{version}')
-        return version, url.strip()
+        return _release_in(clone, pr)
+    except subprocess.CalledProcessError as e:   # git, before release.sh runs
+        raise ReleaseFailed((e.stderr or '').strip() or f'git exited {e.returncode}') from None
     finally:
         shutil.rmtree(clone, ignore_errors=True)
+
+
+def _release_in(clone, pr):
+    def g(*args):
+        return wb.git('-C', clone, *args).stdout.strip()
+    wb.git('clone', '-q', '--no-checkout', wb.REPO, clone)
+    g('remote', 'set-url', 'origin', wb.git('-C', wb.REPO, 'remote', 'get-url', 'origin').stdout.strip())
+    for key in ('user.name', 'user.email'):   # commit as the owner's checkout does
+        value = wb.git('-C', wb.REPO, 'config', key, check=False).stdout.strip()
+        if value:
+            g('config', key, value)
+    # release.sh, and the tools it runs, come from origin's main, not
+    # from whatever the owner's checkout has. Tags too: release.sh resumes
+    # from its tag if an earlier run pushed it.
+    g('fetch', '-q', '--tags', 'origin', '+refs/heads/main:refs/remotes/origin/main',
+      f'+refs/pull/{pr.number}/head:refs/remotes/origin/pr')
+    g('checkout', '-q', '-B', 'main', 'origin/main')
+    os.symlink(os.path.join(wb.REPO, '.venv'), os.path.join(clone, '.venv'))
+    with open(os.path.join(clone, '.git/info/exclude'), 'a') as f:
+        f.write('.venv\n')
+    if g('rev-parse', 'refs/remotes/origin/pr') != pr.sha:
+        raise Moved(f'PR #{pr.number} moved: its head is no longer {pr.sha[:12]}')
+    # The version is the PR's own @version, read at the commit CI passed on.
+    src = wb.git('-C', clone, 'show', f'{pr.sha}:{wb.SRC}', check=False)
+    m = re.search(r'(?m)^// @version\s+(\S+)$', src.stdout)
+    if not m:
+        raise ReleaseRefused(f'PR #{pr.number} has no @version at {pr.sha[:12]}')
+    version = m[1]
+    r = subprocess.run(['tools/release.sh', version, '--pr', str(pr.number), '--auto', '--sha', pr.sha],
+                       cwd=clone, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    print(r.stdout, end='')
+    print(r.stderr, end='')
+    if r.returncode == 3:
+        raise ReleaseRefused(r.stderr.strip())
+    if r.returncode != 0:
+        raise ReleaseFailed(r.stderr.strip() or f'release.sh exited {r.returncode}')
+    url = next((line for line in reversed(r.stdout.splitlines()) if '/releases/tag/' in line), f'v{version}')
+    return version, url.strip()
 
 
 def release(pr):
@@ -121,11 +145,25 @@ def release(pr):
     return _release(pr)[0]
 
 
-def release_pending(opened, closed=None, refused=None):
+def release_deadline():
+    return time.monotonic() + float(os.environ.get('RELEASE_DEADLINE', 1200))
+
+
+def _first_line(text):
+    lines = text.splitlines() or ['no reason given']
+    # "PR #N refused:" says nothing on its own; the first problem follows it.
+    return f'{lines[0]} {lines[1].strip()}' if lines[0].endswith(':') and len(lines) > 1 else lines[0]
+
+
+def release_pending(opened, closed=None, refused=None, failed=None, deadline=None):
     """Release the oldest build PR whose CI passed; return the versions
-    released. PRs in `opened` were opened on this run: wait for their CI.
-    The numbers of PRs closed as stale after a release, and of PRs release.sh
-    refused, go into the lists `closed` and `refused`, if given."""
+    released. PRs in `opened` were opened on this run: wait for their CI,
+    but not past `deadline` (time.monotonic(); default RELEASE_DEADLINE
+    from now). The numbers of PRs closed as stale after a release, refused
+    by release.sh, or whose release failed go into the lists `closed`,
+    `refused` and `failed`, if given."""
+    if deadline is None:
+        deadline = release_deadline()
     try:
         prs = pending_build_prs()
     except Unreachable as e:
@@ -133,12 +171,16 @@ def release_pending(opened, closed=None, refused=None):
         return []
     for pr in prs:
         build = pr.branch[len('build/'):]
+        left = deadline - time.monotonic()
+        if left <= 0:
+            print('release step out of time; the other PRs wait for the next run')
+            break
         if pr.draft:
             print(f'draft, not releasing: PR #{pr.number} ({build})')
             continue
         try:
-            state = (wait_for_ci(pr.sha, float(os.environ.get('CI_WAIT', 900))) if pr.number in opened
-                     else ci_state(pr.sha))
+            state = (wait_for_ci(pr.sha, min(float(os.environ.get('CI_WAIT', 900)), left))
+                     if pr.number in opened else ci_state(pr.sha))
         except Unreachable as e:
             print(f'cannot read CI for PR #{pr.number}, trying next time: {e}')
             continue
@@ -151,15 +193,21 @@ def release_pending(opened, closed=None, refused=None):
             continue
         try:
             version, release_url = _release(pr)
+        except Moved as e:
+            print(f'{e}; trying next time')
+            continue
         except ReleaseRefused as e:
-            reason = str(e)
-            print(f'release refused: PR #{pr.number} ({build}): {reason}')
-            lines = reason.splitlines() or ['no reason given']
-            # "PR #N refused:" says nothing on its own; the first problem follows it.
-            why = f'{lines[0]} {lines[1].strip()}' if lines[0].endswith(':') and len(lines) > 1 else lines[0]
-            wb.notify_once(f'refused:{pr.sha}', f'Taskbar {build}: release refused', why)
+            print(f'release refused: PR #{pr.number} ({build}): {e}')
+            wb.notify_once(f'refused:{pr.sha}', f'Taskbar {build}: release refused', _first_line(str(e)))
             if refused is not None:
                 refused.append(pr.number)
+            continue
+        except ReleaseFailed as e:
+            print(f'release failed, trying next time: PR #{pr.number} ({build}): {e}')
+            wb.notify_once(f'releasefail:{pr.sha}:{datetime.date.today()}',
+                           f'Taskbar {build}: release failed, will retry', _first_line(str(e)))
+            if failed is not None:
+                failed.append(pr.number)
             continue
         wb.notify(f'v{version} released for taskbar {build}', release_url)
         _supersede(pr, version, closed)
@@ -176,7 +224,9 @@ def _pr_url(pr):
 
 def _supersede(released, version, closed):
     try:
-        others = [p for p in pending_build_prs() if p.number != released.number]
+        # A draft is the owner's stop signal: closing it would let the
+        # watcher reopen it as ready, and release it.
+        others = [p for p in pending_build_prs() if p.number != released.number and not p.draft]
     except Unreachable as e:
         print(f'cannot list PRs to close the stale ones, trying next time: {e}')
         return

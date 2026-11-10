@@ -17,8 +17,9 @@ raised once (see notify_once), so later runs do not repeat it.
 
 Exit codes: 0 nothing to do, PR opened or released, 3 match failed, 4
 signing unavailable, 5 symbol server unreachable or PDB not downloadable yet,
-6 anything else failed (notified), 7 a published build fails the mod's checks,
-8 release.sh refused a build PR (notified)."""
+6 anything else failed (notified; a failed release is retried next run), 7 a
+published build fails the mod's checks, 8 release.sh refused a build PR
+(notified)."""
 import datetime
 import glob
 import os
@@ -222,13 +223,14 @@ def main(argv):
     if dry_run:
         return next((c for c in codes if c), 0)
     import autorelease
-    closed, refused = [], []
-    if autorelease.release_pending(opened, closed, refused) and closed:
+    closed, refused, failed = [], [], []
+    deadline = autorelease.release_deadline()   # one budget for both rounds
+    if autorelease.release_pending(opened, closed, refused, failed, deadline) and closed:
         # The closed PRs were stale; match their builds again from the new main.
         more, opened = check_builds(builds, dry_run)
         codes += more
-        autorelease.release_pending(opened, refused=refused)
-    return next((c for c in codes if c), 8 if refused else 0)
+        autorelease.release_pending(opened, refused=refused, failed=failed, deadline=deadline)
+    return next((c for c in codes if c), 6 if failed else 8 if refused else 0)
 
 
 def check_builds(builds, dry_run):
