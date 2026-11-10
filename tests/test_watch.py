@@ -123,7 +123,7 @@ def run(cwd, dll, msdl_base, *args, env=None, gh_exit=0):
     notes = cwd.parent / 'notify.log'
     bin_dir = cwd.parent / 'bin'
     bin_dir.mkdir(exist_ok=True)
-    (bin_dir / 'gh').write_text(f'#!/bin/sh\necho https://github.com/example/repo/pull/42\nexit {gh_exit}\n')
+    (bin_dir / 'gh').write_text(f'#!/bin/sh\necho "$@" >> {cwd.parent / "gh.log"}\necho https://github.com/example/repo/pull/42\nexit {gh_exit}\n')
     (bin_dir / 'gh').chmod(0o755)
     e = {**os.environ, 'TASKBAR_DLL': dll, 'MSDL_BASE': msdl_base, 'PATH': f'{bin_dir}:{os.environ["PATH"]}',
          'NOTIFY_CMD': f'sh -c \'echo "$*" >> {notes}\' notify', **(env or {})}
@@ -148,11 +148,18 @@ def test_watch_skips_when_pdb_published(checkout, dll_9807, pdb_9807, symbol_ser
     assert notes == ''
 
 
+def test_watch_opens_ready_pr(checkout, dll_9807, msdl):
+    p, _ = run(checkout, dll_9807, msdl)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (checkout.parent / 'gh.log').read_text()
+    assert 'pr create' in log and '--draft' not in log
+
+
 def test_watch_dry_run_new_build(checkout, dll_9807, msdl):
     p, _ = run(checkout, dll_9807, msdl, '--dry-run')
     assert p.returncode == 0, p.stderr
     assert '0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40' in p.stdout
-    assert 'would open draft PR' in p.stdout
+    assert 'would open PR' in p.stdout
 
 
 def test_watch_stops_without_signing(checkout, dll_9807, msdl):
@@ -178,7 +185,7 @@ def test_watch_opens_pr_without_touching_checkout(checkout, dll_9807, msdl):
                             capture_output=True, text=True).stdout
     p, notes = run(checkout, dll_9807, msdl)
     assert p.returncode == 0, p.stdout + p.stderr
-    assert 'draft PR ready' in notes
+    assert 'PR opened, releases itself once CI passes' in notes
     after = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'],
                            capture_output=True, text=True).stdout
     assert after == before
@@ -199,7 +206,7 @@ def test_watch_failure_notifies_and_cleans_up(checkout, dll_9807, msdl):
     assert 'build/' not in subprocess.run(['git', '-C', str(checkout), 'branch'], capture_output=True, text=True).stdout
     # and the next sign-in tries again rather than reporting known or pending
     p2, _ = run(checkout, dll_9807, msdl, '--dry-run')
-    assert 'would open draft PR' in p2.stdout
+    assert 'would open PR' in p2.stdout
 
 
 @pytest.mark.parametrize('msdl', [503, 429, 403], indirect=True)
@@ -221,7 +228,7 @@ def test_watch_checks_a_build_staged_for_the_restart(checkout, tmp_path, dll_954
     assert p.returncode == 0, p.stdout + p.stderr
     assert 'symbols published, mod checks pass: 10.0.26100.9549' in p.stdout
     assert 'staged for restart: 10.0.26100.9807' in p.stdout
-    assert 'would open draft PR "taskbar.dll 10.0.26100.9807' in p.stdout
+    assert 'would open PR "taskbar.dll 10.0.26100.9807' in p.stdout
 
 
 def test_watch_warns_once_when_a_published_build_breaks_the_mod(checkout, tmp_path, dll_9549, pdb_9549,

@@ -264,6 +264,30 @@ investigation were removed from the tree after v1.17.0; `git show
 v1.17.0:<path>` brings any of them back, and they are worth reading before
 retrying either.
 
+New taskbar builds need no hands. When a build has no published symbols, the
+watcher matches it and opens a ready PR. Once both CI checks pass on that exact
+commit, it releases the PR (signed rebase, signed tag, GitHub release marked
+"Not tested by hand."), closes the other ready build PRs (drafts are left alone), and installs the release in
+the owner's Windhawk. A toast says `v... released and installed for taskbar ...`.
+Windhawk reloads the mod when its registry `LibraryFileName` changes, so no
+restart is needed. A ready build PR that main has moved past for another reason (a manual
+release, say) is closed the same way, and the watcher reopens it from the new main.
+To stop a release, convert the PR to a draft. Closing it also stops it, but
+only if you keep its branch: with the branch deleted, the next run matches the
+build again and opens a new ready PR.
+The watcher only releases a same-repo `build/*` PR signed with this PC's key
+that adds one `kKnownBuilds` entry, bumps the version and adds one README row
+(`tools/check_build_pr.py`).
+
+The install runs as an elevated scheduled task, `WindhawkTaskbarModInstall`,
+which runs `tools/install-mod.ps1` from the staging folder
+(`%LOCALAPPDATA%\taskbar-autohide\install`), where the watcher copies it each
+time. That folder is one the owner's account can edit, so the task guards against mistakes, not against malware that
+already runs as the owner. The DLL imports Windhawk's `libc++.whl` and `libunwind.whl`
+from `Engine\Mods\64`; when Windhawk's compiler ships different ones, the task puts them in
+place first and renames the old ones to `<name>_tempN.whl`, as Windhawk's own compile does. Register both tasks once from an elevated
+PowerShell with `tools/install-watch-task.ps1` (`-Uninstall` removes both).
+
 ## License
 
 GPL-3.0, matching the Windhawk mod ecosystem. See [LICENSE](LICENSE).

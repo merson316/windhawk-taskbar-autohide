@@ -12,10 +12,9 @@ from matcher.match import format_entry
 from matcher.pdb import publics
 from matcher.pe import PE
 
+from conftest import FAKE
+
 SRC, README = 'src/taskbar-autohide-any-edge.wh.cpp', 'README.md'
-FAKE = ('    {L"10.0.26100.9999",\n'
-        '     {0x11111111, 0x1111, 0x1111, {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}},\n'
-        '     1, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7},\n')
 
 
 @pytest.fixture
@@ -27,8 +26,7 @@ def copies(tmp_path):
 
 
 def test_known_builds_parses_9807():
-    (entry,) = known_builds(SRC)
-    assert entry['version'] == '10.0.26100.9807'
+    (entry,) = [b for b in known_builds(SRC) if b['version'] == '10.0.26100.9807']
     assert entry['pdb_key'] == '1AF71656D4C04FBD463BFF7E4ED169CE1'
     assert [entry[f] for f in HOOKED] == [0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40]
 
@@ -40,8 +38,9 @@ def next_minor():
 
 def test_apply_to_temp_copy(copies):
     src, readme = copies
+    before = len(known_builds(src))
     assert apply_entry(src, readme, FAKE, '10.0.26100.9999', '10.0.26100.9807') == next_minor()
-    assert len(known_builds(src)) == 2
+    assert len(known_builds(src)) == before + 1
     assert f'@version         {next_minor()}' in src.read_text()
     assert '| 10.0.26100.9999 | 10.0.26100.9807 |' in readme.read_text()
     # The copy still compiles, where Windhawk is installed (CI's Windows job

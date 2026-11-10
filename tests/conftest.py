@@ -14,6 +14,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
 from matcher import reference  # noqa: E402
 from matcher.reference import fetch_dll, fetch_pdb  # noqa: E402
 
+FAKE = ('    {L"10.0.26100.9999",\n'
+        '     {0x11111111, 0x1111, 0x1111, {0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}},\n'
+        '     1, 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7},\n')
+
 WINSXS = os.environ.get('WINSXS', '/mnt/c/Windows/WinSxS')
 
 # version: (TimeDateStamp, SizeOfImage) -- the symbol server's key for the DLL.

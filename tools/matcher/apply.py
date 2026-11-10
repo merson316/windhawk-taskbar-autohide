@@ -7,7 +7,8 @@ from . import HOOKED
 _ENTRY = re.compile(
     r'\{L"(?P<version>[\d.]+)",\s*'
     r'\{0x(?P<d1>[0-9A-Fa-f]{1,8}),\s*0x(?P<d2>[0-9A-Fa-f]{1,4}),\s*0x(?P<d3>[0-9A-Fa-f]{1,4}),\s*'
-    r'\{(?P<d4>[^}]*)\}\},\s*(?P<age>\d+),\s*(?P<rvas>[0-9A-Fa-fx,\s]+)\}')
+    r'\{(?P<d4>(?:0x[0-9A-Fa-f]{1,2},\s*){7}0x[0-9A-Fa-f]{1,2})\}\},\s*(?P<age>\d+),\s*'
+    r'(?P<rvas>(?:0x[0-9A-Fa-f]+,\s*){6}0x[0-9A-Fa-f]+)\}')
 _TABLE = re.compile(r'(const KnownBuild kKnownBuilds\[\] = \{\n)(?P<body>.*?)(^\};)', re.S | re.M)
 _VERSION = re.compile(r'^(// @version\s+)(\d+)\.(\d+)\.(\d+)$', re.M)
 _README_ROW = re.compile(r'^\| (10\.0\.\d+\.\d+) \| (10\.0\.\d+\.\d+) \|$', re.M)
