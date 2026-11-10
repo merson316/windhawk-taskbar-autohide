@@ -2,6 +2,7 @@
 # Cut a release, signed with the owner's key, so it cannot run in CI.
 #
 #   tools/release.sh <version> [--pr N] [--os-build 26300.9807]
+#   tools/release.sh <version> --pr N --auto --sha SHA
 #
 # With --pr, rebases the approved PR onto main with signed commits (never the
 # merge button) and takes the tested OS build from the PR's checklist. The PR
@@ -11,20 +12,35 @@
 # taskbar.dll installed on this PC. The notes open in $EDITOR before
 # publishing: rewrite the Changes draft in plain language there.
 #
+# --auto is for the build watcher: no prompts and no editor. The PR must be
+# exactly SHA, ready (not a draft), and pass tools/check_build_pr.py (signed
+# by this PC's key, one kKnownBuilds entry, nothing else). The caller has
+# already seen CI pass on SHA. It skips the checklist and the tested-OS-build
+# requirement, writes no docs/compatibility.json entry, and says in the notes
+# that the build was matched automatically and not tested by hand.
+#
 # Everything that can fail runs before the first push. If the release itself
 # fails after the tag is pushed, re-run the same command to finish it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 V=${1:?usage: tools/release.sh <version> [--pr N] [--os-build BUILD]}; shift
-PR="" OSB=""
+PR="" OSB="" AUTO="" PINNED=""
 while [ $# -gt 0 ]; do
   case $1 in
     --pr) PR=$2; shift 2 ;;
     --os-build) OSB=$2; shift 2 ;;
+    --auto) AUTO=1; shift ;;
+    --sha) PINNED=$2; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ -n "$AUTO" ]; then
+  { [ -n "$PR" ] && [ -n "$PINNED" ] && [ -z "$OSB" ]; } ||
+    { echo "usage: tools/release.sh <version> --pr N --auto --sha SHA (no --os-build)" >&2; exit 2; }
+elif [ -n "$PINNED" ]; then
+  echo "--sha is only for --auto" >&2; exit 2
+fi
 SRC=src/taskbar-autohide-any-edge.wh.cpp
 
 [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty" >&2; exit 1; }
@@ -63,14 +79,15 @@ if [ -n "$PR" ] && [ -z "$RESUME" ]; then
   [ "$(field "d['isCrossRepository']")" = False ] || { echo "PR #$PR is from a fork; refusing" >&2; exit 1; }
   [ "$(field "d['baseRefName']")" = main ] || { echo "PR #$PR does not target main; refusing" >&2; exit 1; }
   [ "$(field "d['isDraft']")" = False ] || { echo "PR #$PR is still a draft; mark it ready once tested" >&2; exit 1; }
-  if field "d['body']" | grep -E '^[[:space:]]*- \[ \]' >/dev/null; then
+  if [ -z "$AUTO" ] && field "d['body']" | grep -E '^[[:space:]]*- \[ \]' >/dev/null; then
     echo "PR #$PR has unticked checklist items; finish testing first" >&2; exit 1
   fi
   SHA=$(field "d['headRefOid']")
-  if [ -z "$OSB" ]; then
+  [ -z "$AUTO" ] || [ "$SHA" = "$PINNED" ] || { echo "PR #$PR moved: head is ${SHA:0:12}, expected ${PINNED:0:12}" >&2; exit 1; }
+  if [ -z "$OSB" ] && [ -z "$AUTO" ]; then
     OSB=$(field "d['body']" | sed -n 's/.*Tested on OS build (winver): `\([0-9][0-9.]*\)`.*/\1/p' | head -1)
   fi
-  [ -n "$OSB" ] || { echo "PR #$PR does not record the tested OS build" >&2; exit 1; }
+  [ -n "$OSB" ] || [ -n "$AUTO" ] || { echo "PR #$PR does not record the tested OS build" >&2; exit 1; }
   git fetch -q --no-tags origin "refs/pull/$PR/head"
   [ "$(git rev-parse FETCH_HEAD)" = "$SHA" ] || { echo "PR #$PR moved while releasing; refusing" >&2; exit 1; }
   # Judge the commits that will be applied, not GitHub's (truncatable) file list.
@@ -84,9 +101,15 @@ if [ -n "$PR" ] && [ -z "$RESUME" ]; then
   [ -z "$BAD" ] || { printf 'PR #%s refused:\n%s\n' "$PR" "$BAD" >&2; exit 1; }
   git show "$SHA:$SRC" | grep -E "^// @version +$V\$" >/dev/null ||
     { echo "PR #$PR's $SRC is not at version $V" >&2; exit 1; }
+  if [ -n "$AUTO" ]; then
+    TRUST=$(.venv/bin/python tools/check_build_pr.py "$BASE" "$SHA" 2>&1) ||
+      { printf 'PR #%s refused:\n%s\n' "$PR" "$TRUST" >&2; exit 1; }
+  fi
   git log --stat --format='%h %s' "$BASE..$SHA"
-  read -r -p "Rebase and sign exactly these commits (${SHA:0:12})? Type yes: " OK
-  [ "$OK" = yes ] || { echo "not confirmed" >&2; exit 1; }
+  if [ -z "$AUTO" ]; then
+    read -r -p "Rebase and sign exactly these commits (${SHA:0:12})? Type yes: " OK
+    [ "$OK" = yes ] || { echo "not confirmed" >&2; exit 1; }
+  fi
   git switch -q -c "release-$V" "$SHA"
   git rebase -q --gpg-sign "$BASE"
   git merge-base --is-ancestor "$BASE" HEAD || { echo "rebase did not land on main; refusing" >&2; git switch -q main; exit 1; }
@@ -111,8 +134,27 @@ if [ -z "$RESUME" ]; then
   git add docs/builds.json
   git diff --cached --quiet || git commit -q -S -m "docs: refresh the taskbar builds the mod should work on"
 fi
-.venv/bin/python tools/release_notes.py --version "$V" > "$WORK/notes.md"
-"${EDITOR:-nano}" "$WORK/notes.md"
+NOTES_ARGS=()
+if [ -n "$AUTO" ]; then
+  # Build and reference come from the watcher's commit message; failing that,
+  # from the README row the PR adds. With neither, refuse: the notes would lie.
+  git fetch -q --no-tags origin "refs/pull/$PR/head"
+  [ "$(git rev-parse FETCH_HEAD)" = "$PINNED" ] || { echo "PR #$PR moved while releasing; refusing" >&2; exit 1; }
+  MSG=$(git log -1 --format=%B "$PINNED")
+  NEWBUILD=$(sed -n '1s/^feat: built-in addresses for taskbar\.dll \([0-9][0-9.]*\)$/\1/p' <<<"$MSG")
+  REF=$(sed -n 's/^Matched against \([0-9][0-9.]*\) by tools\/match-build\.py\.$/\1/p' <<<"$MSG" | head -1)
+  if [ -z "$NEWBUILD" ] || [ -z "$REF" ]; then
+    ROW=$(git log -p --format= --no-renames "$BASE..$PINNED" -- README.md |
+          sed -n 's/^+| \([0-9][0-9.]*\) | \([0-9][0-9.]*\) |$/\1 \2/p')
+    [ "$(wc -l <<<"$ROW")" = 1 ] && [ -n "$ROW" ] ||
+      { echo "cannot tell which build this PR adds; refusing" >&2; exit 1; }
+    NEWBUILD=${ROW% *}; REF=${ROW#* }
+  fi
+  echo "Built-in addresses for taskbar.dll $NEWBUILD, matched automatically against $REF. Not tested by hand." > "$WORK/changes.txt"
+  NOTES_ARGS=(--changes "$WORK/changes.txt")
+fi
+.venv/bin/python tools/release_notes.py --version "$V" ${NOTES_ARGS[@]+"${NOTES_ARGS[@]}"} > "$WORK/notes.md"
+[ -n "$AUTO" ] || "${EDITOR:-nano}" "$WORK/notes.md"
 cp "$SRC" "$WORK/taskbar-autohide-any-edge.wh.cpp"
 
 if [ -z "$RESUME" ]; then
@@ -122,5 +164,7 @@ if [ -z "$RESUME" ]; then
 fi
 gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp"
 if [ -n "$PR" ]; then
-  gh pr close "$PR" --comment "Rebased onto main with signed commits and released in v$V." --delete-branch
+  if [ -n "$AUTO" ]; then CLOSE="Released automatically in v$V once CI passed."
+  else CLOSE="Rebased onto main with signed commits and released in v$V."; fi
+  gh pr close "$PR" --comment "$CLOSE" --delete-branch
 fi

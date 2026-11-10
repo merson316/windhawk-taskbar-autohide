@@ -1,12 +1,20 @@
 """release.sh --pr runs with the signing key loaded, so it must refuse a PR
 that could change what runs: from a fork, touching anything but src/ and
 README.md in any commit, containing a merge or a non-regular file."""
+import http.server
 import json
 import os
 import re
+import sys
 import subprocess
+import threading
 
 import pytest
+
+sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
+from conftest import FAKE  # noqa: E402
+from matcher.apply import apply_entry  # noqa: E402
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -21,6 +29,8 @@ def setup(tmp_path):
     subprocess.run(['git', 'clone', '-q', '--bare', REPO, str(origin)], check=True)
     # Clones check out main even when this repo is on a feature branch.
     git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/main')
+    # ...and test what is checked out here, not whatever main happens to be.
+    git(origin, 'update-ref', 'refs/heads/main', git(REPO, 'rev-parse', 'HEAD'))
     author = tmp_path / 'author'
     subprocess.run(['git', 'clone', '-q', str(origin), str(author)], check=True)
     return tmp_path, origin, author
@@ -35,19 +45,62 @@ def open_pr(author, build):
     return sha
 
 
-def run_release(tmp_path, origin, pr, extra_env=None):
+FAKE_GH = """#!/bin/sh
+echo "$@" >> "$GH_DIR/gh.log"
+case "$1 $2" in
+  "pr view") cat "$GH_DIR/pr.json" ;;
+  "release create")
+    while [ $# -gt 0 ]; do [ "$1" = --notes-file ] && cp "$2" "$GH_DIR/notes.md"; shift; done
+    [ -e "$GH_DIR/fail-release" ] && { echo "boom" >&2; exit 1; }
+    exit 0 ;;
+  "release view") exit 1 ;;
+  *) exit 0 ;;
+esac
+"""
+
+
+@pytest.fixture
+def msdl():
+    """A symbol server that has nothing: keeps release_notes off the network."""
+    class H(http.server.BaseHTTPRequestHandler):
+        def _reply(self):
+            self.send_response(404)
+            self.end_headers()
+        do_HEAD = do_GET = _reply
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(('127.0.0.1', 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    yield f'http://127.0.0.1:{srv.server_port}'
+    srv.shutdown()
+
+
+def run_release(tmp_path, origin, pr, extra_env=None, args=('--pr', '7'), version='9.9.9', stdin='no\n'):
     rel = tmp_path / 'releaser'
-    subprocess.run(['git', 'clone', '-q', str(origin), str(rel)], check=True)
-    subprocess.run(['cp', os.path.join(REPO, 'tools/release.sh'), rel / 'tools/release.sh'], check=True)
-    git(rel, 'update-index', '--assume-unchanged', 'tools/release.sh')
+    if not rel.exists():
+        subprocess.run(['git', 'clone', '-q', str(origin), str(rel)], check=True)
+        subprocess.run(['cp', os.path.join(REPO, 'tools/release.sh'), rel / 'tools/release.sh'], check=True)
+        os.symlink(os.path.join(REPO, '.venv'), rel / '.venv')
+        (rel / '.git/info/exclude').write_text('.venv\n')
+        # No network: the real check-builds.py asks Winbindex.
+        (rel / 'tools/check-builds.py').write_text('')
+        git(rel, 'update-index', '--assume-unchanged', 'tools/release.sh', 'tools/check-builds.py')
+    gh_dir = tmp_path / 'gh'
+    gh_dir.mkdir(exist_ok=True)
+    (gh_dir / 'pr.json').write_text(json.dumps(pr))
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir(exist_ok=True)
-    (bin_dir / 'gh').write_text(f"#!/bin/sh\ncat <<'JSON'\n{json.dumps(pr)}\nJSON\n")
+    (bin_dir / 'gh').write_text(FAKE_GH)
     (bin_dir / 'gh').chmod(0o755)
-    env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', **(extra_env or {})}
-    p = subprocess.run(['tools/release.sh', '9.9.9', '--pr', '7'], cwd=rel, env=env,
-                       capture_output=True, text=True, input='no\n')
+    env = {**os.environ, 'PATH': f'{bin_dir}:{os.environ["PATH"]}', 'GH_DIR': str(gh_dir),
+           'MSDL_BASE': 'http://127.0.0.1:9', **(extra_env or {})}
+    p = subprocess.run(['tools/release.sh', version, *args], cwd=rel, env=env,
+                       capture_output=True, text=True, input=stdin)
     p.main_moved = git(rel, 'rev-parse', 'main') != git(rel, 'rev-parse', 'origin/main')
+    p.gh_log = (gh_dir / 'gh.log').read_text() if (gh_dir / 'gh.log').exists() else ''
+    p.notes = (gh_dir / 'notes.md').read_text() if (gh_dir / 'notes.md').exists() else ''
     return p
 
 
@@ -177,3 +230,120 @@ def test_refuses_unticked_checklist(setup):
     p = run_release(tmp, origin, pr_json(open_pr(author, bump_version), body=body))
     assert p.returncode != 0 and 'unticked' in p.stderr
     assert not p.main_moved
+
+
+# --- release.sh --auto -------------------------------------------------------
+
+SRC = 'src/taskbar-autohide-any-edge.wh.cpp'
+
+
+def next_minor(author):
+    v = re.search(r'(?m)^// @version\s+(\d+)\.(\d+)\.\d+$', (author / SRC).read_text())
+    return f'{v[1]}.{int(v[2]) + 1}.0'
+
+
+def watcher_pr(repo, signed=True, message=None):
+    """A PR shaped like the watcher's: one entry applied, one commit."""
+    apply_entry(str(repo / SRC), str(repo / 'README.md'), FAKE, '10.0.26100.9999', '10.0.26100.9807')
+    git(repo, 'add', SRC, 'README.md')
+    msg = message or ('feat: built-in addresses for taskbar.dll 10.0.26100.9999\n\n'
+                      'Matched against 10.0.26100.9807 by tools/match-build.py.\n')
+    pre = [] if signed else ['-c', 'commit.gpgsign=false']
+    git(repo, *pre, 'commit', '-q', '-m', msg)
+
+
+def auto(tmp, origin, author, build=watcher_pr, sha=None, **kw):
+    version = next_minor(author)
+    head = open_pr(author, build)
+    pr = pr_json(head, **kw)
+    return version, head, pr, ['--pr', '7', '--auto', '--sha', sha or head]
+
+
+def test_auto_refuses_draft(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, draft=True)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 1 and 'still a draft' in p.stderr
+    assert not p.main_moved
+
+
+def test_auto_ignores_checklist(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, body='- [ ] Compiled\n- [ ] Works')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+
+
+def test_auto_refuses_moved_sha(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, sha='0' * 40)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 1 and 'moved' in p.stderr
+    assert not p.main_moved
+
+
+def test_auto_refuses_untrusted(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, build=lambda r: watcher_pr(r, signed=False))
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 1 and 'not signed by this PC' in p.stderr
+    assert not p.main_moved
+
+
+def test_auto_releases(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v, stdin='')
+    assert p.returncode == 0, p.stderr
+    assert git(origin, 'log', '--format=%G?', 'main~1..main').split() == ['G']
+    assert git(origin, 'cat-file', '-t', f'v{v}') == 'tag'
+    subprocess.run(['git', '-C', str(tmp / 'releaser'), 'tag', '-v', f'v{v}'], check=True, capture_output=True)
+    assert f'release create v{v}' in p.gh_log
+    assert f'pr close 7 --comment Released automatically in v{v} once CI passed.' in p.gh_log
+    assert ('Built-in addresses for taskbar.dll 10.0.26100.9999, matched automatically against '
+            '10.0.26100.9807. Not tested by hand.') in p.notes
+    assert not (tmp / 'releaser/docs/compatibility.json').read_text().count(v)
+
+
+def test_auto_notes_fall_back_to_readme_row(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, build=lambda r: watcher_pr(r, message='feat: add a build\n'))
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+    assert 'taskbar.dll 10.0.26100.9999, matched automatically against 10.0.26100.9807.' in p.notes
+
+
+def test_auto_refuses_when_build_unknown(setup, msdl):
+    tmp, origin, author = setup
+
+    def build(repo):   # no watcher message, and no README row to fall back on
+        apply_entry(str(repo / SRC), str(repo / 'README.md'), FAKE, '10.0.26100.9999', '10.0.26100.9807')
+        git(repo, 'checkout', '-q', '--', 'README.md')
+        git(repo, 'commit', '-q', '-am', 'feat: add a build')
+    v, head, pr, args = auto(tmp, origin, author, build=build)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 1 and 'refused' in p.stderr
+    assert not p.main_moved
+
+
+def test_auto_resumes_after_tag(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author)
+    (tmp / 'gh').mkdir()
+    (tmp / 'gh/fail-release').write_text('')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode != 0
+    assert git(origin, 'tag', '-l', f'v{v}') == f'v{v}'
+    (tmp / 'gh/fail-release').unlink()
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+    assert 'resuming' in p.stdout
+    assert git(origin, 'tag', '-l', 'v*').split().count(f'v{v}') == 1
+    assert p.gh_log.count(f'release create v{v}') == 2
+    assert 'Not tested by hand.' in p.notes
+
+
+def test_auto_needs_sha(setup, msdl):
+    tmp, origin, author = setup
+    p = run_release(tmp, origin, pr_json('x'), {'MSDL_BASE': msdl}, ['--pr', '7', '--auto'], '9.9.9')
+    assert p.returncode == 2
