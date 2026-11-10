@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.18.0
+// @version         1.19.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -1907,6 +1907,10 @@ const KnownBuild kKnownBuilds[] = {
     // with the same imports and member offsets.
     {L"10.0.26100.9807",
      {0x1AF71656, 0xD4C0, 0x4FBD, {0x46, 0x3B, 0xFF, 0x7E, 0x4E, 0xD1, 0x69, 0xCE}},
+     1, 0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40},
+    // Matched against 10.0.26100.9818 by tools/match-build.py.
+    {L"10.0.26100.9974",
+     {0x63C1425A, 0x7856, 0xE31E, {0x2D, 0x8C, 0x1B, 0xCE, 0xE4, 0x38, 0xEF, 0x9E}},
      1, 0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40},
 };
 
