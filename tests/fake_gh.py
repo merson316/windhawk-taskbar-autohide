@@ -26,12 +26,13 @@ import subprocess
 import sys
 
 REQUIRED = ('Python tests', "Compile with Windhawk's compiler")
+ACTIONS = {'id': 15368, 'slug': 'github-actions'}   # the GitHub Actions app
 
 
 def runs(conclusion):
     if conclusion == 'in_progress':
-        return [{'name': n, 'status': 'in_progress', 'conclusion': None} for n in REQUIRED]
-    return [{'name': n, 'status': 'completed', 'conclusion': conclusion} for n in REQUIRED]
+        return [{'name': n, 'status': 'in_progress', 'conclusion': None, 'app': ACTIONS} for n in REQUIRED]
+    return [{'name': n, 'status': 'completed', 'conclusion': conclusion, 'app': ACTIONS} for n in REQUIRED]
 
 
 def opt(args, name):
@@ -91,7 +92,7 @@ def main(args):
         closed.append(pr)
         if '--delete-branch' in args:
             origin('update-ref', '-d', f'refs/heads/{pr["headRefName"]}')
-    elif cmd.startswith('api ') and args[1].endswith('/check-runs'):
+    elif cmd.startswith('api ') and args[1].split('?')[0].endswith('/check-runs'):
         sha = args[1].split('/')[-2]
         ci = state.get('checks', {}).get(sha, state.get('ci', 'success'))
         print(json.dumps({'check_runs': ci if isinstance(ci, list) else runs(ci)}))

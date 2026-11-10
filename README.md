@@ -252,6 +252,11 @@ editor. CI runs the same script on every push and pull request.
 force-pushes and deletion and requires signed commits, with no exceptions.
 `main: CI` requires both CI jobs to pass, but admins can bypass it, because
 `tools/release.sh` pushes its compatibility-record commits straight to `main`.
+Release tags (`v*`) can't be moved or deleted (`tags: history`, no
+exceptions), and only admins can create them (`tags: release`): the watcher
+trusts a `v*` tag on `main` as its own unfinished release. Outside the
+rulesets, Actions are limited to GitHub's own, pinned by commit SHA, and
+secret scanning with push protection is on.
 GitHub only offers rulesets on public repos (or with Pro); to apply them:
 
     for f in .github/rulesets/*.json; do gh api -X POST repos/{owner}/{repo}/rulesets --input "$f"; done
