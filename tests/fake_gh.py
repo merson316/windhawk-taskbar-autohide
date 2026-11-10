@@ -5,8 +5,9 @@
            isCrossRepository, baseRefName, body
   checks   sha -> a conclusion ('success', 'failure', 'in_progress') or a
            list of check runs; any other sha gets `ci` ('success' by default)
-  fail     command prefixes ('api', 'pr list', ...) that exit 1, as when
-           GitHub cannot be reached
+  fail     command prefixes ('api', 'pr list', ...) that exit `fail_code`
+           (default 1), as when GitHub cannot be reached (gh exits 4 when
+           not logged in)
   next     the number the next `pr create` gets
   merge_on_push  as GitHub does: once origin's main contains a PR's head,
            the PR is MERGED, is no longer listed as open, and `pr close`
@@ -57,7 +58,7 @@ def main(args):
     cmd = ' '.join(args[:2])
     if any(cmd.startswith(p) for p in state.get('fail', [])):
         print('error connecting to api.github.com', file=sys.stderr)
-        return 1
+        return state.get('fail_code', 1)
     prs = state.setdefault('prs', [])
     closed = state.setdefault('closed', [])
     if cmd == 'pr list':

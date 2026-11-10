@@ -151,5 +151,22 @@ Test 'Refusal leaves the runtime alone' {
     Assert (-not (Test-Path "$mods\libc++.whl")) 'runtime copied on a refusal'
 }
 
+Test 'A failed runtime copy leaves the installed one in place' {
+    param($t)
+    $mods = "$($t.Data)\Engine\Mods\64"
+    [IO.File]::WriteAllText("$mods\libc++.whl", 'libc++ old')
+    Request $t '1.19.0'
+    [IO.File]::WriteAllText("$($t.Staging)\libc++.whl", 'libc++ new')
+    # Something holds the temporary name open, so the copy fails.
+    [IO.File]::WriteAllText("$mods\libc++.whl.tmp", '')
+    $lock = [IO.File]::Open("$mods\libc++.whl.tmp", 'Open', 'ReadWrite', 'None')
+    try { $r = Run $t } finally { $lock.Dispose() }
+    Assert (-not $r.ok) 'refused'
+    Assert ($r.error -match 'cannot copy libc\+\+\.whl') "error: $($r.error)"
+    Assert ((Get-Content -Raw "$mods\libc++.whl") -eq 'libc++ old') 'installed runtime kept'
+    Assert (-not (Test-Path "$mods\libc++_temp1.whl")) 'old runtime moved aside'
+    Assert ((Get-ItemProperty $key).Version -eq '1.18.0') 'Version unchanged'
+}
+
 if ($failed) { Write-Host "$failed failed"; exit 1 }
 Write-Host 'all passed'

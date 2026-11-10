@@ -52,7 +52,17 @@ class Moved(Exception):
 
 
 class Drafted(Moved):
-    """The PR became a draft after it was listed (release.sh exit 4)."""
+    """The PR became a draft after it was listed (release.sh exit 10)."""
+
+
+class Unpublished(Exception):
+    """release.sh pushed main and the tag but could not publish the release
+    (exit 11). GitHub has marked the PR merged, so no later run lists it:
+    the owner finishes it with the command in the message."""
+
+    def __init__(self, version, message):
+        super().__init__(message)
+        self.version = version
 
 
 class Stale(Exception):
@@ -161,7 +171,11 @@ def _release_in(clone, pr):
     print(r.stderr, end='')
     if r.returncode == 3:
         raise ReleaseRefused(r.stderr.strip())
-    if r.returncode == 4:
+    if r.returncode == 11:
+        line = next((x for x in reversed(r.stderr.splitlines()) if 'tagged but not published' in x),
+                    f'v{version} is tagged but not published')
+        raise Unpublished(version, line.strip())
+    if r.returncode == 10:
         raise Drafted(f'PR #{pr.number} became a draft; not releasing it')
     if r.returncode != 0:
         raise ReleaseFailed(r.stderr.strip() or f'release.sh exited {r.returncode}')
@@ -237,6 +251,12 @@ def release_pending(opened, closed=None, refused=None, failed=None, deadline=Non
             if refused is not None:
                 refused.append(pr.number)
             continue
+        except Unpublished as e:
+            print(f'{e}')
+            wb.notify_once(f'unpublished:{e.version}', f'v{e.version} tagged but not published', str(e))
+            if failed is not None:
+                failed.append(pr.number)
+            break
         except ReleaseFailed as e:
             print(f'release failed, trying next time: PR #{pr.number} ({build}): {e}')
             wb.notify_once(f'releasefail:{pr.sha}:{datetime.date.today()}',

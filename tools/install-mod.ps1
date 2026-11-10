@@ -10,7 +10,8 @@
 #                  the one in Engine\Mods\64, which the DLL imports
 #
 # It refuses obvious mistakes, then copies any staged runtime into
-# Engine\Mods\64 (the one there is renamed to <name>_tempN.whl, as Windhawk
+# Engine\Mods\64 (copied in as <name>.whl.tmp, then the one there is
+# renamed to <name>_tempN.whl, as Windhawk
 # does, since running processes have it loaded; nothing is deleted), then
 # copies the DLL and source into Windhawk's
 # data folder and sets Version, then LibraryFileName, last of all. Windhawk
@@ -61,13 +62,23 @@ function Install {
         $new = Join-Path $Staging "$lib.whl"
         if (-not (Test-Path -LiteralPath $new -PathType Leaf)) { continue }
         $target = Join-Path $mods "$lib.whl"
+        if ((Test-Path -LiteralPath $target) -and
+            (Get-FileHash -LiteralPath $new).Hash -eq (Get-FileHash -LiteralPath $target).Hash) { continue }
+        # Copied in under a temporary name first: if the copy fails, the
+        # installed runtime is still in place. Then two renames.
+        $incoming = Join-Path $mods "$lib.whl.tmp"
+        try {
+            Copy-Item -LiteralPath $new $incoming -Force
+        } catch {
+            Remove-Item -LiteralPath $incoming -Force -ErrorAction SilentlyContinue
+            throw "cannot copy $lib.whl into ${mods}: $($_.Exception.Message)"
+        }
         if (Test-Path -LiteralPath $target) {
-            if ((Get-FileHash -LiteralPath $new).Hash -eq (Get-FileHash -LiteralPath $target).Hash) { continue }
             $n = 1
             while (Test-Path -LiteralPath (Join-Path $mods "${lib}_temp$n.whl")) { $n++ }
             Move-Item -LiteralPath $target (Join-Path $mods "${lib}_temp$n.whl")
         }
-        Copy-Item -LiteralPath $new $target
+        Move-Item -LiteralPath $incoming $target
     }
     do {
         $name = "${mod}_${version}_$(Get-Random -Minimum 100000 -Maximum 1000000).dll"

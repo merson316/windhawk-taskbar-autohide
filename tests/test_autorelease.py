@@ -298,8 +298,8 @@ def test_release_failure_is_retried_not_refused(world, ar, monkeypatch):
     assert watch_build.main([]) == 6
     assert watch_build.main([]) == 6
     notes = world.notified()
-    assert 'release refused' not in notes
-    assert notes.count('Taskbar 10.0.26100.9999: release failed, will retry') == 1
+    assert 'release refused' not in notes and 'will retry' not in notes
+    assert notes.count(f'v{v} tagged but not published') == 1
     assert git(world.origin, 'cat-file', '-t', f'v{v}') == 'tag'
     world.gh(fail=[])
     assert ar.release_pending(set()) == [v]
@@ -449,3 +449,35 @@ def test_pr_made_draft_after_listing_is_skipped_quietly(world, ar, capsys):
     assert world.notified() == ''
     assert 'became a draft' in capsys.readouterr().out
     assert 'release create' not in world.log()
+
+
+def test_unpublished_release_of_a_merged_pr_says_how_to_finish(world, ar):
+    # Main and the tag are pushed, so GitHub marks the PR merged and no later
+    # run lists it: the toast must say how to finish, not "will retry".
+    world.gh(merge_on_push=True, fail=['release create'])
+    sha = world.pr(5)
+    v = world.next_version()
+    failed = []
+    assert ar.release_pending(set(), failed=failed) == []
+    assert failed == [5]
+    notes = world.notified()
+    assert f'v{v} tagged but not published' in notes
+    assert f'finish with: tools/release.sh {v} --pr 5 --auto --sha {sha}' in notes
+    assert 'will retry' not in notes
+    assert ar.release_pending(set()) == []
+    assert world.notified() == notes, 'toasted again'
+    assert world.log().count('release create') == 1
+
+
+def test_gh_exit_4_is_a_failure_not_a_draft(world, ar, capsys):
+    # gh exits 4 when it is not logged in: release.sh passes that through
+    # set -e, and it must not read as "the PR became a draft".
+    world.pr(5)
+    world.pr(6, build='10.0.26100.9998', created='2026-02-01T00:00:00Z')
+    world.gh(fail=['pr view'], fail_code=4)
+    failed = []
+    assert ar.release_pending(set(), failed=failed) == []
+    assert failed == [5]
+    assert 'Taskbar 10.0.26100.9999: release failed, will retry' in world.notified()
+    assert 'became a draft' not in capsys.readouterr().out
+    assert 'pr view 6' not in world.log(), 'went on to the next PR'

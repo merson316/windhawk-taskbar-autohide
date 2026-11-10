@@ -21,9 +21,13 @@
 # that the build was matched automatically and not tested by hand.
 #
 # Exit codes: 0 released (or already released), 1 refused or failed, 2
-# usage. Under --auto a refusal exits 3 instead, a PR that is a draft exits 4
-# (the owner's stop signal, not a problem), and any other non-zero exit is a
-# failure that a later run may get past (network, signing key not loaded yet).
+# usage. Under --auto a refusal exits 3 instead, a PR that is a draft exits
+# 10 (the owner's stop signal, not a problem), a release that is tagged and
+# pushed but could not be published exits 11 (GitHub has marked the PR merged
+# by then, so no later run sees it: finish it with the command printed), and
+# any other non-zero exit is a failure that a later run may get past
+# (network, signing key not loaded yet). 10 and 11 are clear of the codes gh
+# (1, 2, 4, 8) and git return, which pass through set -e unchanged.
 #
 # Everything that can fail runs before the first push. If the release itself
 # fails after the tag is pushed, re-run the same command to finish it; once
@@ -56,7 +60,7 @@ SRC=src/taskbar-autohide-any-edge.wh.cpp
 # release as it is" apart from a failure (1, or whatever a failing command
 # returns under set -e) that a later run may get past, such as a network
 # error or the signing key not being loaded yet.
-R=1 D=1; [ -z "$AUTO" ] || R=3 D=4
+R=1 D=1 U=1; [ -z "$AUTO" ] || R=3 D=10 U=11
 if [ -n "$AUTO" ]; then CLOSE="Released automatically in v$V once CI passed."
 else CLOSE="Rebased onto main with signed commits and released in v$V."; fi
 jget() { python3 -c "import json,sys; v=json.load(sys.stdin).get('$1'); print('' if v is None else v)"; }
@@ -217,5 +221,8 @@ if [ -z "$RESUME" ]; then
   git tag -s "v$V" -m "v$V"
   git push -q origin "v$V"
 fi
-gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp"
+if [ -n "$AUTO" ]; then FINISH="tools/release.sh $V --pr $PR --auto --sha $PINNED"
+else FINISH="tools/release.sh $V${PR:+ --pr $PR}"; fi
+gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp" ||
+  { echo "v$V is tagged but not published; finish with: $FINISH" >&2; exit "$U"; }
 finish new || true

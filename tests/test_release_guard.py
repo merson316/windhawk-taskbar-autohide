@@ -275,7 +275,7 @@ def test_auto_skips_draft(setup, msdl):
     tmp, origin, author = setup
     v, head, pr, args = auto(tmp, origin, author, draft=True)
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 4 and 'still a draft' in p.stderr
+    assert p.returncode == 10 and 'still a draft' in p.stderr
     assert not p.main_moved
 
 
@@ -353,7 +353,9 @@ def test_auto_resumes_after_tag(setup, msdl):
     (tmp / 'gh').mkdir()
     (tmp / 'gh/fail-release').write_text('')
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode not in (0, 3), 'a failed gh call is not a refusal'
+    assert p.returncode == 11, 'a failed publish is not a refusal'
+    assert (f'v{v} is tagged but not published; finish with: '
+            f'tools/release.sh {v} --pr 7 --auto --sha {head}') in p.stderr
     assert git(origin, 'tag', '-l', f'v{v}') == f'v{v}'
     (tmp / 'gh/fail-release').unlink()
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
