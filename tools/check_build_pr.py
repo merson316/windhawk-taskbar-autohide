@@ -12,7 +12,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from matcher.apply import _ENTRY, apply_entry, known_builds  # noqa: E402
+from matcher import HOOKED
+from matcher.apply import apply_entry, known_builds  # noqa: E402
 
 SRC = 'src/taskbar-autohide-any-edge.wh.cpp'
 README = 'README.md'
@@ -80,7 +81,7 @@ def _builds(repo, rev):
 def _readme_changes(repo, base, head):
     """(added lines, removed lines) of README.md, without the diff headers."""
     added, removed, in_hunk = [], [], False
-    for l in _git(repo, 'diff', *_NOCOLOR, '--unified=0', base, head, '--', README).splitlines():
+    for l in _git(repo, 'diff', *_NOCOLOR, '--no-textconv', '--unified=0', base, head, '--', README).splitlines():
         if l.startswith('@@'):
             in_hunk = True
         elif in_hunk and l.startswith('+'):
@@ -90,22 +91,25 @@ def _readme_changes(repo, base, head):
     return added, removed
 
 
-def _entry_text(src, version):
-    """The new entry's own lines, as they stand in the file."""
-    m = next(m for m in _ENTRY.finditer(src) if m['version'] == version)
-    start = src.rindex('\n', 0, m.start()) + 1
-    return src[start:src.index('\n', m.end()) + 1]
+def _canonical_entry(b):
+    """The entry as matcher.match.format_entry writes it, rebuilt from parsed
+    fields only, so nothing else on the entry's lines is ever trusted."""
+    k = b['pdb_key']
+    d4 = ', '.join(f'0x{int(k[i:i + 2], 16):02X}' for i in range(16, 32, 2))
+    values = ', '.join(f'0x{b[f]:X}' for f in HOOKED)
+    return (f'    {{L"{b["version"]}",\n'
+            f'     {{0x{int(k[:8], 16):08X}, 0x{int(k[8:12], 16):04X}, 0x{int(k[12:16], 16):04X}, {{{d4}}}}},\n'
+            f'     {int(k[32:], 16)}, {values}}},\n')
 
 
-def _beyond_entry(repo, base, head, version, ref):
+def _beyond_entry(repo, base, head, entry_dict, ref):
     """True if head differs from base + exactly this entry as apply_entry writes it."""
     with tempfile.TemporaryDirectory() as tmp:
         src, readme = os.path.join(tmp, 'mod.wh.cpp'), os.path.join(tmp, 'README.md')
         for path, name in ((src, SRC), (readme, README)):
             with open(path, 'w') as f:
                 f.write(_show(repo, base, name))
-        entry = _entry_text(_show(repo, head, SRC), version)
-        apply_entry(src, readme, entry, version, ref)
+        apply_entry(src, readme, _canonical_entry(entry_dict), entry_dict['version'], ref)
         return (open(src).read() != _show(repo, head, SRC)
                 or open(readme).read() != _show(repo, head, README))
 
@@ -160,7 +164,7 @@ def problems(repo, base, head, signing_key):
         try:
             if not row or row[1] != added[0]['version']:
                 raise ValueError('no reference version')
-            if _beyond_entry(repo, base, head, added[0]['version'], row[2]):
+            if _beyond_entry(repo, base, head, added[0], row[2]):
                 out.append(BEYOND)
         except (ValueError, StopIteration, subprocess.CalledProcessError):
             out.append(BEYOND)

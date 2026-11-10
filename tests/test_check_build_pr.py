@@ -193,3 +193,20 @@ def test_duplicate_version_refused(clone):
     dup = FAKE.replace('9999', '9807').replace('0x11111111', '0x33333333')
     r = make_pr(clone, add(dup))
     assert 'adds a duplicate of build 10.0.26100.9807' in problems(*r, key())
+
+
+BEYOND = 'src/ or README.md has changes beyond the new build entry'
+
+
+def test_trailing_code_on_entry_line_refused(clone):
+    evil = FAKE.rstrip('\n') + ' static int evil = system("calc");\n'
+    r = make_pr(clone, add(evil))
+    assert BEYOND in problems(*r, key())
+
+
+def test_expression_in_guid_refused(clone):
+    # apply_entry itself refuses such an entry, so plant it in the file after.
+    r = make_pr(clone, both(add(FAKE), edit(SRC, '{0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}',
+                                            '{(system("calc"),0x11), 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11}')))
+    found = problems(*r, key())
+    assert 'adds 0 builds, expected 1' in found
