@@ -6,7 +6,10 @@
 # Also registers WindhawkTaskbarModInstall, which the watcher starts after a
 # release to install it in Windhawk (tools/install-mod.ps1, run elevated from
 # the staging folder tools/windhawk_install.py fills). Registering an elevated
-# task needs an elevated prompt:
+# task needs an elevated prompt. Security: that task runs a script the owner's
+# account can edit, so it protects against mistakes, not against malware that
+# already runs as the owner (the owner's decision). To stop a release, convert
+# its PR to a draft or close it:
 #
 #   .\tools\install-watch-task.ps1
 #   .\tools\install-watch-task.ps1 -Uninstall

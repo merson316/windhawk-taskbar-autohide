@@ -171,10 +171,9 @@ Toast on success: "v1.19.0 released and installed for taskbar 26100.9974".
   release path. The install step should be testable against a fake
   `ProgramData` tree and a fake registry layer.
 
-## Open question to verify first (spike)
+## Spike result (verified)
 
 **Does Windhawk pick up a changed `LibraryFileName`/`Version` without its UI?**
-Windhawk's engine is believed to watch the mods registry key and reload a mod
-when it changes, which is how the UI's Compile button takes effect. Prove
-this on the owner's PC before building step 2. If it does not reload, the
-fallback is `windhawk.exe -restart -tray-only` after the install.
+Yes. Verified on the owner's PC on 2026-11-10: Windhawk's engine reloads the
+mod when its registry `LibraryFileName` changes. No restart is needed, so the
+`windhawk.exe -restart -tray-only` fallback is not used.
