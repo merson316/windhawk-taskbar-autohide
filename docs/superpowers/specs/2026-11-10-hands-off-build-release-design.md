@@ -66,9 +66,13 @@ and shows up quickly.
   PR still pending from an earlier one, including the existing PR for
   26100.9974.
 - **Stop signal:** the watcher now opens its PRs as ready, not as drafts. A
-  draft PR is never auto-released, so converting a PR to draft, or closing
-  it, stops the release. The existing draft PR for 26100.9974 releases
-  itself once the owner marks it ready. *(My call.)*
+  draft PR is never auto-released, so converting a PR to draft stops the
+  release. Closing it stops it only if the branch is kept: a build counts as
+  pending only while `origin/build/<version>` exists, so with the branch
+  deleted the next run opens a new ready PR. The existing draft PR for
+  26100.9974 is recut: close it with its branch deleted and let the watcher
+  reopen it from the new main, because its branch carries a `tests/` commit
+  the trust check refuses. *(My call.)*
 - **CI:** release only when both required checks ("Python tests" and
   "Compile with Windhawk's compiler") have *succeeded* on the PR's exact head
   commit. Admins bypass the ruleset, so nothing on GitHub enforces this, and
@@ -148,8 +152,8 @@ Toast on success: "v1.19.0 released and installed for taskbar 26100.9974".
 ### 3. What else changes
 
 - The PR template for watcher PRs says the PR will release itself once CI
-  passes, and that the owner can close it or convert it to draft to stop
-  that.
+  passes, and that the owner can convert it to draft to stop
+  that (closing works only if the branch is kept).
 - `docs/compatibility.json` does not record an OS build for auto releases,
   because it means "tested on". *(My call: recording the owner's winver
   there would claim a test that did not happen.)*

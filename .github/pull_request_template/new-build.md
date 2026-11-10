@@ -8,7 +8,7 @@ This PR adds the build to `kKnownBuilds` and bumps the mod to **{mod_version}**.
 
 This PR releases itself as **v{mod_version}** once both CI checks pass, and installs itself in your Windhawk.
 
-To stop that, convert this PR to a draft or close it.
+To stop that, convert this PR to a draft. Closing it also works, but do not delete its branch, or the next run opens a new PR.
 
 Optional checks by hand:
 

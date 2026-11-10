@@ -267,17 +267,20 @@ retrying either.
 New taskbar builds need no hands. When a build has no published symbols, the
 watcher matches it and opens a ready PR. Once both CI checks pass on that exact
 commit, it releases the PR (signed rebase, signed tag, GitHub release marked
-"Not tested by hand."), closes the other build PRs, and installs the release in
+"Not tested by hand."), closes the other ready build PRs (drafts are left alone), and installs the release in
 the owner's Windhawk. A toast says `v... released and installed for taskbar ...`.
 Windhawk reloads the mod when its registry `LibraryFileName` changes, so no
-restart is needed. To stop a release, convert the PR to a draft or close it.
+restart is needed. To stop a release, convert the PR to a draft. Closing it also stops it, but
+only if you keep its branch: with the branch deleted, the next run matches the
+build again and opens a new ready PR.
 The watcher only releases a same-repo `build/*` PR signed with this PC's key
 that adds one `kKnownBuilds` entry, bumps the version and adds one README row
 (`tools/check_build_pr.py`).
 
 The install runs as an elevated scheduled task, `WindhawkTaskbarModInstall`,
-which runs `tools/install-mod.ps1`. That script is in a folder the owner's
-account can edit, so the task guards against mistakes, not against malware that
+which runs `tools/install-mod.ps1` from the staging folder
+(`%LOCALAPPDATA%\taskbar-autohide\install`), where the watcher copies it each
+time. That folder is one the owner's account can edit, so the task guards against mistakes, not against malware that
 already runs as the owner. Register both tasks once from an elevated
 PowerShell with `tools/install-watch-task.ps1` (`-Uninstall` removes both).
 

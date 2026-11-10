@@ -9,7 +9,7 @@
 # task needs an elevated prompt. Security: that task runs a script the owner's
 # account can edit, so it protects against mistakes, not against malware that
 # already runs as the owner (the owner's decision). To stop a release, convert
-# its PR to a draft or close it:
+# its PR to a draft (closing it works only if its branch is kept):
 #
 #   .\tools\install-watch-task.ps1
 #   .\tools\install-watch-task.ps1 -Uninstall
