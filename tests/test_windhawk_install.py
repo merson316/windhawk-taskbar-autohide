@@ -110,38 +110,68 @@ def windhawk_compiler():
 
 
 @pytest.mark.skipif(not windhawk_compiler(), reason="Windhawk's compiler is not installed")
-def test_stage_compiles_tag(tmp_path, monkeypatch):
-    # The tag's source is staged, not the checkout's: the checkout has moved on.
-    origin, checkout = tmp_path / 'origin.git', tmp_path / 'repo'
-    subprocess.run(['git', 'init', '-q', '--bare', str(origin)], check=True)
-    subprocess.run(['git', 'clone', '-q', str(origin), str(checkout)], check=True, capture_output=True)
-    (checkout / 'src').mkdir()
+def test_stage_compiles_source(tmp_path):
     with open(os.path.join(REPO, SRC)) as f:
         released = f.read()
-    (checkout / SRC).write_text(released)
-    git(checkout, 'add', SRC)
-    git(checkout, 'commit', '-q', '-m', 'release')
-    git(checkout, 'tag', '-m', 'v1.19.0', 'v1.19.0')
-    git(checkout, 'push', '-q', 'origin', 'HEAD:main', 'v1.19.0')
-    git(checkout, 'tag', '-d', 'v1.19.0')
-    (checkout / SRC).write_text('not the release\n')
-    monkeypatch.setattr(wi.wb, 'REPO', str(checkout))
     staging = tmp_path / 'staging'
     staging.mkdir()
     (staging / 'result.json').write_text('{"ok": true}')
-    wi.stage('1.19.0', str(staging))
+    wi.stage('1.19.0', str(staging), released)
     assert (staging / 'mod.wh.cpp').read_text() == released
     assert (staging / 'mod.dll').read_bytes()[:2] == b'MZ'
     assert json.loads((staging / 'request.json').read_text()) == {'version': '1.19.0'}
     assert (staging / 'install-mod.ps1').read_bytes() == open(os.path.join(REPO, 'tools/install-mod.ps1'), 'rb').read()
     assert not (staging / 'result.json').exists(), 'old result left behind'
-    assert git(checkout, 'tag', '-l') == '', 'tag written into the checkout'
+
+
+def fake_compiler(tmp, monkeypatch):
+    """compile-mod.sh stand-in: writes a DLL-looking file."""
+    cc = tmp / 'compile'
+    cc.write_text('#!/bin/sh\nprintf MZfake > "$2"\n')
+    cc.chmod(0o755)
+    monkeypatch.setattr(wi, 'COMPILE', str(cc))
+
+
+def runtime(root, data, libcxx=b'libc++ new', unwind=b'libunwind new'):
+    """Windhawk's compiler runtime, and the copies installed in Mods\\64."""
+    bin_ = root / 'Windhawk/Compiler/x86_64-w64-mingw32/bin'
+    bin_.mkdir(parents=True)
+    (bin_ / 'libc++.dll').write_bytes(libcxx)
+    (bin_ / 'libunwind.dll').write_bytes(unwind)
+    mods = os.path.join(data, 'Engine/Mods/64')
+    with open(os.path.join(mods, 'libc++.whl'), 'wb') as f:
+        f.write(b'libc++ new')
+    with open(os.path.join(mods, 'libunwind.whl'), 'wb') as f:
+        f.write(b'libunwind new')
+
+
+def test_stage_copies_only_a_runtime_that_differs(tmp_path, monkeypatch):
+    wh, data = make_windhawk(tmp_path)
+    runtime(tmp_path, data, libcxx=b'libc++ newer')
+    monkeypatch.setenv('WINDHAWK_DIR', wh)
+    monkeypatch.setenv('WINDHAWK_DATA', data)
+    fake_compiler(tmp_path, monkeypatch)
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    (staging / 'libunwind.whl').write_bytes(b'left from last time')
+    wi.stage('1.19.0', str(staging), '// @version 1.19.0\n')
+    assert (staging / 'libc++.whl').read_bytes() == b'libc++ newer'
+    assert not (staging / 'libunwind.whl').exists(), 'same runtime staged, or an old one left behind'
+    assert (staging / 'mod.dll').read_bytes() == b'MZfake'
+
+
+def test_install_task_runs_hidden():
+    # Started after every release: a console must not flash up.
+    with open(os.path.join(REPO, 'tools/install-watch-task.ps1')) as f:
+        text = f.read()
+    action = text[text.index('$installAction ='):text.index('$principal')]
+    assert '-Execute "conhost.exe"' in action and '--headless powershell.exe' in action
 
 
 class Install:
     """install() against a fake Windhawk, registry, compiler and task."""
 
-    def __init__(self, tmp, monkeypatch, task):
+    def __init__(self, tmp, monkeypatch, task, real_stage=False):
         self.tmp = tmp
         self.staging = tmp / 'staging'
         self.task_log = tmp / 'schtasks.log'
@@ -156,9 +186,12 @@ class Install:
                      'REG_CMD': str(reg), 'SCHTASKS_CMD': str(schtasks), 'INSTALL_EVERY': '0.05'}.items():
             monkeypatch.setenv(k, v)
         self.staged = []
-        monkeypatch.setattr(wi, 'stage', self.stage)
+        if real_stage:
+            fake_compiler(tmp, monkeypatch)
+        else:
+            monkeypatch.setattr(wi, 'stage', self.stage)
 
-    def stage(self, version, staging):
+    def stage(self, version, staging, source):
         os.makedirs(staging, exist_ok=True)
         self.staged.append((version, staging))
 
@@ -167,34 +200,34 @@ def test_install_reports_task_error(tmp_path, monkeypatch):
     t = Install(tmp_path, monkeypatch, 'printf \'{"ok": false, "error": "1.18.0 is not newer"}\' '
                                        '> "$INSTALL_STAGING/result.json"')
     with pytest.raises(wi.InstallError, match='1.18.0 is not newer'):
-        wi.install('1.18.0')
+        wi.install('1.18.0', '// @version 1.18.0\n')
     assert t.staged == [('1.18.0', str(t.staging))]
     assert t.task_log.read_text() == '/run /tn WindhawkTaskbarModInstall\n'
 
 
 def test_install_ok(tmp_path, monkeypatch):
     Install(tmp_path, monkeypatch, 'printf \'{"ok": true, "dll": "x.dll"}\' > "$INSTALL_STAGING/result.json"')
-    wi.install('1.19.0')
+    wi.install('1.19.0', '// @version 1.19.0\n')
 
 
 def test_install_times_out(tmp_path, monkeypatch):
     Install(tmp_path, monkeypatch, 'true')
     monkeypatch.setenv('INSTALL_WAIT', '1')
     with pytest.raises(wi.InstallError, match='timed out'):
-        wi.install('1.19.0')
+        wi.install('1.19.0', '// @version 1.19.0\n')
 
 
 def test_install_task_missing(tmp_path, monkeypatch):
     Install(tmp_path, monkeypatch, 'echo "ERROR: The system cannot find the file specified." >&2; exit 1')
     with pytest.raises(wi.InstallError, match='install-watch-task.ps1'):
-        wi.install('1.19.0')
+        wi.install('1.19.0', '// @version 1.19.0\n')
 
 
 def test_install_refuses_odd_layout_before_compiling(tmp_path, monkeypatch):
     t = Install(tmp_path, monkeypatch, 'exit 1')
     monkeypatch.setenv('WINDHAWK_DATA', str(tmp_path / 'elsewhere'))
     with pytest.raises(wi.InstallError, match='ModsSource'):
-        wi.install('1.19.0')
+        wi.install('1.19.0', '// @version 1.19.0\n')
     assert t.staged == []
     assert not t.task_log.exists()
 
@@ -220,3 +253,18 @@ def test_install_failure_still_released(world, ar, tmp_path, monkeypatch):
     notes = world.notified()
     assert f'v{v} released; install it in Windhawk by hand mod.dll is empty' in notes
     assert 'released and installed' not in notes
+
+
+def test_installed_source_comes_from_the_release_not_the_checkout(world, ar, tmp_path, monkeypatch):
+    # The release clone hands over the tagged source; nothing is fetched
+    # into, or read from, the owner's checkout.
+    t = Install(tmp_path, monkeypatch, 'printf \'{"ok": true, "dll": "x.dll"}\' > "$INSTALL_STAGING/result.json"',
+                real_stage=True)
+    world.pr(5)
+    v = world.next_version()
+    assert ar.release_pending(set()) == [v]
+    assert (t.staging / 'mod.wh.cpp').read_text() == git(world.origin, 'show', f'v{v}:{SRC}') + '\n'
+    assert (t.staging / 'mod.dll').read_bytes() == b'MZfake'
+    assert not (world.checkout / '.git/FETCH_HEAD').exists(), 'fetched into the checkout'
+    assert git(world.checkout, 'tag', '-l', f'v{v}') == ''
+    assert f'v{v} released and installed' in world.notified()

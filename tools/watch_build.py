@@ -8,8 +8,9 @@ pass on it, and warn once if they will not. If not -- and it is not in
 kKnownBuilds and has no PR yet -- match it and open a ready PR.
 
 Then release the build PRs whose CI has passed (see autorelease.py), oldest
-first. A release makes the other build PRs stale: they are closed, and the
-builds are checked once more so a PR is reopened from the new main.
+first. A release makes the other build PRs stale, as does main moving for
+any other reason: they are closed, and the builds are checked once more so a
+PR is reopened from the new main.
 
 All git work happens in a temporary worktree of origin/main: the owner's
 checkout, and any uncommitted edits in it, are never touched. Each warning is
@@ -225,7 +226,8 @@ def main(argv):
     import autorelease
     closed, refused, failed = [], [], []
     deadline = autorelease.release_deadline()   # one budget for both rounds
-    if autorelease.release_pending(opened, closed, refused, failed, deadline) and closed:
+    autorelease.release_pending(opened, closed, refused, failed, deadline)
+    if closed:
         # The closed PRs were stale; match their builds again from the new main.
         more, opened = check_builds(builds, dry_run)
         codes += more

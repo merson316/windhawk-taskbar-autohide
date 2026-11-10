@@ -45,15 +45,25 @@ def open_pr(author, build):
     return sha
 
 
+# pr.json's "state" MERGED makes `pr close` refuse, as GitHub does once main
+# holds the PR's head.
 FAKE_GH = """#!/bin/sh
 echo "$@" >> "$GH_DIR/gh.log"
 case "$1 $2" in
   "pr view") cat "$GH_DIR/pr.json" ;;
+  "pr close")
+    grep -q '"state": "MERGED"' "$GH_DIR/pr.json" &&
+      { echo "can't be closed because it was already merged" >&2; exit 1; }
+    exit 0 ;;
   "release create")
+    tag=$3
     while [ $# -gt 0 ]; do [ "$1" = --notes-file ] && cp "$2" "$GH_DIR/notes.md"; shift; done
     [ -e "$GH_DIR/fail-release" ] && { echo "boom" >&2; exit 1; }
-    exit 0 ;;
-  "release view") exit 1 ;;
+    touch "$GH_DIR/released-$tag"
+    echo "https://github.com/example/repo/releases/tag/$tag" ;;
+  "release view")
+    [ -e "$GH_DIR/released-$3" ] || exit 1
+    echo "{\\"url\\": \\"https://github.com/example/repo/releases/tag/$3\\"}" ;;
   *) exit 0 ;;
 esac
 """
@@ -105,9 +115,10 @@ def run_release(tmp_path, origin, pr, extra_env=None, args=('--pr', '7'), versio
 
 
 def pr_json(sha, cross=False, draft=False,
-            body='- [x] Compiled\n- [x] Works\nTested on OS build (winver): `26300.9999`', branch='build/test'):
+            body='- [x] Compiled\n- [x] Works\nTested on OS build (winver): `26300.9999`', branch='build/test',
+            state='OPEN'):
     return {'isCrossRepository': cross, 'isDraft': draft, 'headRefOid': sha, 'headRefName': branch,
-            'baseRefName': 'main', 'body': body}
+            'baseRefName': 'main', 'body': body, 'state': state}
 
 
 def commit_file(path, text):
@@ -259,11 +270,12 @@ def auto(tmp, origin, author, build=watcher_pr, sha=None, **kw):
     return version, head, pr, ['--pr', '7', '--auto', '--sha', sha or head]
 
 
-def test_auto_refuses_draft(setup, msdl):
+def test_auto_skips_draft(setup, msdl):
+    # A draft is the owner's stop signal, not a refusal: its own exit code.
     tmp, origin, author = setup
     v, head, pr, args = auto(tmp, origin, author, draft=True)
     p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
-    assert p.returncode == 3 and 'still a draft' in p.stderr
+    assert p.returncode == 4 and 'still a draft' in p.stderr
     assert not p.main_moved
 
 
@@ -307,7 +319,8 @@ def test_auto_releases(setup, msdl):
     assert git(origin, 'cat-file', '-t', f'v{v}') == 'tag'
     subprocess.run(['git', '-C', str(tmp / 'releaser'), 'tag', '-v', f'v{v}'], check=True, capture_output=True)
     assert f'release create v{v}' in p.gh_log
-    assert f'pr close 7 --comment Released automatically in v{v} once CI passed.' in p.gh_log
+    assert f'pr comment 7 --body Released automatically in v{v} once CI passed.' in p.gh_log
+    assert 'pr close 7\n' in p.gh_log
     assert ('Built-in addresses for taskbar.dll 10.0.26100.9999, matched automatically against '
             '10.0.26100.9807. Not tested by hand.') in p.notes
     assert not (tmp / 'releaser/docs/compatibility.json').read_text().count(v)
@@ -364,3 +377,69 @@ def test_auto_needs_sha(setup, msdl):
     tmp, origin, author = setup
     p = run_release(tmp, origin, pr_json('x'), {'MSDL_BASE': msdl}, ['--pr', '7', '--auto'], '9.9.9')
     assert p.returncode == 2
+
+
+def test_auto_finishes_when_github_marked_the_pr_merged(setup, msdl):
+    # Pushing main makes GitHub mark the PR merged (its head is on main), so
+    # `pr close` fails. The release is out by then: that is not a failure.
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author, state='MERGED')
+    git(author, 'push', '-q', 'origin', 'HEAD:refs/heads/build/test')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+    assert f'release create v{v}' in p.gh_log
+    assert f'pr comment 7 --body Released automatically in v{v}' in p.gh_log
+    assert 'pr close' not in p.gh_log
+    assert 'build/test' not in git(origin, 'branch', '--list'), 'branch not deleted'
+
+
+def test_auto_branch_delete_failure_is_a_warning(setup, msdl):
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author)
+    git(author, 'push', '-q', 'origin', 'HEAD:refs/heads/build/test')
+    hook = origin / 'hooks/pre-receive'
+    hook.write_text('#!/bin/sh\nwhile read old new ref; do [ "$ref" = refs/heads/build/test ] && exit 1; done\nexit 0\n')
+    hook.chmod(0o755)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+    assert 'warning: could not delete branch build/test' in p.stderr
+
+
+def test_auto_rerun_after_release_is_already_released(setup, msdl):
+    # The release exists: a re-run says so, prints its URL and exits 0, so
+    # the watcher still installs it and closes the stale PRs.
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author)
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+    p = run_release(tmp, origin, {**pr, 'state': 'MERGED'}, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode == 0, p.stderr
+    assert f'v{v} is already released' in p.stdout
+    assert f'https://github.com/example/repo/releases/tag/v{v}' in p.stdout.splitlines()
+    assert p.gh_log.count('release create') == 1
+    assert p.gh_log.count('pr comment') == 1, 'commented twice'
+
+
+def test_auto_does_not_resume_another_prs_release(setup, msdl):
+    # PR A pushed main and v1.x.0, then failed. PR B bumps to the same
+    # version from the old main: it must not publish A's tag with B's notes.
+    tmp, origin, author = setup
+    v, head, pr, args = auto(tmp, origin, author)
+    (tmp / 'gh').mkdir()
+    (tmp / 'gh/fail-release').write_text('')
+    p = run_release(tmp, origin, pr, {'MSDL_BASE': msdl}, args, v)
+    assert p.returncode not in (0, 3)
+    assert git(origin, 'tag', '-l', f'v{v}') == f'v{v}'
+    (tmp / 'gh/fail-release').unlink()
+    git(author, 'switch', '-q', '-c', 'build/other', 'origin/main')
+    other_entry = FAKE.replace('9999', '9998').replace('0x11111111', '0x22222222')
+    apply_entry(str(author / SRC), str(author / 'README.md'), other_entry, '10.0.26100.9998', '10.0.26100.9807')
+    git(author, 'commit', '-q', '-am', 'feat: built-in addresses for taskbar.dll 10.0.26100.9998\n\n'
+        'Matched against 10.0.26100.9807 by tools/match-build.py.\n')
+    other = git(author, 'rev-parse', 'HEAD')
+    git(author, 'push', '-q', '-f', 'origin', 'HEAD:refs/pull/7/head')
+    p = run_release(tmp, origin, pr_json(other, branch='build/other'),
+                    {'MSDL_BASE': msdl}, ['--pr', '7', '--auto', '--sha', other], v)
+    assert p.returncode == 1, p.stdout + p.stderr
+    assert "another PR's release" in p.stderr
+    assert p.gh_log.count('release create') == 1, 'published'

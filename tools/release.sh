@@ -20,12 +20,17 @@
 # requirement, writes no docs/compatibility.json entry, and says in the notes
 # that the build was matched automatically and not tested by hand.
 #
-# Exit codes: 0 released, 1 refused or failed, 2 usage. Under --auto a
-# refusal exits 3 instead, and any other non-zero exit is a failure that a
-# later run may get past (network, signing key not loaded yet).
+# Exit codes: 0 released (or already released), 1 refused or failed, 2
+# usage. Under --auto a refusal exits 3 instead, a PR that is a draft exits 4
+# (the owner's stop signal, not a problem), and any other non-zero exit is a
+# failure that a later run may get past (network, signing key not loaded yet).
 #
 # Everything that can fail runs before the first push. If the release itself
-# fails after the tag is pushed, re-run the same command to finish it.
+# fails after the tag is pushed, re-run the same command to finish it; once
+# the release exists, a re-run prints its URL and exits 0. Commenting on and
+# closing the PR and deleting its branch come after the release and are best
+# effort: a failure there is a warning, not a failed release. (Pushing main
+# usually makes GitHub mark the PR merged already: its head is now on main.)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -51,7 +56,30 @@ SRC=src/taskbar-autohide-any-edge.wh.cpp
 # release as it is" apart from a failure (1, or whatever a failing command
 # returns under set -e) that a later run may get past, such as a network
 # error or the signing key not being loaded yet.
-R=1; [ -z "$AUTO" ] || R=3
+R=1 D=1; [ -z "$AUTO" ] || R=3 D=4
+if [ -n "$AUTO" ]; then CLOSE="Released automatically in v$V once CI passed."
+else CLOSE="Rebased onto main with signed commits and released in v$V."; fi
+jget() { python3 -c "import json,sys; v=json.load(sys.stdin).get('$1'); print('' if v is None else v)"; }
+warn() { echo "warning: $*" >&2; }
+finish() {   # $1 = new: the release was just made. Best effort: it exists either way.
+  [ -n "$PR" ] || return 0
+  local view state branch cross
+  view=$(gh pr view "$PR" --json state,headRefName,isCrossRepository) ||
+    { warn "cannot read PR #$PR; close it and delete its branch by hand"; return 0; }
+  state=$(jget state <<<"$view"); branch=$(jget headRefName <<<"$view"); cross=$(jget isCrossRepository <<<"$view")
+  if [ "${1:-}" = new ] || [ "$state" = OPEN ]; then
+    gh pr comment "$PR" --body "$CLOSE" >/dev/null || warn "could not comment on PR #$PR"
+  fi
+  if [ "$state" = OPEN ]; then
+    gh pr close "$PR" >/dev/null || warn "could not close PR #$PR"
+  fi
+  # Only this repo's own branch, never main, and under --auto only a build/ one.
+  [ "$cross" = False ] && [ -n "$branch" ] && [ "$branch" != main ] || return 0
+  [ -z "$AUTO" ] || [[ $branch == build/* ]] || return 0
+  if git ls-remote -q --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+    git push -q origin --delete "refs/heads/$branch" || warn "could not delete branch $branch"
+  fi
+}
 
 [ -z "$(git status --porcelain)" ] || { echo "working tree is dirty" >&2; exit "$R"; }
 can_sign() {   # sign a scratch file exactly as git would, through gpg.ssh.program
@@ -75,7 +103,21 @@ if git rev-parse -q --verify "refs/tags/v$V" >/dev/null; then
   # Only an earlier run of this script, stopped after pushing its tag.
   [ "$(git rev-parse "v$V^{commit}")" = "$BASE" ] && git tag -v "v$V" >/dev/null 2>&1 ||
     { echo "tag v$V already exists and is not this release's tag on main" >&2; exit "$R"; }
-  ! gh release view "v$V" >/dev/null 2>&1 || { echo "release v$V already exists" >&2; exit "$R"; }
+  if [ -n "$AUTO" ]; then
+    # Every build PR bumps to the same version, so v$V on main may be another
+    # PR's release: resume only if it holds this PR's change.
+    git fetch -q --no-tags origin "refs/pull/$PR/head"
+    [ "$(git rev-parse FETCH_HEAD)" = "$PINNED" ] || { echo "PR #$PR moved: head is not ${PINNED:0:12}" >&2; exit "$R"; }
+    git merge-base --is-ancestor "$PINNED" "$BASE" ||
+      [ "$(git rev-parse "$PINNED:$SRC")" = "$(git rev-parse "v$V:$SRC")" ] ||
+      { echo "v$V on main is another PR's release, not PR #$PR's; not resuming" >&2; exit 1; }
+  fi
+  if VIEW=$(gh release view "v$V" --json url 2>/dev/null); then
+    echo "v$V is already released"
+    jget url <<<"$VIEW"
+    finish || true
+    exit 0
+  fi
   RESUME=1
   echo "resuming v$V: the tag is pushed, publishing the release"
 fi
@@ -91,7 +133,7 @@ if [ -n "$PR" ] && [ -z "$RESUME" ]; then
     echo "PR #$PR is not from a build/ branch; refusing" >&2; exit "$R"
   fi
   [ "$(field "d['baseRefName']")" = main ] || { echo "PR #$PR does not target main; refusing" >&2; exit "$R"; }
-  [ "$(field "d['isDraft']")" = False ] || { echo "PR #$PR is still a draft; mark it ready once tested" >&2; exit "$R"; }
+  [ "$(field "d['isDraft']")" = False ] || { echo "PR #$PR is still a draft; mark it ready once tested" >&2; exit "$D"; }
   if [ -z "$AUTO" ] && field "d['body']" | grep -E '^[[:space:]]*- \[ \]' >/dev/null; then
     echo "PR #$PR has unticked checklist items; finish testing first" >&2; exit "$R"
   fi
@@ -176,8 +218,4 @@ if [ -z "$RESUME" ]; then
   git push -q origin "v$V"
 fi
 gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp"
-if [ -n "$PR" ]; then
-  if [ -n "$AUTO" ]; then CLOSE="Released automatically in v$V once CI passed."
-  else CLOSE="Rebased onto main with signed commits and released in v$V."; fi
-  gh pr close "$PR" --comment "$CLOSE" --delete-branch
-fi
+finish new || true

@@ -123,5 +123,33 @@ Test 'Refuses missing request' {
     Unchanged $t (Run $t)
 }
 
+Test 'Puts a newer runtime in place, keeping the old one' {
+    param($t)
+    $mods = "$($t.Data)\Engine\Mods\64"
+    [IO.File]::WriteAllText("$mods\libc++.whl", 'libc++ old')
+    [IO.File]::WriteAllText("$mods\libc++_temp1.whl", 'libc++ older')
+    [IO.File]::WriteAllText("$mods\libunwind.whl", 'libunwind same')
+    Request $t '1.19.0'
+    [IO.File]::WriteAllText("$($t.Staging)\libc++.whl", 'libc++ new')
+    [IO.File]::WriteAllText("$($t.Staging)\libunwind.whl", 'libunwind same')
+    $r = Run $t
+    Assert $r.ok "ok: $($r.error)"
+    Assert ((Get-Content -Raw "$mods\libc++.whl") -eq 'libc++ new') 'new libc++ in place'
+    Assert ((Get-Content -Raw "$mods\libc++_temp2.whl") -eq 'libc++ old') 'old libc++ kept aside'
+    Assert ((Get-Content -Raw "$mods\libc++_temp1.whl") -eq 'libc++ older') "Windhawk's own temp kept"
+    Assert ((Get-Content -Raw "$mods\libunwind.whl") -eq 'libunwind same') 'libunwind untouched'
+    Assert (-not (Test-Path "$mods\libunwind_temp1.whl")) 'same libunwind not moved aside'
+}
+
+Test 'Refusal leaves the runtime alone' {
+    param($t)
+    $mods = "$($t.Data)\Engine\Mods\64"
+    Request $t '1.18.0'
+    [IO.File]::WriteAllText("$($t.Staging)\libc++.whl", 'libc++ new')
+    $r = Run $t
+    Assert (-not $r.ok) 'refused'
+    Assert (-not (Test-Path "$mods\libc++.whl")) 'runtime copied on a refusal'
+}
+
 if ($failed) { Write-Host "$failed failed"; exit 1 }
 Write-Host 'all passed'

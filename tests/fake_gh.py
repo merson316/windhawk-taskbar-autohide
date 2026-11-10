@@ -8,6 +8,12 @@
   fail     command prefixes ('api', 'pr list', ...) that exit 1, as when
            GitHub cannot be reached
   next     the number the next `pr create` gets
+  merge_on_push  as GitHub does: once origin's main contains a PR's head,
+           the PR is MERGED, is no longer listed as open, and `pr close`
+           refuses it
+  view     number -> fields `pr view` reports over the listed ones (a PR
+           made a draft after `pr list`, say)
+  releases tags released so far (`release create` adds, `release view` reads)
 
 The origin is the bare repo $GH_ORIGIN: `pr create` points refs/pull/N/head
 at the pushed branch, `pr close --delete-branch` deletes the branch. Every
@@ -36,6 +42,13 @@ def origin(*args):
                           check=True, capture_output=True, text=True).stdout.strip()
 
 
+def merged(state, pr):
+    if not state.get('merge_on_push'):
+        return False
+    return subprocess.run(['git', '--git-dir', os.environ['GH_ORIGIN'], 'merge-base', '--is-ancestor',
+                           pr['headRefOid'], 'refs/heads/main'], capture_output=True).returncode == 0
+
+
 def main(args):
     with open(os.environ['GH_LOG'], 'a') as f:
         f.write(' '.join(args) + '\n')
@@ -46,11 +59,18 @@ def main(args):
         print('error connecting to api.github.com', file=sys.stderr)
         return 1
     prs = state.setdefault('prs', [])
+    closed = state.setdefault('closed', [])
     if cmd == 'pr list':
-        print(json.dumps(prs))
+        print(json.dumps([p for p in prs if not merged(state, p)]))
     elif cmd == 'pr view':
-        pr = next(p for p in prs if p['number'] == int(args[2]))
-        print(json.dumps({**pr, 'url': f'https://github.com/example/repo/pull/{pr["number"]}'}))
+        n = int(args[2])
+        pr = next((p for p in prs if p['number'] == n), None)
+        pr_state = 'MERGED' if pr and merged(state, pr) else 'OPEN' if pr else 'CLOSED'
+        pr = pr or next(p for p in closed if p['number'] == n)
+        print(json.dumps({**pr, 'state': pr_state, 'url': f'https://github.com/example/repo/pull/{n}',
+                          **state.get('view', {}).get(str(n), {})}))
+    elif cmd == 'pr comment':
+        pass
     elif cmd == 'pr create':
         n = state.get('next', 100)
         state['next'] = n + 1
@@ -63,7 +83,11 @@ def main(args):
         print(f'https://github.com/example/repo/pull/{n}')
     elif cmd == 'pr close':
         pr = next(p for p in prs if p['number'] == int(args[2]))
+        if merged(state, pr):
+            print(f'! Pull request #{pr["number"]} can\'t be closed because it was already merged', file=sys.stderr)
+            return 1
         prs.remove(pr)
+        closed.append(pr)
         if '--delete-branch' in args:
             origin('update-ref', '-d', f'refs/heads/{pr["headRefName"]}')
     elif cmd.startswith('api ') and args[1].endswith('/check-runs'):
@@ -71,9 +95,13 @@ def main(args):
         ci = state.get('checks', {}).get(sha, state.get('ci', 'success'))
         print(json.dumps({'check_runs': ci if isinstance(ci, list) else runs(ci)}))
     elif cmd == 'release create':
+        state.setdefault('releases', []).append(args[2])
         print(f'https://github.com/example/repo/releases/tag/{args[2]}')
     elif cmd == 'release view':
-        return 1
+        if args[2] not in state.get('releases', []):
+            print('release not found', file=sys.stderr)
+            return 1
+        print(json.dumps({'url': f'https://github.com/example/repo/releases/tag/{args[2]}'}))
     with open(path, 'w') as f:
         json.dump(state, f)
     return 0

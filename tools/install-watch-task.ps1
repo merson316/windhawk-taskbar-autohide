@@ -60,8 +60,9 @@ Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Setti
 # reach the \\wsl.localhost share. It runs as this user, with highest
 # privileges, to write Windhawk's HKLM key and ProgramData folder.
 $script = Join-Path $env:LOCALAPPDATA "taskbar-autohide\install\install-mod.ps1"
-$installAction = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
+# conhost --headless, as for the watch task: no console flashes up.
+$installAction = New-ScheduledTaskAction -Execute "conhost.exe" `
+    -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$script`""
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 $installSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)

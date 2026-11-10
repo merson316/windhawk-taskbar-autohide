@@ -47,8 +47,10 @@ class World:
     def pr(self, number, build='10.0.26100.9999', created=OLD, draft=False, cross=False, signed=True):
         """A PR shaped like the watcher's for `build`, published as #number."""
         branch = f'build/{build}'
+        git(self.author, 'fetch', '-q', 'origin')
         git(self.author, 'switch', '-q', '-C', branch, 'origin/main')
-        apply_entry(str(self.author / SRC), str(self.author / 'README.md'), FAKE, build, '10.0.26100.9807')
+        entry = FAKE.replace('10.0.26100.9999', build)
+        apply_entry(str(self.author / SRC), str(self.author / 'README.md'), entry, build, '10.0.26100.9807')
         git(self.author, 'add', SRC, 'README.md')
         pre = [] if signed else ['-c', 'commit.gpgsign=false']
         git(self.author, *pre, 'commit', '-q', '-m', f'feat: built-in addresses for taskbar.dll {build}\n\n'
@@ -242,7 +244,7 @@ def test_second_pr_reopened_after_release(world, tmp_path, msdl, dll_9549, dll_9
     assert git(world.origin, 'cat-file', '-t', f'v{first}') == 'tag'
     # The reopened PR was opened on this run, so its CI was waited on and it released too.
     assert git(world.origin, 'cat-file', '-t', f'v{second}') == 'tag'
-    assert f'pr close 101 --comment Released automatically in v{second}' in log
+    assert f'pr comment 101 --body Released automatically in v{second}' in log
     assert git(world.origin, 'show', f'v{second}:{SRC}').count('10.0.26100.9807') >= 1
     assert f'v{first} released; install it in Windhawk by hand' in world.notified()
     assert f'v{second} released; install it in Windhawk by hand' in world.notified()
@@ -322,3 +324,128 @@ def test_release_step_has_a_deadline(world, ar, monkeypatch):
     start = time.monotonic()
     assert ar.release_pending({5, 6}) == []
     assert time.monotonic() - start < 2, 'waited past the deadline'
+
+
+def installs(ar, monkeypatch):
+    """Record install() calls instead of installing."""
+    calls = []
+    monkeypatch.setattr(ar.windhawk_install, 'install', lambda version, source: calls.append((version, source)))
+    return calls
+
+
+def move_main(world):
+    """Main moves for a reason of its own (a manual release, say)."""
+    git(world.author, 'fetch', '-q', 'origin')
+    git(world.author, 'switch', '-q', '-C', 'side', 'origin/main')
+    (world.author / 'docs/note.txt').write_text('moved\n')
+    git(world.author, 'add', 'docs/note.txt')
+    git(world.author, 'commit', '-q', '-m', 'docs: a note')
+    git(world.author, 'push', '-q', 'origin', 'HEAD:main')
+
+
+def test_merged_pr_released_installed_and_others_superseded(world, ar, monkeypatch):
+    # As on GitHub: pushing main marks the PR merged and `pr close` refuses.
+    # The release is out by then, so it is installed and the rest superseded.
+    world.gh(merge_on_push=True)
+    calls = installs(ar, monkeypatch)
+    world.pr(5)
+    world.pr(6, build='10.0.26100.9998', created='2026-02-01T00:00:00Z')
+    v = world.next_version()
+    closed = []
+    assert ar.release_pending(set(), closed) == [v]
+    assert calls == [(v, git(world.origin, 'show', f'v{v}:{SRC}') + '\n')]
+    log = world.log()
+    assert f'pr comment 5 --body Released automatically in v{v}' in log
+    assert 'pr close 5' not in log
+    assert closed == [6]
+    branches = git(world.origin, 'branch', '--list')
+    assert 'build/10.0.26100.9999' not in branches and 'build/10.0.26100.9998' not in branches
+    assert f'v{v} released and installed for taskbar 10.0.26100.9999' in world.notified()
+
+
+def test_already_released_still_installs(world, ar, monkeypatch):
+    # A run stopped after the release, before installing, and the PR could
+    # not be closed: the next run finds the release, installs it and
+    # closes the stale PRs.
+    world.pr(5)
+    world.pr(6, build='10.0.26100.9998', created='2026-02-01T00:00:00Z')
+    v = world.next_version()
+    world.gh(fail=['pr close'])
+
+    def crash(version, source):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(ar.windhawk_install, 'install', crash)
+    with pytest.raises(KeyboardInterrupt):
+        ar.release_pending(set())
+    world.gh(fail=[])
+    calls = installs(ar, monkeypatch)
+    closed = []
+    assert ar.release_pending(set(), closed) == [v]
+    assert calls == [(v, git(world.origin, 'show', f'v{v}:{SRC}') + '\n')]
+    assert world.log().count('release create') == 1
+    assert closed == [6]
+    assert 'release refused' not in world.notified()
+
+
+def test_release_failure_ends_the_round(world, ar):
+    # A pushed main and v1.x.0, then failed to publish. B bumps to the same
+    # version: it must not resume A's release with its own notes.
+    world.pr(5)
+    world.pr(6, build='10.0.26100.9998', created='2026-02-01T00:00:00Z')
+    world.gh(fail=['release create'])
+    failed = []
+    assert ar.release_pending(set(), failed=failed) == []
+    assert failed == [5]
+    assert world.log().count('release create') == 1
+    assert 'pr close 6' not in world.log()
+
+
+def test_stale_pr_closed_quietly(world, ar):
+    world.pr(5)
+    world.pr(6, build='10.0.26100.9998', created='2026-02-01T00:00:00Z', draft=True)
+    move_main(world)
+    closed, refused = [], []
+    assert ar.release_pending(set(), closed, refused) == []
+    log = world.log()
+    assert 'pr close 5 --delete-branch --comment Main moved since this PR was cut' in log
+    assert closed == [5] and refused == []
+    assert world.notified() == ''
+    assert 'pr close 6' not in log, 'draft closed'
+    assert 'release create' not in log
+
+
+def test_stale_pr_reopened_from_new_main(world, tmp_path, msdl, dll_9549, dll_9807, pdb_9549):
+    world.pr(5, build='10.0.26100.9807')
+    move_main(world)
+    v = world.next_version()
+    p = run_watcher(world, tmp_path, msdl, dll_9549, dll_9807, pdb_9549)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = world.log()
+    assert 'pr close 5 --delete-branch' in log
+    assert log.count('pr create') == 1
+    assert git(world.origin, 'cat-file', '-t', f'v{v}') == 'tag'
+    assert 'release refused' not in world.notified()
+
+
+def test_stray_local_tags_do_not_reach_the_release(world, ar):
+    # The owner's checkout has a tag of the next version and one that clashes
+    # with origin's: neither may reach the release clone.
+    world.pr(5)
+    v = world.next_version()
+    git(world.checkout, 'update-ref', f'refs/tags/v{v}', 'HEAD')
+    old = git(world.checkout, 'tag', '-l', 'v1.1*').split()[0]
+    git(world.checkout, 'update-ref', f'refs/tags/{old}', 'HEAD')
+    assert ar.release_pending(set()) == [v]
+    assert git(world.origin, 'cat-file', '-t', f'v{v}') == 'tag'
+    assert git(world.checkout, 'rev-parse', old) == git(world.checkout, 'rev-parse', 'HEAD'), 'checkout tag touched'
+
+
+def test_pr_made_draft_after_listing_is_skipped_quietly(world, ar, capsys):
+    world.pr(5)
+    world.gh(view={'5': {'isDraft': True}})
+    refused = []
+    assert ar.release_pending(set(), refused=refused) == []
+    assert refused == []
+    assert world.notified() == ''
+    assert 'became a draft' in capsys.readouterr().out
+    assert 'release create' not in world.log()

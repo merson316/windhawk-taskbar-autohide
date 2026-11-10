@@ -7,11 +7,18 @@ the new main.
 After a release, the new version is installed in the owner's Windhawk (see
 windhawk_install.py).
 
+A PR whose head does not contain origin's main (main moved for some other
+reason: a manual release, a stale PR that could not be closed) cannot pass
+the trust check as it is; it is closed the same way, with no toast, for the
+watcher to reopen from the new main. Drafts are never closed.
+
 A gh or git network error while listing PRs or reading CI is printed and
-skipped: the next run tries again. So is a PR whose head moved, and a
-release that failed for any reason other than release.sh refusing it (that
-also toasts once a day). The whole step stops waiting after RELEASE_DEADLINE
-seconds (default 1200), so a run stays inside the scheduled task's limit."""
+skipped: the next run tries again. So is a PR whose head moved or that became
+a draft since it was listed. A release that failed for any reason other than
+release.sh refusing it toasts once a day and ends the step: every build PR
+bumps to the same version, so the next PR must not build on a half-done
+release. The whole step stops waiting after RELEASE_DEADLINE seconds
+(default 1200), so a run stays inside the scheduled task's limit."""
 import datetime
 import json
 import os
@@ -43,6 +50,14 @@ class ReleaseFailed(Exception):
 class Moved(Exception):
     """The PR's head is no longer the commit CI was read on."""
 
+
+class Drafted(Moved):
+    """The PR became a draft after it was listed (release.sh exit 4)."""
+
+
+class Stale(Exception):
+    """The PR's head does not contain origin's main: main moved since the
+    watcher cut it, so it cannot release as it is."""
 
 
 class Unreachable(Exception):
@@ -95,7 +110,8 @@ def wait_for_ci(sha, timeout):
 
 
 def _release(pr):
-    """Run release.sh --auto for pr in a fresh clone; return (version, url)."""
+    """Run release.sh --auto for pr in a fresh clone; return (version, url,
+    the released source as text)."""
     clone = tempfile.mkdtemp(prefix='taskbar-release-')
     try:
         return _release_in(clone, pr)
@@ -108,7 +124,9 @@ def _release(pr):
 def _release_in(clone, pr):
     def g(*args):
         return wb.git('-C', clone, *args).stdout.strip()
-    wb.git('clone', '-q', '--no-checkout', wb.REPO, clone)
+    # --no-tags: the owner's local tags (a stray v1.x, a tag named main) must
+    # not reach release.sh or clash with origin's in the fetch below.
+    wb.git('clone', '-q', '--no-checkout', '--no-tags', wb.REPO, clone)
     g('remote', 'set-url', 'origin', wb.git('-C', wb.REPO, 'remote', 'get-url', 'origin').stdout.strip())
     for key in ('user.name', 'user.email'):   # commit as the owner's checkout does
         value = wb.git('-C', wb.REPO, 'config', key, check=False).stdout.strip()
@@ -125,6 +143,12 @@ def _release_in(clone, pr):
         f.write('.venv\n')
     if g('rev-parse', 'refs/remotes/origin/pr') != pr.sha:
         raise Moved(f'PR #{pr.number} moved: its head is no longer {pr.sha[:12]}')
+
+    def ancestor(a, b):
+        return wb.git('-C', clone, 'merge-base', '--is-ancestor', a, b, check=False).returncode == 0
+    # Already on main is not stale: an earlier run pushed it and stopped.
+    if not ancestor('origin/main', pr.sha) and not ancestor(pr.sha, 'origin/main'):
+        raise Stale(f'PR #{pr.number} is not based on the current main')
     # The version is the PR's own @version, read at the commit CI passed on.
     src = wb.git('-C', clone, 'show', f'{pr.sha}:{wb.SRC}', check=False)
     m = re.search(r'(?m)^// @version\s+(\S+)$', src.stdout)
@@ -137,10 +161,14 @@ def _release_in(clone, pr):
     print(r.stderr, end='')
     if r.returncode == 3:
         raise ReleaseRefused(r.stderr.strip())
+    if r.returncode == 4:
+        raise Drafted(f'PR #{pr.number} became a draft; not releasing it')
     if r.returncode != 0:
         raise ReleaseFailed(r.stderr.strip() or f'release.sh exited {r.returncode}')
     url = next((line for line in reversed(r.stdout.splitlines()) if '/releases/tag/' in line), f'v{version}')
-    return version, url.strip()
+    # What is installed is what was tagged, read here before the clone goes.
+    source = wb.git('-C', clone, 'show', f'refs/tags/v{version}:{wb.SRC}').stdout
+    return version, url.strip(), source
 
 
 def release(pr):
@@ -195,9 +223,13 @@ def release_pending(opened, closed=None, refused=None, failed=None, deadline=Non
             wb.notify_once(f'ci:{pr.sha}', f'Taskbar {build}: CI failed', _pr_url(pr))
             continue
         try:
-            version, release_url = _release(pr)
+            version, release_url, source = _release(pr)
         except Moved as e:
             print(f'{e}; trying next time')
+            continue
+        except Stale as e:
+            print(f'{e}; closing it for the watcher to reopen')
+            _close_stale(pr, 'Main moved since this PR was cut; the watcher reopens it from the new main.', closed)
             continue
         except ReleaseRefused as e:
             print(f'release refused: PR #{pr.number} ({build}): {e}')
@@ -211,10 +243,12 @@ def release_pending(opened, closed=None, refused=None, failed=None, deadline=Non
                            f'Taskbar {build}: release failed, will retry', _first_line(str(e)))
             if failed is not None:
                 failed.append(pr.number)
-            continue
+            # The next PR bumps to the same version: it must not resume
+            # this one's half-done release.
+            break
         # The release is done either way; only the toast differs.
         try:
-            windhawk_install.install(version)
+            windhawk_install.install(version, source)
         except windhawk_install.InstallError as e:
             print(f'v{version} released, not installed: {e}')
             wb.notify_once(f'install:{version}', f'v{version} released; install it in Windhawk by hand', str(e))
@@ -241,12 +275,17 @@ def _supersede(released, version, closed):
         print(f'cannot list PRs to close the stale ones, trying next time: {e}')
         return
     for pr in others:
-        r = subprocess.run(['gh', 'pr', 'close', str(pr.number), '--delete-branch', '--comment',
-                            f'Superseded by v{version}; the watcher reopens it from the new main.'],
-                           capture_output=True, text=True, cwd=wb.REPO)
-        if r.returncode != 0:
-            print(f'could not close stale PR #{pr.number}: {r.stderr.strip()}')
-            continue
-        print(f'closed stale PR #{pr.number} ({pr.branch})')
-        if closed is not None:
-            closed.append(pr.number)
+        _close_stale(pr, f'Superseded by v{version}; the watcher reopens it from the new main.', closed)
+
+
+def _close_stale(pr, comment, closed):
+    """Close pr and delete its branch, so the watcher matches its build
+    again from the new main."""
+    r = subprocess.run(['gh', 'pr', 'close', str(pr.number), '--delete-branch', '--comment', comment],
+                       capture_output=True, text=True, cwd=wb.REPO)
+    if r.returncode != 0:
+        print(f'could not close stale PR #{pr.number}: {r.stderr.strip()}')
+        return
+    print(f'closed stale PR #{pr.number} ({pr.branch})')
+    if closed is not None:
+        closed.append(pr.number)

@@ -1,12 +1,19 @@
 """Installs a released version in the owner's Windhawk, after autorelease
 publishes it. This half runs unelevated in WSL: it checks that Windhawk is
-laid out as expected, compiles the tagged source with Windhawk's own
+laid out as expected, compiles the tagged source (autorelease reads it from
+its release clone; the owner's checkout is not used) with Windhawk's own
 compiler into a staging folder, and starts the elevated task
 WindhawkTaskbarModInstall (tools/install-watch-task.ps1 registers it). That
 task runs tools/install-mod.ps1, copied into the staging folder here, which
 copies the DLL and source in and points the registry at the new DLL; Windhawk
 picks up the changed LibraryFileName by itself. Its answer comes back in
 staging/result.json.
+
+The compiled DLL imports libc++.whl and libunwind.whl from Engine\\Mods\\64:
+Windhawk's own compile copies them there from its compiler when they differ.
+So that a DLL built by a newer compiler never loads an older runtime, stage
+copies the compiler's copies to staging when they differ from the installed
+ones, and install-mod.ps1 puts them in place before the DLL.
 
 Env overrides (tests): WINDHAWK_DIR, WINDHAWK_DATA, INSTALL_STAGING, REG_CMD,
 SCHTASKS_CMD, INSTALL_WAIT (seconds, default 120), INSTALL_EVERY."""
@@ -25,6 +32,7 @@ COMPILE = os.path.join(TOOLS, 'compile-mod.sh')
 MOD = 'local@taskbar-autohide-any-edge'
 KEY = rf'HKLM\SOFTWARE\Windhawk\Engine\Mods\{MOD}'
 TASK = 'WindhawkTaskbarModInstall'
+RUNTIME = ('libc++', 'libunwind')   # Compiler\x86_64-w64-mingw32\bin\<name>.dll -> Mods\64\<name>.whl
 INI = {'AppDataPath': r'%ProgramData%\Windhawk', 'RegistryKey': r'HKLM\SOFTWARE\Windhawk'}
 
 
@@ -119,21 +127,31 @@ def staging_dir():
     return os.path.join(path, 'taskbar-autohide', 'install')
 
 
-def stage(version, staging):
-    """Compile v{version}'s source, as origin tagged it, into staging, with
-    install-mod.ps1 and the request for the elevated task."""
+def _same_file(a, b):
+    try:
+        with open(a, 'rb') as fa, open(b, 'rb') as fb:
+            return fa.read() == fb.read()
+    except OSError:
+        return False
+
+
+def stage(version, staging, source):
+    """Compile source, v{version} as origin tagged it, into staging, with
+    install-mod.ps1, the request for the elevated task, and any runtime
+    library the compiler has that differs from the installed one."""
     os.makedirs(staging, exist_ok=True)
-    for name in ('result.json', 'request.json', 'mod.dll', 'mod.wh.cpp'):
+    for name in ('result.json', 'request.json', 'mod.dll', 'mod.wh.cpp', *(f'{n}.whl' for n in RUNTIME)):
         if os.path.exists(os.path.join(staging, name)):
             os.remove(os.path.join(staging, name))
-    # From origin, into FETCH_HEAD only: the checkout's tags are not touched,
-    # and a stray local tag of the same name is not what gets installed.
-    wb.git('-C', wb.REPO, 'fetch', '-q', '--no-tags', 'origin', f'refs/tags/v{version}')
-    src = wb.git('-C', wb.REPO, 'show', f'FETCH_HEAD:{wb.SRC}').stdout
     with open(os.path.join(staging, 'mod.wh.cpp'), 'w', newline='') as f:
-        f.write(src)
+        f.write(source)
     subprocess.run([COMPILE, os.path.join(staging, 'mod.wh.cpp'), os.path.join(staging, 'mod.dll')],
                    check=True, capture_output=True, text=True)
+    for name in RUNTIME:
+        ours = os.path.join(windhawk_dir(), 'Compiler', 'x86_64-w64-mingw32', 'bin', f'{name}.dll')
+        installed = os.path.join(data_dir(), 'Engine', 'Mods', '64', f'{name}.whl')
+        if os.path.isfile(ours) and not _same_file(ours, installed):
+            shutil.copy2(ours, os.path.join(staging, f'{name}.whl'))   # copy2: keep the mtime, as Windhawk does
     shutil.copyfile(os.path.join(TOOLS, 'install-mod.ps1'), os.path.join(staging, 'install-mod.ps1'))
     with open(os.path.join(staging, 'request.json'), 'w') as f:
         json.dump({'version': version}, f)
@@ -153,14 +171,15 @@ def _wait_for_result(path):
         time.sleep(every)
 
 
-def install(version):
-    """Install version in the owner's Windhawk. Raises InstallError."""
+def install(version, source):
+    """Install version, whose tagged source is the text source, in the
+    owner's Windhawk. Raises InstallError."""
     problems = layout_problems(windhawk_dir(), data_dir(), reg_query)
     if problems:
         raise InstallError('; '.join(problems))
     try:
         staging = staging_dir()
-        stage(version, staging)
+        stage(version, staging, source)
         r = subprocess.run([os.environ.get('SCHTASKS_CMD', 'schtasks.exe'), '/run', '/tn', TASK],
                            capture_output=True, text=True)
     except subprocess.CalledProcessError as e:

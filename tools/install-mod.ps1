@@ -6,8 +6,13 @@
 #   request.json   {"version": "1.19.0"}
 #   mod.wh.cpp     the tagged source
 #   mod.dll        compiled with Windhawk's own compiler
+#   libc++.whl, libunwind.whl   only if the compiler's runtime differs from
+#                  the one in Engine\Mods\64, which the DLL imports
 #
-# It refuses obvious mistakes, then copies the DLL and source into Windhawk's
+# It refuses obvious mistakes, then copies any staged runtime into
+# Engine\Mods\64 (the one there is renamed to <name>_tempN.whl, as Windhawk
+# does, since running processes have it loaded; nothing is deleted), then
+# copies the DLL and source into Windhawk's
 # data folder and sets Version, then LibraryFileName, last of all. Windhawk
 # loads the new DLL once LibraryFileName changes. Every other value in the
 # mod's key, and its Settings subkey, is left alone, and so is the old DLL.
@@ -52,6 +57,18 @@ function Install {
     }
 
     $mods = Join-Path $DataDir 'Engine\Mods\64'
+    foreach ($lib in 'libc++', 'libunwind') {
+        $new = Join-Path $Staging "$lib.whl"
+        if (-not (Test-Path -LiteralPath $new -PathType Leaf)) { continue }
+        $target = Join-Path $mods "$lib.whl"
+        if (Test-Path -LiteralPath $target) {
+            if ((Get-FileHash -LiteralPath $new).Hash -eq (Get-FileHash -LiteralPath $target).Hash) { continue }
+            $n = 1
+            while (Test-Path -LiteralPath (Join-Path $mods "${lib}_temp$n.whl")) { $n++ }
+            Move-Item -LiteralPath $target (Join-Path $mods "${lib}_temp$n.whl")
+        }
+        Copy-Item -LiteralPath $new $target
+    }
     do {
         $name = "${mod}_${version}_$(Get-Random -Minimum 100000 -Maximum 1000000).dll"
     } while (Test-Path -LiteralPath (Join-Path $mods $name))
