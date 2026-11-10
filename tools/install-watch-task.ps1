@@ -1,7 +1,7 @@
 # Registers a task that runs tools/watch-build.sh in WSL at logon, and whenever
 # a Windows update has been staged and is waiting for a restart. The new
-# taskbar.dll is in WinSxS by then, so a draft PR is opened, or a warning
-# raised, before the restart puts it in use.
+# taskbar.dll is in WinSxS by then, so a PR that releases itself once CI
+# passes is opened, or a warning raised, before the restart puts it in use.
 # From a PowerShell prompt:
 #
 #   .\tools\install-watch-task.ps1
@@ -41,5 +41,5 @@ $triggers = @(
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Settings $settings -Force `
-    -Description "Checks running and staged taskbar.dll builds for the auto-hide mod; opens a draft PR or warns." | Out-Null
+    -Description "Checks running and staged taskbar.dll builds for the auto-hide mod; opens a PR that releases itself once CI passes, or warns." | Out-Null
 Get-ScheduledTask -TaskName $name | Select-Object TaskName, State

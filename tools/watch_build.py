@@ -5,19 +5,24 @@ before the restart rather than after.
 
 For each: if Microsoft has published its symbols, check the mod's load checks
 pass on it, and warn once if they will not. If not -- and it is not in
-kKnownBuilds and has no PR yet -- match it and open a ready PR; it
-releases itself once CI passes.
+kKnownBuilds and has no PR yet -- match it and open a ready PR.
+
+Then release the build PRs whose CI has passed (see autorelease.py), oldest
+first. A release makes the other build PRs stale: they are closed, and the
+builds are checked once more so a PR is reopened from the new main.
 
 All git work happens in a temporary worktree of origin/main: the owner's
 checkout, and any uncommitted edits in it, are never touched. Each warning is
 raised once (see notify_once), so later runs do not repeat it.
 
-Exit codes: 0 nothing to do or PR opened, 3 match failed, 4 signing
-unavailable, 5 symbol server unreachable or PDB not downloadable yet, 6
-anything else failed (notified), 7 a published build fails the mod's checks."""
+Exit codes: 0 nothing to do, PR opened or released, 3 match failed, 4
+signing unavailable, 5 symbol server unreachable or PDB not downloadable yet,
+6 anything else failed (notified), 7 a published build fails the mod's checks,
+8 release.sh refused a build PR (notified)."""
 import datetime
 import glob
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -28,6 +33,8 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# autorelease imports this module by name: let it find this copy when run as a script.
+sys.modules.setdefault('watch_build', sys.modules[__name__])
 
 from matcher import HOOKED, reference  # noqa: E402
 from matcher.apply import apply_entry, known_builds  # noqa: E402
@@ -205,39 +212,56 @@ def check_published(pe, key, layouts, staged):
 def main(argv):
     dry_run = '--dry-run' in argv
     running = PE(DLL)
-
-    fetch_when_reachable()
-    known = known_on_main()
-    layouts = accepted_layouts(git('show', f'origin/main:{SRC}').stdout)
     builds = [(running, False)]
     staged = staged_build(running)
     if staged:
         print(f'staged for restart: {staged.file_version()}')
         builds.append((staged, True))
-    codes = [check(pe, is_staged, known, layouts, dry_run) for pe, is_staged in builds]
-    return next((c for c in codes if c), 0)
+
+    codes, opened = check_builds(builds, dry_run)
+    if dry_run:
+        return next((c for c in codes if c), 0)
+    import autorelease
+    closed, refused = [], []
+    if autorelease.release_pending(opened, closed, refused) and closed:
+        # The closed PRs were stale; match their builds again from the new main.
+        more, opened = check_builds(builds, dry_run)
+        codes += more
+        autorelease.release_pending(opened, refused=refused)
+    return next((c for c in codes if c), 8 if refused else 0)
+
+
+def check_builds(builds, dry_run):
+    """Check each build against origin/main as it is now; return the exit
+    codes and the numbers of the PRs opened."""
+    fetch_when_reachable()
+    known = known_on_main()
+    layouts = accepted_layouts(git('show', f'origin/main:{SRC}').stdout)
+    results = [check(pe, is_staged, known, layouts, dry_run) for pe, is_staged in builds]
+    return [code for code, _ in results], {pr for _, pr in results if pr is not None}
 
 
 def check(pe, staged, known, layouts, dry_run):
+    """Return (exit code, number of the PR opened or None)."""
     version, key = pe.file_version(), pe.pdb_key()
     if any(e['pdb_key'] == key for e in known):
         print(f'known: {version}')
-        return 0
+        return 0, None
     try:
         published, status = pdb_published(key)
     except (urllib.error.URLError, OSError) as e:
         print(f'symbol server unreachable: {e}')
-        return 5
+        return 5, None
     if published:
-        return check_published(pe, key, layouts, staged)
+        return check_published(pe, key, layouts, staged), None
     if status != 404:
         # A 503 or 429 says nothing about the build; try again next sign-in.
         print(f'symbol server answered {status}; trying again next time')
-        return 5
+        return 5, None
     branch = f'build/{version}'
     if git('ls-remote', '--exit-code', '--heads', 'origin', branch, check=False).returncode == 0:
         print(f'pending PR: {branch}')
-        return 0
+        return 0, None
 
     ref, ref_pdb = auto_reference(pe)
     found = publics(ref_pdb, list(HOOKED.values()))
@@ -249,21 +273,22 @@ def check(pe, staged, known, layouts, dry_run):
     print(f'new {version}, reference {ref.file_version()}\n{evidence}')
     if result.rvas is None:
         notify_once(f'nomatch:{key}', f'Taskbar {version}: automatic match failed', result.reason)
-        return 3
+        return 3, None
     entry = format_entry(pe, result.rvas)
     print(entry)
 
     if dry_run:
-        print(f'would open draft PR "taskbar.dll {version}: built-in addresses" from {branch}')
-        return 0
+        print(f'would open PR "taskbar.dll {version}: built-in addresses" from {branch}')
+        return 0, None
     if not signing_available():
         notify_once(f'nosign:{key}:{datetime.date.today()}', f'Taskbar {version} matched but signing is unavailable',
                'run bin/keys-load.sh wsl, then tools/watch-build.sh')
-        return 4
+        return 4, None
     url = open_pr(version, branch, ref.file_version(), entry, evidence)
-    notify(f'Taskbar {version}: draft PR ready to test', url)
+    notify(f'Taskbar {version}: PR opened, releases itself once CI passes', url)
     print(url)
-    return 0
+    m = re.search(r'/pull/(\d+)\s*$', url)
+    return 0, int(m[1]) if m else None
 
 
 def run(argv):
