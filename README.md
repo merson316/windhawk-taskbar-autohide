@@ -56,6 +56,7 @@ resolved:
 | `taskbar.dll` | Matched against |
 |---|---|
 | 10.0.26100.9807 | 10.0.26100.9549 |
+| 10.0.26100.9974 | 10.0.26100.9818 |
 
 ## Installation
 
