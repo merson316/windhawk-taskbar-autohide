@@ -74,7 +74,10 @@ class World:
     def env(self, msdl_base):
         return {'PATH': f'{self.bin}:{os.environ["PATH"]}', 'GH_STATE': str(self.state), 'GH_LOG': str(self.gh_log),
                 'GH_ORIGIN': str(self.origin), 'MSDL_BASE': msdl_base, 'CI_EVERY': '0.05', 'CI_WAIT': '2',
-                'NOTIFY_CMD': f'sh -c \'echo "$*" >> {self.notes}\' notify'}
+                'NOTIFY_CMD': f'sh -c \'echo "$*" >> {self.notes}\' notify',
+                # Installing stops at the layout check: no Windhawk here.
+                'WINDHAWK_DIR': str(self.tmp / 'no-windhawk'), 'WINDHAWK_DATA': str(self.tmp / 'no-windhawk-data'),
+                'INSTALL_STAGING': str(self.tmp / 'staging'), 'REG_CMD': 'false', 'SCHTASKS_CMD': 'false'}
 
 
 @pytest.fixture
@@ -127,8 +130,8 @@ def test_green_pr_released(world, ar):
     assert ar.release_pending(set()) == [v]
     assert git(world.origin, 'cat-file', '-t', f'v{v}') == 'tag'
     assert f'release create v{v}' in world.log()
-    assert f'v{v} released for taskbar 10.0.26100.9999' in world.notified()
-    assert f'releases/tag/v{v}' in world.notified()
+    assert f'v{v} released; install it in Windhawk by hand' in world.notified()
+    assert 'windhawk.ini' in world.notified()
     assert not os.listdir(world.tmp / 't'), 'clone left behind'
 
 
@@ -241,8 +244,8 @@ def test_second_pr_reopened_after_release(world, tmp_path, msdl, dll_9549, dll_9
     assert git(world.origin, 'cat-file', '-t', f'v{second}') == 'tag'
     assert f'pr close 101 --comment Released automatically in v{second}' in log
     assert git(world.origin, 'show', f'v{second}:{SRC}').count('10.0.26100.9807') >= 1
-    assert f'v{first} released for taskbar 10.0.26100.9999' in world.notified()
-    assert f'v{second} released for taskbar 10.0.26100.9807' in world.notified()
+    assert f'v{first} released; install it in Windhawk by hand' in world.notified()
+    assert f'v{second} released; install it in Windhawk by hand' in world.notified()
 
 
 def test_watcher_exits_8_when_a_release_is_refused(world, ar, monkeypatch):
@@ -298,7 +301,7 @@ def test_release_failure_is_retried_not_refused(world, ar, monkeypatch):
     assert git(world.origin, 'cat-file', '-t', f'v{v}') == 'tag'
     world.gh(fail=[])
     assert ar.release_pending(set()) == [v]
-    assert f'v{v} released for taskbar 10.0.26100.9999' in world.notified()
+    assert f'v{v} released; install it in Windhawk by hand' in world.notified()
 
 
 def test_moved_head_is_left_quietly(world, ar):

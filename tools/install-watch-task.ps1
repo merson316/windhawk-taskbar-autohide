@@ -1,8 +1,12 @@
+#Requires -RunAsAdministrator
 # Registers a task that runs tools/watch-build.sh in WSL at logon, and whenever
 # a Windows update has been staged and is waiting for a restart. The new
 # taskbar.dll is in WinSxS by then, so a PR that releases itself once CI
 # passes is opened, or a warning raised, before the restart puts it in use.
-# From a PowerShell prompt:
+# Also registers WindhawkTaskbarModInstall, which the watcher starts after a
+# release to install it in Windhawk (tools/install-mod.ps1, run elevated from
+# the staging folder tools/windhawk_install.py fills). Registering an elevated
+# task needs an elevated prompt:
 #
 #   .\tools\install-watch-task.ps1
 #   .\tools\install-watch-task.ps1 -Uninstall
@@ -12,10 +16,14 @@ param(
 )
 
 $name = "WindhawkTaskbarBuildWatch"
+$installName = "WindhawkTaskbarModInstall"
 if ($Uninstall) {
-    Unregister-ScheduledTask -TaskName $name -Confirm:$false
+    foreach ($n in $name, $installName) {
+        Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+    }
     return
 }
+$user = "$env:USERDOMAIN\$env:USERNAME"
 
 $log = "~/.cache/taskbar-matcher/watch.log"
 # No fixed wait at logon: the watcher retries its first git fetch until the
@@ -33,7 +41,7 @@ $staged.Subscription = @"
 <QueryList><Query Id="0" Path="Setup"><Select Path="Setup">*[System[Provider[@Name='Microsoft-Windows-Servicing'] and EventID=4]]</Select></Query></QueryList>
 "@
 $triggers = @(
-    New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    New-ScheduledTaskTrigger -AtLogOn -User $user
     $staged
 )
 # One update logs event 4 for several packages at once: while a run is in
@@ -42,4 +50,19 @@ $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoi
     -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 Register-ScheduledTask -TaskName $name -Action $action -Trigger $triggers -Settings $settings -Force `
     -Description "Checks running and staged taskbar.dll builds for the auto-hide mod; opens a PR that releases itself once CI passes, or warns." | Out-Null
-Get-ScheduledTask -TaskName $name | Select-Object TaskName, State
+
+# The install task: no triggers, the watcher starts it with schtasks /run.
+# It runs install-mod.ps1 from %LOCALAPPDATA%, where windhawk_install.py
+# copies it from the repo before each install: an elevated process may not
+# reach the \\wsl.localhost share. It runs as this user, with highest
+# privileges, to write Windhawk's HKLM key and ProgramData folder.
+$script = Join-Path $env:LOCALAPPDATA "taskbar-autohide\install\install-mod.ps1"
+$installAction = New-ScheduledTaskAction -Execute "powershell.exe" `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$script`""
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+$installSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+    -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+Register-ScheduledTask -TaskName $installName -Action $installAction -Principal $principal `
+    -Settings $installSettings -Force `
+    -Description "Installs a released version of the taskbar auto-hide mod in Windhawk; started by the watcher." | Out-Null
+Get-ScheduledTask -TaskName $name, $installName | Select-Object TaskName, State

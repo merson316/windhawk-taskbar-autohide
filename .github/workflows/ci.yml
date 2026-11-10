@@ -71,6 +71,9 @@ jobs:
           ls "$WINDHAWK_DIR"
           ls "$WINDHAWK_DIR"/Compiler/bin/clang++.exe "$WINDHAWK_DIR"/Engine/*/64/windhawk.lib
       - run: tools/compile-mod.sh
+      # The elevated half of the install, against a temp folder and HKCU.
+      - run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install-mod.Tests.ps1
+        shell: pwsh
       - run: python -m pip install -q -r tools/requirements.txt
       # The mod's check on its built-in addresses, compiled and run against the
       # real taskbar.dll each entry was matched for.

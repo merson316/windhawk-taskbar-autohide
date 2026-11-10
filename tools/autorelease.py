@@ -4,6 +4,8 @@ owner's checkout is never touched). Oldest first, one release per round:
 every build PR bumps to the same next version from the same main, so once one
 releases the others are stale and are closed for the watcher to reopen from
 the new main.
+After a release, the new version is installed in the owner's Windhawk (see
+windhawk_install.py).
 
 A gh or git network error while listing PRs or reading CI is printed and
 skipped: the next run tries again. So is a PR whose head moved, and a
@@ -21,6 +23,7 @@ import time
 from collections import namedtuple
 
 import watch_build as wb
+import windhawk_install
 
 BuildPR = namedtuple('BuildPR', 'number branch sha created draft')
 REQUIRED = ('Python tests', "Compile with Windhawk's compiler")
@@ -209,7 +212,14 @@ def release_pending(opened, closed=None, refused=None, failed=None, deadline=Non
             if failed is not None:
                 failed.append(pr.number)
             continue
-        wb.notify(f'v{version} released for taskbar {build}', release_url)
+        # The release is done either way; only the toast differs.
+        try:
+            windhawk_install.install(version)
+        except windhawk_install.InstallError as e:
+            print(f'v{version} released, not installed: {e}')
+            wb.notify_once(f'install:{version}', f'v{version} released; install it in Windhawk by hand', str(e))
+        else:
+            wb.notify(f'v{version} released and installed for taskbar {build}', release_url)
         _supersede(pr, version, closed)
         return [version]
     return []
