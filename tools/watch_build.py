@@ -295,7 +295,17 @@ def check(pe, staged, known, layouts, dry_run):
     return 0, int(m[1]) if m else None
 
 
+def bound_ssh():
+    """Make every git call from here on (this process, autorelease and
+    release.sh inherit it) give up on a dead SSH connection. A network filter
+    that silently drops packets otherwise hangs a fetch or push until the
+    task's 30-minute limit. An owner's own GIT_SSH_COMMAND is left alone."""
+    os.environ.setdefault('GIT_SSH_COMMAND', 'ssh -o ConnectTimeout=20 '
+                          '-o ServerAliveInterval=15 -o ServerAliveCountMax=4')
+
+
 def run(argv):
+    bound_ssh()
     try:
         return main(argv)
     except Exception as e:   # unattended: never fail without telling the owner
@@ -307,4 +317,7 @@ def run(argv):
 
 
 if __name__ == '__main__':
+    # watch.log is a file: write each line as it happens, so a run that is
+    # still going shows how far it got.
+    sys.stdout.reconfigure(line_buffering=True)
     sys.exit(run(sys.argv[1:]))
