@@ -24,6 +24,8 @@ jobs:
       - run: git switch -q -C main
       # They also sign commits and tags, as the real tools refuse to without
       # signing. A key made here and thrown away with the runner is enough.
+      # release.sh verifies its own tag on resume (git tag -v), so the key is
+      # also listed as an allowed signer, as the owner's key is on the PC.
       - name: Git identity and a throwaway signing key
         run: |
           ssh-keygen -q -t ed25519 -N '' -C ci -f ~/ci-signing
@@ -33,6 +35,8 @@ jobs:
           git config --global user.signingkey ~/ci-signing
           git config --global commit.gpgsign true
           git config --global tag.gpgsign true
+          echo "* namespaces=\"git\" $(cat ~/ci-signing.pub)" > ~/ci-allowed-signers
+          git config --global gpg.ssh.allowedSignersFile ~/ci-allowed-signers
       - run: python -m venv .venv && .venv/bin/pip install -q -r tools/requirements.txt
       # Real taskbar.dll builds and PDBs come from Microsoft's symbol server;
       # a test that cannot get one fails here instead of skipping.
