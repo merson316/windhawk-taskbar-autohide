@@ -1833,6 +1833,12 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
     const BarPlacement p =
         PlaceBar(rec->shown, rec->size, rec->edge, rec->held, hiddenPx);
 
+    // Before the move, not after: while it runs the taskbar asks for its own
+    // position, and that request is answered from hiddenNow. Left at the
+    // previous step's value, the last step of a hide ended one step short.
+    rec->hiddenNow = hiddenPx;
+    rec->placed = true;
+
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
     if (cur.left != p.x || cur.top != p.y) {
@@ -1855,8 +1861,6 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
         }
     }
 
-    rec->hiddenNow = hiddenPx;
-    rec->placed = true;
 }
 
 // Give a taskbar back to Windows: stop its animation, remove its region, and
