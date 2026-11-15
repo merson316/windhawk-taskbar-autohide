@@ -4,91 +4,91 @@
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.863",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.1000",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.1150",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.1301",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.1591",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.1882",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.2161",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.2454",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.3037",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.3323",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.3624",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.3775",
     "symbols": true,
     "resolved": true,
     "layout": null,
-    "durations": false
+    "durations": true
   },
   {
     "taskbar": "10.0.26100.3912",
@@ -274,6 +274,13 @@
   },
   {
     "taskbar": "10.0.26100.9818",
+    "symbols": true,
+    "resolved": true,
+    "layout": "inverted",
+    "durations": true
+  },
+  {
+    "taskbar": "10.0.26100.9974",
     "symbols": true,
     "resolved": true,
     "layout": "inverted",
