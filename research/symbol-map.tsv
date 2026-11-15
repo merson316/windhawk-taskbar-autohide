@@ -17,3 +17,5 @@
 ?_AutoHide@CSecondaryTray@@AEAAX_N@Z	private: void __cdecl CSecondaryTray::_AutoHide(bool)
 ?GetStuckPlace@CSecondaryTray@@UEAAXPEAK@Z	public: virtual void __cdecl CSecondaryTray::GetStuckPlace(unsigned long *)
 ?GetMonitor@CSecondaryTray@@UEAAPEAUHMONITOR__@@XZ	public: virtual struct HMONITOR__ * __cdecl CSecondaryTray::GetMonitor(void)
+?_HandleTrayPrivateSettingMessage@TrayUI@@QEAA_JK_J@Z	public: __int64 __cdecl TrayUI::_HandleTrayPrivateSettingMessage(unsigned long,__int64)
+?SetStuckPlace@TrayUI@@UEAAXI@Z	public: virtual void __cdecl TrayUI::SetStuckPlace(unsigned int)
