@@ -28,6 +28,9 @@
 #             is open and hides after it closes
 #   quick     Win+A opens Quick Settings inside a display and the taskbar
 #             stays up while it is open (issue #10)
+#   flash     a button flashing for about 15 s (a Notepad the run opens and
+#             closes): each taskbar comes up once and hides again while the
+#             flashing goes on (issue #9)
 #
 # What it cannot see: what is drawn inside the taskbar (icons, their size on
 # screen, a transparent frame). It measures windows, not pixels.
@@ -96,6 +99,21 @@ public class TaskbarDriver {
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hMonitor, int type, out uint x, out uint y);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int value, int size);
     [DllImport("shell32.dll")] static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
+    [DllImport("kernel32.dll")] static extern uint SetThreadExecutionState(uint flags);
+    [DllImport("user32.dll")] static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+    [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr h);
+    // Keeps the display on while the run lasts, as a video player does. It
+    // is a request by this process, gone when it ends; no setting changes.
+    public static void StayAwake(bool on) {
+        SetThreadExecutionState(on ? 0x80000003u : 0x80000000u);   // ES_CONTINUOUS | SYSTEM | DISPLAY
+    }
+    // Whether the desktop can be seen and driven: not while the PC is locked.
+    public static bool DesktopThere() {
+        IntPtr d = OpenInputDesktop(0, false, 0x0100);   // DESKTOP_SWITCHDESKTOP
+        if (d == IntPtr.Zero) return false;
+        CloseDesktop(d);
+        return true;
+    }
     [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
     [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
 
@@ -470,6 +488,7 @@ function Set-Edge($e) {
 function Wanted($name) { -not $Only -or $name -match $Only }
 
 function Guard {
+    if (-not [TaskbarDriver]::DesktopThere()) { throw "the PC is locked: stopping" }
     if ([TaskbarDriver]::PointerTaken()) { throw "the mouse was moved: stopping" }
 }
 function Wait($ms) {
@@ -512,7 +531,9 @@ function Judge-Trace($name, $trace, $from, $to, $homeDpi) {
     $back = 0; $jump = 0; $prev = $trace[0]
     foreach ($s in $moves) {
         $d = ($s.Showing - $prev.Showing) * $dir
-        if ($d -lt -1) { $back = [Math]::Max($back, -$d) }
+        # Up to 2 px: on the bottom edge Windows puts its own 2 px region on
+        # for a few ms after a hide, before the mod's is back.
+        if ($d -lt -2) { $back = [Math]::Max($back, -$d) }
         if ($d -gt $jump) { $jump = $d }
         $prev = $s
     }
@@ -639,11 +660,17 @@ function Test-Edge($edge, $changed) {
     }
 
     if ($main -and (Wanted "quick")) {
-        Park $primary
-        Wait 1000
+        # As in issue #10: the taskbar is up, Quick Settings opens, the
+        # pointer leaves the taskbar. It must stay up while the panel is open.
+        if ($canHide) {
+            Touch-Edge $primary $edge
+            [void][TaskbarDriver]::Trace($main.Hwnd, $main.Thickness, 0, 300, 3000)
+        }
         [TaskbarDriver]::Keys([uint16[]]@(0x5B, 0x41))    # Win+A
-        Wait 1500
-        $qs = @([TaskbarDriver]::Panels("ControlCenterWindow", $null) | Where-Object { $_.Showing })
+        Wait 800
+        Park $primary
+        Wait 1200
+        $qs = @([TaskbarDriver]::Panels("ControlCenterWindow", [NullString]::Value) | Where-Object { $_.Showing })
         if ($qs.Count -eq 0) { Result 'SKIP' "$en/quick" "no Quick Settings window found showing" }
         else {
             $p = $qs[0]
@@ -654,13 +681,62 @@ function Test-Edge($edge, $changed) {
         }
         [TaskbarDriver]::Keys([uint16[]]@(0x1B))
         Wait 500
-        $still = @([TaskbarDriver]::Panels("ControlCenterWindow", $null) | Where-Object { $_.Showing })
+        $still = @([TaskbarDriver]::Panels("ControlCenterWindow", [NullString]::Value) | Where-Object { $_.Showing })
         if ($still.Count) { [TaskbarDriver]::Keys([uint16[]]@(0x5B, 0x41)) }
         if ($canHide) {
             $t = [TaskbarDriver]::Trace($main.Hwnd, 0, 2, 400, 6000)
             Judge-Trace "$en/quick/hides after" $t $t[0].Showing 0 $main.HomeDpi
         }
     }
+
+    if ($canHide -and (Wanted "flash")) { Test-Flash $edge }
+}
+
+# A flashing button, for about 15 s. Counts how often each taskbar comes up
+# and whether it is hidden again while the flashing still goes on.
+function Test-Flash($edge) {
+    $en = $EdgeName[$edge]
+    $mons = [TaskbarDriver]::Monitors()
+    Park ($mons | Where-Object { $_.Primary })
+    Wait 2500
+    $names = @([TaskbarDriver]::Bars() | Where-Object { $_.Home -ne "" } | ForEach-Object { $_.Name })
+    $up = @{}; $count = @{}; $firstUp = @{}; $downAt = @{}
+    foreach ($n in $names) { $up[$n] = $false; $count[$n] = 0 }
+    $notepads = @(Get-Process -Name Notepad -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+    $said = [IO.Path]::GetTempFileName()
+    $flash = Start-Process powershell -WindowStyle Hidden -PassThru -RedirectStandardOutput $said -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'flash-taskbar.ps1'), '-Wait', '1', '-Count', '12')
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+    while ($sw.ElapsedMilliseconds -lt 40000) {
+        Guard
+        foreach ($b in [TaskbarDriver]::Bars()) {
+            if (-not $up.ContainsKey($b.Name)) { continue }
+            $isUp = $b.Showing * 2 -gt $b.Thickness
+            if ($isUp -and -not $up[$b.Name]) {
+                $count[$b.Name]++
+                if (-not $firstUp.ContainsKey($b.Name)) { $firstUp[$b.Name] = $sw.ElapsedMilliseconds }
+            }
+            if (-not $isUp -and $up[$b.Name] -and -not $downAt.ContainsKey($b.Name)) { $downAt[$b.Name] = $sw.ElapsedMilliseconds }
+            $up[$b.Name] = $isUp
+        }
+        Start-Sleep -Milliseconds 40
+    }
+    } finally {
+        if (-not $flash.HasExited) { $flash | Stop-Process -Force -ErrorAction SilentlyContinue }
+        Get-Process -Name Notepad -ErrorAction SilentlyContinue | Where-Object { $notepads -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
+    }
+    $told = ((Get-Content $said -ErrorAction SilentlyContinue) -join ' / '); Remove-Item $said -ErrorAction SilentlyContinue
+    if (-not ($names | Where-Object { $count[$_] -gt 0 })) { Result 'SKIP' "$en/flash" "no taskbar came up. The flash script said: $told"; return }
+    foreach ($n in $names) {
+        $detail = "came up $($count[$n]) time(s)"
+        if ($firstUp.ContainsKey($n)) { $detail += ", first at $([int]$firstUp[$n]) ms" }
+        if ($downAt.ContainsKey($n)) { $detail += ", hidden again $([int]($downAt[$n] - $firstUp[$n])) ms later" }
+        elseif ($count[$n]) { $detail += ", never hid again in 40 s" }
+        Check "$en/flash/$n/once" ($count[$n] -eq 1) $detail
+        if ($count[$n]) { Check "$en/flash/$n/hides while it flashes" ($downAt.ContainsKey($n) -and ($downAt[$n] - $firstUp[$n]) -lt 8000) $detail }
+    }
+    Wait 3000
 }
 
 # ------------------------------------------------------------------ the run
@@ -682,6 +758,7 @@ if (-not [TaskbarDriver]::AutoHide()) {
 
 $pointer0 = [TaskbarDriver]::Pointer()
 $stopped = $null
+[TaskbarDriver]::StayAwake($true)
 try {
     if ($EdgeList.Count -eq 0) {
         Test-Edge $edge0 $false
@@ -706,6 +783,7 @@ try {
         "edge put back to {0}: Windows reports {1}" -f $EdgeName[$edge0], $EdgeName[[TaskbarDriver]::Edge()]
     }
     if (-not $stopped) { [TaskbarDriver]::MoveTo($pointer0[0], $pointer0[1]) }
+    [TaskbarDriver]::StayAwake($false)
 }
 
 $fail = @($results | Where-Object { $_.status -eq 'FAIL' }).Count

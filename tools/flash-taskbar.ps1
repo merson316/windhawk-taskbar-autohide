@@ -29,6 +29,14 @@ public class Flasher {
     public static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
     [DllImport("user32.dll")]
     public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetShellWindow();
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool IsIconic(IntPtr hWnd);
     public static void Minimize(IntPtr h) { ShowWindow(h, 6); }   // SW_MINIMIZE
     public static bool Flash(IntPtr h, uint count) {
         FLASHWINFO fi = new FLASHWINFO();
@@ -76,5 +84,12 @@ Start-Sleep -Milliseconds 500
 Write-Host "Move the mouse away and let the taskbar hide. Flashing in $Wait s..."
 Start-Sleep -Seconds $Wait
 
-$ok = [Flasher]::Flash($p.MainWindowHandle, $Count)
+# Say what the flash will meet: it is ignored for the foreground window.
+$h = $p.MainWindowHandle
+if ([Flasher]::GetForegroundWindow() -eq $h) {
+    [void][Flasher]::SetForegroundWindow([Flasher]::GetShellWindow())
+    Start-Sleep -Milliseconds 300
+}
+Write-Host ("Target window 0x{0:X}: minimised {1}, foreground {2}." -f [int64]$h, [Flasher]::IsIconic($h), ([Flasher]::GetForegroundWindow() -eq $h))
+$ok = [Flasher]::Flash($h, $Count)
 Write-Host "FlashWindowEx returned $ok. The taskbar should appear once and hold."

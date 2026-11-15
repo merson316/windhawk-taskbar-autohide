@@ -939,6 +939,7 @@ bool QuickSettingsOpen() {
 // The notification burst in progress; see BurstDecide. Only the unhide hook
 // touches it, on the taskbar's thread.
 BurstState g_burst{0, 0, -1};
+void RevealSecondariesForFlash();
 
 // The last docked rect seen while shown, so unloading can put the taskbar back.
 RECT g_lastDockedRect{};
@@ -1210,6 +1211,7 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
                             ShellSurfaceInForeground())) {
             case BURST_BEGIN:
                 InterlockedExchange64(&g_holdVisibleUntil, g_burst.holdUntil);
+                RevealSecondariesForFlash();
                 break;
             case BURST_DROP:
                 return;
@@ -2547,6 +2549,27 @@ void RevealModSecondaries() {
     for (int i = 0; i < g_recCount; i++) {
         if (ModDriven(&g_recs[i]) && !IsRectEmpty(&g_recs[i].display)) {
             RevealModBar(&g_recs[i]);
+        }
+    }
+}
+
+void UnhideThroughWindows(HWND secondary);
+
+// A flashing button has just brought the primary taskbar up. Off the bottom
+// edge the mod shows and hides the secondary taskbars itself, and it hears of
+// a flash on one of them only through CSecondaryTray::_Unhide, which cannot be
+// hooked on a build without symbols: there, a flash left them hidden. So the
+// primary's flash brings them up as well, once, and the mod hides them again
+// as it hides any secondary nothing keeps up.
+void RevealSecondariesForFlash() {
+    if (CSecondaryTray_Unhide_Original || !BarsHandled()) {
+        return;
+    }
+    for (int i = 0; i < g_recCount; i++) {
+        TaskbarRec* rec = &g_recs[i];
+        if (ModDriven(rec) && !IsRectEmpty(&rec->display)) {
+            UnhideThroughWindows(rec->hwnd);
+            RevealModBar(rec);
         }
     }
 }
