@@ -42,8 +42,10 @@ param(
     [int]$SettleMs = 3000
 )
 
-Add-Type @"
+Add-Type -ReferencedAssemblies System.Drawing @"
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -121,6 +123,7 @@ public class TaskbarDriver {
     public class Sample {
         public double Ms; public int Showing; public long Spill; public int ContentDx, ContentDy;
         public uint Dpi; public bool ContentVisible;
+        public int Drawn;                             // thickness drawn on screen, -1 if not looked at
     }
 
     static IntPtr Aware() { return SetThreadDpiAwarenessContext(new IntPtr(-4)); }
@@ -248,6 +251,74 @@ public class TaskbarDriver {
         } finally { Unaware(old); }
     }
 
+    // ---- what is on screen
+    // A strip of the display where a taskbar shows: 300 px of its length at
+    // the middle, its whole thickness. Compared with the same strip taken
+    // while the taskbar was hidden, line by line across the thickness, it
+    // says how much of the taskbar is drawn, whatever the windows claim.
+    class Strip { public int X, Y, W, H; public bool Vertical; public int[] Hidden; }
+    static Dictionary<long, Strip> strips = new Dictionary<long, Strip>();
+
+    static int[] Grab(Strip st) {
+        using (Bitmap bmp = new Bitmap(st.W, st.H, PixelFormat.Format32bppArgb)) {
+            using (Graphics g = Graphics.FromImage(bmp))
+                g.CopyFromScreen(st.X, st.Y, 0, 0, new Size(st.W, st.H), CopyPixelOperation.SourceCopy);
+            BitmapData d = bmp.LockBits(new Rectangle(0, 0, st.W, st.H), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            int[] px = new int[st.W * st.H];
+            Marshal.Copy(d.Scan0, px, 0, px.Length);
+            bmp.UnlockBits(d);
+            return px;
+        }
+    }
+
+    // Call while the taskbar is hidden: remembers what its display shows then.
+    public static bool Remember(long hwnd) {
+        IntPtr old = Aware();
+        try {
+            List<Monitor> mons = Monitors();
+            uint edge = Edge();
+            Bar b = Measure(new IntPtr(hwnd), "", edge, mons);
+            Monitor m = null;
+            foreach (Monitor x in mons) if (x.Device == b.Home) m = x;
+            if (m == null) return false;
+            Strip st = new Strip();
+            int th = b.Thickness;
+            st.Vertical = edge == 0 || edge == 2;
+            if (st.Vertical) {
+                st.W = th; st.H = Math.Min(300, m.Bottom - m.Top);
+                st.X = edge == 0 ? m.Left : m.Right - th;
+                st.Y = (m.Top + m.Bottom) / 2 - st.H / 2;
+            } else {
+                st.H = th; st.W = Math.Min(300, m.Right - m.Left);
+                st.Y = edge == 1 ? m.Top : m.Bottom - th;
+                st.X = (m.Left + m.Right) / 2 - st.W / 2;
+            }
+            st.Hidden = Grab(st);
+            strips[hwnd] = st;
+            return true;
+        } finally { Unaware(old); }
+    }
+
+    static int Drawn(long hwnd) {
+        Strip st;
+        if (!strips.TryGetValue(hwnd, out st)) return -1;
+        int[] now = Grab(st);
+        int lines = st.Vertical ? st.W : st.H;
+        int across = st.Vertical ? st.H : st.W;
+        int drawn = 0;
+        for (int line = 0; line < lines; line++) {
+            int differ = 0;
+            for (int k = 0; k < across; k++) {
+                int i = st.Vertical ? k * st.W + line : line * st.W + k;
+                int a = now[i], b = st.Hidden[i];
+                int d = Math.Abs(((a >> 16) & 255) - ((b >> 16) & 255)) + Math.Abs(((a >> 8) & 255) - ((b >> 8) & 255)) + Math.Abs((a & 255) - (b & 255));
+                if (d > 24) differ++;
+            }
+            if (differ * 12 > across) drawn++;
+        }
+        return drawn;
+    }
+
     // Watches one taskbar and records every change, until it has shown
     // `target` thickness for `stableMs`, or `maxMs` has passed.
     public static List<Sample> Trace(long hwnd, int target, int tolerance, int stableMs, int maxMs) {
@@ -263,15 +334,16 @@ public class TaskbarDriver {
             try {
             while (sw.Elapsed.TotalMilliseconds < maxMs) {
                 Bar b = Measure(h, "", edge, mons);
+                int drawn = Drawn(hwnd);
                 double now = sw.Elapsed.TotalMilliseconds;
                 Sample last = list.Count > 0 ? list[list.Count - 1] : null;
                 if (last == null || last.Showing != b.Showing || last.Spill != b.Spill ||
                     last.ContentDx != b.ContentDx || last.ContentDy != b.ContentDy ||
-                    last.Dpi != b.Dpi || last.ContentVisible != b.ContentVisible) {
+                    last.Dpi != b.Dpi || last.ContentVisible != b.ContentVisible || last.Drawn != drawn) {
                     Sample s = new Sample();
                     s.Ms = now; s.Showing = b.Showing; s.Spill = b.Spill;
                     s.ContentDx = b.ContentDx; s.ContentDy = b.ContentDy;
-                    s.Dpi = b.Dpi; s.ContentVisible = b.ContentVisible;
+                    s.Dpi = b.Dpi; s.ContentVisible = b.ContentVisible; s.Drawn = drawn;
                     list.Add(s);
                 }
                 if (Math.Abs(b.Showing - target) <= tolerance) {
@@ -449,7 +521,26 @@ function Judge-Trace($name, $trace, $from, $to, $homeDpi) {
         if ($jump -gt $dist * 0.6) { $faults += "jumped $jump of $dist px in one step (not animated)" }
         if ($ms -gt 800) { $faults += "took $ms ms" }
     }
-    $summary = "$from->$($last.Showing) px in $ms ms, $steps steps, largest $jump px"
+    # What was drawn, where the trace looked at the screen.
+    $drawnNote = ""
+    if ($last.Drawn -ge 0) {
+        $half = [int]($dist / 2)
+        $peak = ($trace | Measure-Object -Property Drawn -Maximum).Maximum
+        if ($dir -gt 0) {
+            if ($last.Drawn -lt $half) { $faults += "the window is in view but only $($last.Drawn) px of taskbar is drawn" }
+        } elseif ($dist -gt 8) {
+            if ($peak -lt $half) { $faults += "nothing was drawn to hide (at most $peak px)" }
+            else {
+                # Gone from the screen while the window still had most of the way to go.
+                $gone = $trace | Where-Object { $_.Drawn -le 2 -and $_.Showing -gt $dist * 0.6 } | Select-Object -First 1
+                if ($gone) { $faults += "vanished from the screen with $($gone.Showing) px of window still in view (not a slide)" }
+            }
+            if ($last.Drawn -gt 4) { $faults += "$($last.Drawn) px still drawn at the end" }
+        }
+        $levels = @($trace | ForEach-Object { $_.Drawn } | Select-Object -Unique).Count
+        $drawnNote = ", drawn $($trace[0].Drawn)->$($last.Drawn) px in $levels levels"
+    }
+    $summary = "$from->$($last.Showing) px in $ms ms, $steps steps, largest $jump px$drawnNote"
     if ($faults.Count) { Result 'FAIL' $name ($summary + ": " + ($faults -join "; ")) }
     else { Result 'PASS' $name $summary }
 }
@@ -498,6 +589,10 @@ function Test-Edge($edge, $changed) {
             Guard
             $start = $t[0].Showing
             if (Wanted "hide") { Judge-Trace "$en/hide/$name (settle)" $t $start 0 $b.HomeDpi }
+            # Hidden now: what the display shows without it, for the looks
+            # at the screen that follow.
+            Start-Sleep -Milliseconds 300
+            if ($t[$t.Count - 1].Showing -le 2) { [void][TaskbarDriver]::Remember($b.Hwnd) }
 
             Touch-Edge $m $edge
             $t = [TaskbarDriver]::Trace($b.Hwnd, $b.Thickness, 0, 400, 4000)

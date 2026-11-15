@@ -1363,6 +1363,8 @@ struct TaskbarRec;
 TaskbarRec* RecFor(HWND hwnd);
 bool BarsHandled();
 void SlideHint(HWND hwnd, bool show);
+bool SlideBarBefore(HWND hwnd, bool show);
+void SlideBarAfter(HWND hwnd);
 
 void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                                     HMONITOR monitor, bool show, bool animate) {
@@ -1381,8 +1383,12 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                L"%d -> not animated by Windows",
                hWnd, rect ? rect->left : 0, rect ? rect->top : 0,
                rect ? rect->right : 0, rect ? rect->bottom : 0, show, animate);
+        const bool slid = SlideBarBefore(hWnd, show);
         TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, false);
         SlideHint(hWnd, show);
+        if (slid) {
+            SlideBarAfter(hWnd);
+        }
         return;
     }
 
@@ -1695,6 +1701,12 @@ struct TaskbarRec {
     // A secondary off the bottom edge, which the mod hides and reveals itself.
     LONG64 lastKeptUp;      // last moment something was keeping it up
     int leaveTicks;
+
+    // The mod is setting this window's region (see BarPosChanging).
+    bool ownRegion;
+    // Put the placement on again at the next tick: Windows replaced the
+    // region.
+    bool reapply;
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -2022,6 +2034,7 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
     }
     MoveBarContent(rec, p.contentDx, p.contentDy);
 
+    rec->ownRegion = true;
     if (!p.clipped) {
         if (rec->clipped) {
             SetWindowRgn(rec->hwnd, nullptr, TRUE);
@@ -2037,7 +2050,7 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
             DeleteObject(rgn);
         }
     }
-
+    rec->ownRegion = false;
 }
 
 // Give a taskbar back to Windows: stop its animation, remove its region, and
@@ -2191,6 +2204,13 @@ LRESULT TickBars() {
     for (int i = 0; i < g_recCount; i++) {
         TaskbarRec* rec = &g_recs[i];
         if (!rec->animating) {
+            if (rec->reapply) {
+                rec->reapply = false;
+                if (rec->placed && !IsRectEmpty(&rec->display)) {
+                    rec->clipped = false;
+                    ApplyPlacement(rec, rec->hiddenNow);
+                }
+            }
             continue;
         }
         if (now >= rec->nextStepMs - 0.5) {
@@ -2213,6 +2233,75 @@ LRESULT TickBars() {
     }
     const double wait = soonest - NowMs();
     return wait < 0.2 ? 200 : (LRESULT)(wait * 1000.0);
+}
+
+// On the bottom edge Windows hides and shows the taskbars, through
+// TrayUI::SlideWindow, and right after a hide it does two things: it sets a
+// region of its own on the window and it makes the taskbar's content window
+// invisible. An animation the mod started from Windows' request therefore
+// ran on a taskbar that already showed nothing (seen in 1 ms traces: content
+// invisible for the whole of the hide, and the taskbar cut to 2 px for a
+// moment before it). Windows' own slide is a loop that blocks this thread
+// until the window has arrived; the mod does the same, here, before Windows
+// goes on. Other taskbars that are animating keep stepping from this loop.
+void SlideBarNow(TaskbarRec* rec, int hiddenTarget) {
+    rec->hiddenAsked = hiddenTarget;
+    if (rec->hiddenNow == hiddenTarget && !rec->animating) {
+        return;
+    }
+    StartBarAnimation(rec, hiddenTarget);
+    HANDLE timer = CreateWaitableTimerExW(
+        nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
+        TIMER_ALL_ACCESS);
+    const double giveUp = NowMs() + rec->durationMs + 500;
+    while (rec->animating && NowMs() < giveUp) {
+        const LRESULT waitUs = TickBars();
+        if (!rec->animating || !waitUs) {
+            break;
+        }
+        LARGE_INTEGER due;
+        due.QuadPart = -(LONGLONG)waitUs * 10;
+        if (timer && SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+            WaitForSingleObject(timer, 50);
+        } else {
+            Sleep(1);
+        }
+    }
+    if (timer) {
+        CloseHandle(timer);
+    }
+    if (rec->animating) {
+        ApplyPlacement(rec, hiddenTarget);
+        rec->animating = false;
+    }
+    // The pacing thread gave up on this thread while it was busy here.
+    if (g_barThread) {
+        SetEvent(g_barWake);
+    }
+}
+
+// Before Windows' unanimated slide of a taskbar on the bottom edge: do the
+// slide. Returns whether it did.
+bool SlideBarBefore(HWND hwnd, bool show) {
+    TaskbarRec* rec = RecFor(hwnd);
+    if (!rec || rec->edge != ABE_BOTTOM || !rec->placed ||
+        IsRectEmpty(&rec->display)) {
+        return false;
+    }
+    // Windows may have put its own region on since the mod's last step.
+    rec->clipped = false;
+    ApplyPlacement(rec, rec->hiddenNow);
+    SlideBarNow(rec, show ? 0 : HiddenTargetFor(rec));
+    return true;
+}
+
+// After it: Windows may have set its region again.
+void SlideBarAfter(HWND hwnd) {
+    TaskbarRec* rec = RecFor(hwnd);
+    if (rec && rec->placed && !IsRectEmpty(&rec->display) && !rec->animating) {
+        rec->clipped = false;
+        ApplyPlacement(rec, rec->hiddenNow);
+    }
 }
 
 // WM_WINDOWPOSCHANGING on a taskbar the mod animates, after the taskbar's own
@@ -2249,6 +2338,13 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
         // Windows wants, and reading it as "shown" revealed a taskbar the
         // moment Windows hid it. (Seen on the bottom edge: the upper display's
         // taskbar asked to hide, then this 2 ms later, and never hid.)
+        //
+        // It is what a change of region looks like from here, and Windows
+        // sets a region of its own on a hidden taskbar: put the mod's back.
+        if (!rec->ownRegion && !rec->ownMove) {
+            rec->reapply = true;
+            PostMessageW(g_trayWnd, g_barTickMsg, 0, 0);
+        }
         return;
     }
     const bool noSize = (wp->flags & SWP_NOSIZE) != 0;
