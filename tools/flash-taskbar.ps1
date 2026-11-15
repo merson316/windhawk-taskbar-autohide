@@ -48,9 +48,24 @@ if ($Process) {
     if (-not $p) { Write-Host "No window found for process '$Process'."; exit 1 }
     Write-Host "Flashing existing window: $($p.ProcessName)"
 } else {
-    $p = Start-Process notepad -PassThru
-    Start-Sleep -Seconds 2
-    $p.Refresh()
+    # Windows 11's Notepad is a packaged app: the process started here hands
+    # over to another and exits, so its own window handle stays empty. Look
+    # for the Notepad window that appears instead.
+    $before = @(Get-Process -Name Notepad -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+    Start-Process notepad
+    $p = $null
+    for ($i = 0; $i -lt 50 -and -not $p; $i++) {
+        Start-Sleep -Milliseconds 200
+        $p = Get-Process -Name Notepad -ErrorAction SilentlyContinue |
+             Where-Object { $_.MainWindowHandle -ne 0 -and $before -notcontains $_.Id } |
+             Select-Object -First 1
+    }
+    if (-not $p) {
+        # An already running Notepad may have taken the new window as a tab.
+        $p = Get-Process -Name Notepad -ErrorAction SilentlyContinue |
+             Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    }
+    if (-not $p) { Write-Host "Notepad did not open a window."; exit 1 }
     Write-Host "Started Notepad."
 }
 
