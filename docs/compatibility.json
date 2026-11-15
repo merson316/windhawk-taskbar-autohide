@@ -32,5 +32,13 @@
     "tested_with": [
       "1.18.0"
     ]
+  },
+  {
+    "os_build": "26300.10066",
+    "taskbar": "10.0.26100.10066",
+    "support": "built-in",
+    "tested_with": [
+      "2.0.0"
+    ]
   }
 ]
