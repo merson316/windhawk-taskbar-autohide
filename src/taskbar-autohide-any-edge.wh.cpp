@@ -2197,9 +2197,32 @@ void RefreshRecords() {
     // bring it onto its own display now, not at the next reveal.
     if (BarsHandled()) {
         for (int i = 0; i < g_recCount; i++) {
-            if (!g_recs[i].placed && !IsRectEmpty(&g_recs[i].display)) {
-                ApplyPlacement(&g_recs[i], g_recs[i].hiddenNow);
+            TaskbarRec* rec = &g_recs[i];
+            if (rec->placed || IsRectEmpty(&rec->display)) {
+                continue;
             }
+            if (rec->held && rec->hiddenNow > 0) {
+                // Parked by Windows, it has the neighbouring display's DPI,
+                // and moving it to the held position alone did not change
+                // that (measured: it stayed at the neighbour's DPI until its
+                // first reveal, which then drew the icons at the wrong size).
+                // Passing through the shown position, wholly on its own
+                // display, makes Windows settle the DPI now. An empty region
+                // keeps that step off the screen.
+                HRGN none = CreateRectRgn(0, 0, 0, 0);
+                if (none && !SetWindowRgn(rec->hwnd, none, TRUE)) {
+                    DeleteObject(none);
+                }
+                rec->clipped = true;
+                rec->region = {0, 0, 0, 0};
+                rec->ownMove = true;
+                SetWindowPos(rec->hwnd, nullptr, rec->shown.x, rec->shown.y, 0,
+                             0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                rec->ownMove = false;
+                Wh_Log(L"taskbar %p taken over while hidden: dpi now %u",
+                       rec->hwnd, GetDpiForWindow(rec->hwnd));
+            }
+            ApplyPlacement(rec, rec->hiddenNow);
         }
     }
 }
