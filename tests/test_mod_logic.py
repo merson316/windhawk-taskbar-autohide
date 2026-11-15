@@ -71,6 +71,10 @@ int main(int argc, char** argv) {
         printf("%%d\n", StepsPerSecond((int)a[0], (int)a[1]));
         return 0;
     }
+    if (!strcmp(cmd, "panel")) {   // visible cloaked onDisplay
+        printf("%%d\n", PanelCountsAsOpen(a[0] != 0, a[1] != 0, a[2] != 0) ? 1 : 0);
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -200,3 +204,11 @@ def test_strip_scales_with_dpi(logic):
 def test_dwell_and_rate(logic):
     assert [logic('dwell', v)[0] for v in (0, 150, 400)] == [150, 150, 400]
     assert [logic('fps', *v)[0] for v in ((60, 90), (240, 90), (240, 240), (0, 90))] == [60, 90, 240, 60]
+
+
+# ---- Quick Settings (#10) ----------------------------------------------------
+
+def test_panel_open_only_when_visible_uncloaked_and_on_a_display(logic):
+    # visible, cloaked, on a display
+    cases = [(v, c, d) for v in (0, 1) for c in (0, 1) for d in (0, 1)]
+    assert [logic('panel', *case)[0] for case in cases] == [0, 0, 0, 0, 0, 1, 0, 0]

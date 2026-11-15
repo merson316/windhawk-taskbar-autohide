@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lwtsapi32 -lwinhttp
+// @compilerOptions -lcomctl32 -lwtsapi32 -lwinhttp -ldwmapi
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -209,6 +209,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
 #include <initializer_list>
 
+#include <dwmapi.h>
 #include <shellapi.h>
 #include <winhttp.h>
 #include <wtsapi32.h>
@@ -400,6 +401,15 @@ BurstVerdict BurstDecide(BurstState* s, LONG64 now, int request, int holdMs,
         return BURST_DROP;
     }
     return BURST_PASS;
+}
+
+// Whether a Quick Settings window counts as open. Its window outlives the
+// panel: measured on 26100.9974, it stays where it was shown and only stops
+// being visible when dismissed, by Esc, a click elsewhere or Win+A alike.
+// Cloaked and off every display are the other ways a shell window is "there"
+// without being on screen.
+bool PanelCountsAsOpen(bool visible, bool cloaked, bool onDisplay) {
+    return visible && !cloaked && onDisplay;
 }
 
 // Whether the hide delay has run out: `lastKeptUp` is the last moment
@@ -700,6 +710,7 @@ bool ForegroundIsShellHost(DWORD pid) {
                 L"StartMenuExperienceHost.exe",
                 L"SearchHost.exe",
                 L"ShellExperienceHost.exe",
+                L"ShellHost.exe",   // hosts Quick Settings on current builds
             };
             for (PCWSTR host : kShellHosts) {
                 if (lstrcmpiW(name, host) == 0) {
@@ -780,6 +791,23 @@ bool ShellSurfaceInForeground() {
     }
 
     return ForegroundIsShellHost(pid);
+}
+
+// Whether a Quick Settings panel is open. The taskbar must stay up for as long
+// as it is: the panel is anchored to the taskbar, and when focus moves to a
+// popup of another process the foreground test above no longer sees it.
+bool QuickSettingsOpen() {
+    HWND w = nullptr;
+    while ((w = FindWindowExW(nullptr, w, L"ControlCenterWindow", nullptr))) {
+        BOOL cloaked = FALSE;
+        DwmGetWindowAttribute(w, DWMWA_CLOAKED, &cloaked, sizeof(cloaked));
+        if (PanelCountsAsOpen(IsWindowVisible(w), cloaked,
+                              MonitorFromWindow(w, MONITOR_DEFAULTTONULL) !=
+                                  nullptr)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // The notification burst in progress; see BurstDecide. Only the unhide hook
@@ -1124,9 +1152,12 @@ void ApplyDurationOverrides(void* pThis) {
 using CTaskListWnd_PermitAutoHide_t = int(WINAPI*)(void* pThis);
 CTaskListWnd_PermitAutoHide_t CTaskListWnd_PermitAutoHide_Original;
 int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
+    // With Quick Settings open the answer is Windows' own: forcing the hide
+    // would pull the taskbar out from under the panel.
     if (!g_fatalReason && g_settings.notificationHoldMs > 0 &&
         (LONG64)GetTickCount64() >=
-            InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
+            InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0) &&
+        !QuickSettingsOpen()) {
         return TRUE;   // hold elapsed: allow hiding even if Windows objects
     }
     return CTaskListWnd_PermitAutoHide_Original(pThis);
@@ -1580,7 +1611,7 @@ void WatcherTick() {
     const LONG64 tick = (LONG64)GetTickCount64();
 
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
-        ShellSurfaceInForeground()) {
+        ShellSurfaceInForeground() || QuickSettingsOpen()) {
         g_leaveTicks = 0;
         g_lastKeptUp = tick;
         return;

@@ -115,6 +115,13 @@ to 0.5:
 - Windows' own reasons to keep a taskbar up still work on a held taskbar: it
   stayed up while the pointer was over a thumbnail preview.
 
+Quick Settings (`tools/measure-taskbars.ps1 -Class ControlCenterWindow`,
+seven open-and-close cycles): there is one `ControlCenterWindow`. Before its
+first use it is not visible with an empty rectangle. Open, it is visible at
+(3056,0,3440,1392) on the primary. Dismissed by Esc, by a click elsewhere or
+by Win+A, it keeps that rectangle and stops being visible. It was never
+cloaked. So "visible, not cloaked, on a display" tells open from dismissed.
+
 Not tested: left, right and top edges with a display beyond them; three or
 more displays; edges that only partly face another display; Start, Search and
 Quick Settings opened from a held taskbar; a held taskbar together with the
