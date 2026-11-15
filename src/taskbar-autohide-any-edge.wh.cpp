@@ -874,10 +874,46 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
 #define SLIDE_HIDE_DURATION_OFFSET 0x168
 #define SLIDE_SHOW_DURATION_OFFSET 0x16c
 
-const size_t kShowDurSigOffset = 0xA6;
-const BYTE kShowDurSig[] = {0x44, 0x8B, 0xB3, 0x6C, 0x01, 0x00, 0x00};
-const size_t kHideDurSigOffset = 0x123;
-const BYTE kHideDurSig[] = {0x44, 0x8B, 0xB3, 0x68, 0x01, 0x00, 0x00};
+// True if the start of SlideWindow loads both durations from this, each
+// exactly once, as mov r32,[rbx+disp32] into one register. Where the two loads
+// sit and which register takes them is the compiler's choice: up to 9974 they
+// were at +0xA6 and +0x123 into r14d, in 10066 at +0xFF and +0x108 into r15d.
+// The scan stops at the padding after the function, so a shorter function is
+// never credited with its neighbour's loads. tools/matcher/scan.py ports this
+// line for line.
+bool ScanForDurationLoads(const BYTE* fn) {
+    size_t length = 0x200;
+    for (size_t i = 0; i + 3 < 0x200; i++) {
+        if (fn[i] == 0xCC && fn[i + 1] == 0xCC && fn[i + 2] == 0xCC &&
+            fn[i + 3] == 0xCC) {
+            length = i;
+            break;
+        }
+    }
+
+    int show = -1, hide = -1;
+    int shows = 0, hides = 0;
+    for (size_t i = 0; i + 5 < length; i++) {
+        // 8B /r with mod=10, rm=011: mov r32,[rbx+disp32].
+        if (fn[i] != 0x8B || (fn[i + 1] & 0xC7) != 0x83) {
+            continue;
+        }
+        DWORD disp;
+        memcpy(&disp, fn + i + 2, sizeof(disp));
+        int reg = (fn[i + 1] >> 3) & 7;
+        if (i > 0 && fn[i - 1] == 0x44) {  // REX.R: r8d-r15d
+            reg += 8;
+        }
+        if (disp == SLIDE_SHOW_DURATION_OFFSET) {
+            show = reg;
+            shows++;
+        } else if (disp == SLIDE_HIDE_DURATION_OFFSET) {
+            hide = reg;
+            hides++;
+        }
+    }
+    return shows == 1 && hides == 1 && show == hide;
+}
 
 bool g_durationOffsetsVerified = false;
 
@@ -2156,11 +2192,8 @@ PCWSTR SetUpHooks() {
         }
     }
 
-    const BYTE* slide = (const BYTE*)TrayUI_SlideWindow_Address;
     g_durationOffsetsVerified =
-        memcmp(slide + kShowDurSigOffset, kShowDurSig, sizeof(kShowDurSig)) ==
-            0 &&
-        memcmp(slide + kHideDurSigOffset, kHideDurSig, sizeof(kHideDurSig)) == 0;
+        ScanForDurationLoads((const BYTE*)TrayUI_SlideWindow_Address);
     if (!g_durationOffsetsVerified) {
         Wh_Log(L"slide duration offsets unverified, the duration settings have "
                L"no effect");

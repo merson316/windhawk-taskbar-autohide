@@ -37,3 +37,39 @@ def scan_for_offsets(fn, layouts):
     if edge < 8 or edge > 0x1000 or flags < 8:
         return None
     return found
+
+
+SLIDE_SCAN_LENGTH = 0x200
+SHOW_DURATION_OFFSET = 0x16C
+HIDE_DURATION_OFFSET = 0x168
+
+
+def scan_for_durations(fn):
+    """A line-for-line port of the mod's ScanForDurationLoads: True if the
+    first 0x200 bytes of `fn` load this+0x16C and this+0x168 exactly once
+    each, as `mov r32,[rbx+disp32]`, into the same register, before the
+    padding that ends the function. Where the loads sit and which register
+    takes them differ between builds."""
+    length = min(len(fn), SLIDE_SCAN_LENGTH)
+    for i in range(length - 3):
+        if fn[i:i + 4] == b'\xCC\xCC\xCC\xCC':
+            length = i
+            break
+
+    show = hide = None
+    shows = hides = 0
+    for i in range(length - 5):
+        # 8B /r with mod=10, rm=011: mov r32,[rbx+disp32].
+        if fn[i] != 0x8B or fn[i + 1] & 0xC7 != 0x83:
+            continue
+        disp = struct.unpack_from('<I', fn, i + 2)[0]
+        reg = (fn[i + 1] >> 3) & 7
+        if i > 0 and fn[i - 1] == 0x44:   # REX.R: r8d-r15d
+            reg += 8
+        if disp == SHOW_DURATION_OFFSET:
+            show = reg
+            shows += 1
+        elif disp == HIDE_DURATION_OFFSET:
+            hide = reg
+            hides += 1
+    return shows == 1 and hides == 1 and show == hide
