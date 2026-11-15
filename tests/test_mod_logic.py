@@ -98,6 +98,10 @@ int main(int argc, char** argv) {
         printf("%%d\n", HeldStripPx((int)a[0]));
         return 0;
     }
+    if (!strcmp(cmd, "offwarn")) {   // offSince now waitMs
+        printf("%%d\n", AutoHideOffLongEnough(a[0], a[1], (int)a[2]) ? 1 : 0);
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -286,3 +290,11 @@ def test_a_position_on_another_display_is_not_this_taskbars(logic):
     old_display, new_bar = (988, -2560, 2428, 0), (960, -2, 2400, 58)
     assert logic('belongs', *old_display, *new_bar, 3) == [0]
     assert logic('belongs', 960, -2560, 2400, 0, *new_bar, 3) == [1]
+
+
+def test_auto_hide_off_warning_waits_for_it_to_stay_off(logic):
+    # offwarn offSince now waitMs. Moving the taskbar to another edge reports
+    # auto-hide off for a moment; only a lasting "off" is worth a warning.
+    assert logic('offwarn', 0, 100000, 15000) == [0]        # on
+    assert logic('offwarn', 90000, 100000, 15000) == [0]    # off for 10 s
+    assert logic('offwarn', 85000, 100000, 15000) == [1]    # off for 15 s

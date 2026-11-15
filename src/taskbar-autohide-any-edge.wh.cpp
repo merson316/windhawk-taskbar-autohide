@@ -264,7 +264,7 @@ PVOID volatile g_symbolRequest = nullptr;
 // auto-hide toggle is off. That is the most common reason the mod appears to do
 // nothing, and Windows cannot show it: off-bottom, the Settings toggle reads
 // back through the same masked GetAutoHideFlags this mod unmasks.
-volatile LONG g_autoHideOff = 0;
+volatile LONG64 g_autoHideOffSince = 0;   // tick it was first seen off; 0 = on
 volatile LONG g_warned = 0;
 
 #define LEAVE_TICKS    2
@@ -410,6 +410,13 @@ BurstVerdict BurstDecide(BurstState* s, LONG64 now, int request, int holdMs,
 // without being on screen.
 bool PanelCountsAsOpen(bool visible, bool cloaked, bool onDisplay) {
     return visible && !cloaked && onDisplay;
+}
+
+// Whether to warn that auto-hide is off in Windows: only once it has stayed
+// off for `waitMs`. `offSince` is when it was first seen off, 0 while it is
+// on. Moving the taskbar to another edge reports it off for a moment.
+bool AutoHideOffLongEnough(LONG64 offSince, LONG64 now, int waitMs) {
+    return offSince != 0 && now - offSince >= waitMs;
 }
 
 // Whether the hide delay has run out: `lastKeptUp` is the last moment
@@ -979,10 +986,13 @@ void LogStateOnce(UINT edge, UINT stored) {
 }
 
 void PublishAutoHideState(UINT edge, UINT stored) {
-    InterlockedExchange(&g_autoHideOff, (edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-                                         !(stored & ABS_AUTOHIDE))
-                                            ? 1
-                                            : 0);
+    if (edge < ABE_BOTTOM && EdgeEnabled(edge) && !(stored & ABS_AUTOHIDE)) {
+        // Keep the first moment it was seen off.
+        InterlockedCompareExchange64(&g_autoHideOffSince,
+                                     (LONG64)GetTickCount64(), 0);
+    } else {
+        InterlockedExchange64(&g_autoHideOffSince, 0);
+    }
 }
 
 
@@ -2901,7 +2911,10 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
                 WarnNotRunning(
                     L"The mod could not attach to the taskbar window.");
             } else if (up > WARN_AUTOHIDE_OFF_MS &&
-                       InterlockedCompareExchange(&g_autoHideOff, 0, 0) &&
+                       AutoHideOffLongEnough(
+                           InterlockedCompareExchange64(&g_autoHideOffSince, 0,
+                                                        0),
+                           (LONG64)GetTickCount64(), WARN_AUTOHIDE_OFF_MS) &&
                        ThisProcessOwnsTaskbar()) {
                 WarnOnce(L"Auto-hide is turned off in Windows, so there is "
                          L"nothing for this mod to do. Turn it on under "
