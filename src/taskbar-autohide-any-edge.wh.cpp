@@ -1255,10 +1255,19 @@ CTaskListWnd_PermitAutoHide_t CTaskListWnd_PermitAutoHide_Original;
 bool AnyBurstOverridesVeto(LONG64 now);   // with the secondary bursts, below
 
 int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
-    // Only for a flashing button whose hold is over. Windows' other reasons to
-    // refuse (an open jump list or task-list flyout) stand, and so does its
-    // answer while Quick Settings is open: forcing the hide would pull the
-    // taskbar out from under the panel.
+    // While Quick Settings is open the taskbar stays up, on every edge. On
+    // the bottom edge Windows decides the hiding and, left alone, hides the
+    // taskbar under an open panel once the pointer has left (measured on
+    // 10.0.26100.10066 without the mod). Off the bottom edge the mod's own
+    // watcher already holds it; this makes the bottom the same. Refusing here
+    // is how Windows itself holds the taskbar for an open jump list.
+    if (!g_fatalReason && QuickSettingsOpen()) {
+        return FALSE;
+    }
+
+    // Otherwise permit only for a flashing button whose hold is over.
+    // Windows' other reasons to refuse (an open jump list or task-list
+    // flyout) stand.
     if (!g_fatalReason && g_settings.notificationHoldMs > 0 &&
         AnyBurstOverridesVeto((LONG64)GetTickCount64()) &&
         !QuickSettingsOpen()) {
