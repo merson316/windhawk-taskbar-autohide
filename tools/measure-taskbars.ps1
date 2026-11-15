@@ -13,6 +13,9 @@
 #   .\tools\measure-taskbars.ps1 -Watch 30       30 s, a line whenever a taskbar
 #                                                moves, changes DPI or visibility
 #   .\tools\measure-taskbars.ps1 -Watch 30 -Out measure.jsonl
+#   .\tools\measure-taskbars.ps1 -Class ControlCenterWindow -Watch 30
+#                                                also every top-level window of
+#                                                that class (Quick Settings)
 #
 # For the experiment:
 #   1. Settings > Personalisation > Taskbar > Taskbar behaviours: turn on
@@ -28,7 +31,8 @@
 param(
     [int]$Watch = 0,
     [int]$IntervalMs = 50,
-    [string]$Out = ""
+    [string]$Out = "",
+    [string]$Class = ""
 )
 
 Add-Type @"
@@ -88,7 +92,9 @@ public class TaskbarMeasure {
         return (w > 0 && h > 0) ? w * h : 0;
     }
 
-    public static Snapshot Take() {
+    public static Snapshot Take() { return Take(null); }
+
+    public static Snapshot Take(string extraClass) {
         // Per-monitor aware v2 for this thread, so every rectangle is in
         // physical pixels whatever the PowerShell host declares.
         IntPtr old = SetThreadDpiAwarenessContext(new IntPtr(-4));
@@ -110,7 +116,9 @@ public class TaskbarMeasure {
                 return true;
             }, IntPtr.Zero);
 
-            foreach (string cls in new string[] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" }) {
+            List<string> classes = new List<string>(new string[] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" });
+            if (!String.IsNullOrEmpty(extraClass)) classes.Add(extraClass);
+            foreach (string cls in classes) {
                 IntPtr w = IntPtr.Zero;
                 while ((w = FindWindowExW(IntPtr.Zero, w, cls, null)) != IntPtr.Zero) {
                     Taskbar t = new Taskbar();
@@ -175,7 +183,7 @@ function Get-Context {
 }
 
 $ctx = Get-Context
-$first = [TaskbarMeasure]::Take()
+$first = [TaskbarMeasure]::Take($Class)
 
 "taskbar.dll {0}   mod loaded in Explorer: {1}   auto-hide: {2}   taskbar on all displays: {3}" -f `
     $ctx.taskbarDll, $ctx.modLoaded, $first.AutoHide, ($ctx.allDisplays -eq 1)
@@ -185,7 +193,7 @@ foreach ($m in $first.Monitors) {
     "  {0,-10} {1}  dpi {2} ({3}%){4}" -f $m.Device, (Format-Rect $m), $m.Dpi, [int]($m.Dpi * 100 / 96), $(if ($m.Primary) { "  primary" } else { "" })
 }
 ""
-"Taskbars:"
+$(if ($Class) { "Taskbars and $Class windows:" } else { "Taskbars:" })
 foreach ($t in $first.Taskbars) { "  " + (Format-Taskbar $t) }
 if (-not $first.Taskbars) { "  (none found)" }
 
@@ -204,7 +212,7 @@ foreach ($t in $first.Taskbars) { $last[$t.Hwnd] = Format-Taskbar $t }
 $start = [Diagnostics.Stopwatch]::StartNew()
 while ($start.Elapsed.TotalSeconds -lt $Watch) {
     Start-Sleep -Milliseconds $IntervalMs
-    $s = [TaskbarMeasure]::Take()
+    $s = [TaskbarMeasure]::Take($Class)
     foreach ($t in $s.Taskbars) {
         $line = Format-Taskbar $t
         if ($last[$t.Hwnd] -ne $line) {
