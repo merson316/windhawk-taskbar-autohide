@@ -1304,6 +1304,7 @@ double g_slideFrameStart = 0.0;
 struct TaskbarRec;
 TaskbarRec* RecFor(HWND hwnd);
 bool BarsHandled();
+void SlideHint(HWND hwnd, bool show);
 
 void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                                     HMONITOR monitor, bool show, bool animate) {
@@ -1323,6 +1324,7 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                hWnd, rect ? rect->left : 0, rect ? rect->top : 0,
                rect ? rect->right : 0, rect ? rect->bottom : 0, show, animate);
         TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, false);
+        SlideHint(hWnd, show);
         return;
     }
 
@@ -1619,8 +1621,9 @@ struct TaskbarRec {
     ULONGLONG revealSent;   // when Windows was last asked to reveal it
     int revealStage;        // 0 idle, 1 hit test sent
 
-    // A secondary off the bottom edge has been prompted to start hiding.
-    bool prompted;
+    // A secondary off the bottom edge, which the mod hides and reveals itself.
+    LONG64 lastKeptUp;      // last moment something was keeping it up
+    int leaveTicks;
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -1820,6 +1823,39 @@ int HiddenTargetFor(const TaskbarRec* rec) {
                         g_settings.hideFully && rec->primary &&
                             rec->edge < ABE_BOTTOM,
                         rec->held);
+}
+
+// Off the bottom edge Windows hides a secondary taskbar only after the pointer
+// has been to it, and one that was simply showing when the mod became active
+// never hides at all (prompting it with a hit test did nothing). So there the
+// mod decides for itself when a secondary hides and reveals, as it does for
+// the primary, and takes Windows' own slides for it as hints.
+bool ModDriven(const TaskbarRec* rec) {
+    return !rec->primary && rec->edge < ABE_BOTTOM;
+}
+
+void StartBarAnimation(TaskbarRec* rec, int hiddenTarget);
+
+void RevealModBar(TaskbarRec* rec) {
+    rec->lastKeptUp = (LONG64)GetTickCount64();
+    rec->leaveTicks = 0;
+    rec->dwellStart = 0;
+    if (rec->hiddenAsked != 0 || !rec->placed) {
+        rec->hiddenAsked = 0;
+        rec->placed = true;
+        StartBarAnimation(rec, 0);
+    }
+}
+
+void HideModBar(TaskbarRec* rec) {
+    const int target = HiddenTargetFor(rec);
+    rec->leaveTicks = 0;
+    rec->dwellStart = 0;
+    if (rec->hiddenAsked != target || !rec->placed) {
+        rec->hiddenAsked = target;
+        rec->placed = true;
+        StartBarAnimation(rec, target);
+    }
 }
 
 // Move a taskbar's window, marking the move as the mod's own so the handler
@@ -2099,8 +2135,9 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
     rec->size = {w, h};
 
     // Windows says only "shown" or "hidden"; how much to hide is the mod's
-    // own answer.
-    const int target = off == 0 ? 0 : HiddenTargetFor(rec);
+    // own answer. For a taskbar the mod drives itself, so is whether.
+    const int target = ModDriven(rec) ? rec->hiddenAsked
+                                      : off == 0 ? 0 : HiddenTargetFor(rec);
     if (target != rec->hiddenAsked || !rec->placed) {
         rec->hiddenAsked = target;
         rec->dwellStart = 0;
@@ -2141,6 +2178,110 @@ void RevealHeld(TaskbarRec* rec, POINT pointer) {
     SendMessageW(rec->hwnd, WM_NCHITTEST, 0, MAKELPARAM(in.x, in.y));
 }
 
+// Windows slid a taskbar the mod drives itself: take it as a hint. A reveal
+// (a flashing button, the pointer on its sliver) is always followed; a hide is
+// too, which keeps what Windows believes in step with what is on screen.
+void SlideHint(HWND hwnd, bool show) {
+    TaskbarRec* rec = RecFor(hwnd);
+    if (!rec || !ModDriven(rec)) {
+        return;
+    }
+    if (show) {
+        RevealModBar(rec);
+    } else {
+        HideModBar(rec);
+    }
+}
+
+// From the watch tick, off the bottom edge: hide each secondary taskbar when
+// nothing keeps it up, and reveal it when the pointer rests in its strip.
+// The per-taskbar form of what WatcherTick does for the primary.
+void WatchSecondaries() {
+    if (!BarsHandled() || !g_trayUI || !g_offsetsVerified) {
+        return;
+    }
+    const bool autoHide =
+        (*(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset) & ABS_AUTOHIDE) != 0;
+    POINT pt{};
+    if (!GetCursorPos(&pt)) {
+        return;
+    }
+    const LONG64 now = (LONG64)GetTickCount64();
+
+    for (int i = 0; i < g_recCount; i++) {
+        TaskbarRec* rec = &g_recs[i];
+        if (!ModDriven(rec) || IsRectEmpty(&rec->display)) {
+            continue;
+        }
+        const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
+                       rec->shown.y + rec->size.cy};
+
+        if (!autoHide) {
+            if (rec->hiddenAsked > 0) {
+                RevealModBar(rec);
+            }
+            continue;
+        }
+
+        if (rec->hiddenAsked > 0) {
+            const RECT strip =
+                RevealStrip(rec->display, bar, rec->edge,
+                            rec->held ? HeldStripPx(g_settings.revealTolerance)
+                                      : g_settings.revealTolerance,
+                            GetDpiForWindow(rec->hwnd));
+            if (!PtInRect(&strip, pt)) {
+                rec->dwellStart = 0;
+                continue;
+            }
+            if (!rec->dwellStart) {
+                rec->dwellStart = (ULONGLONG)now;
+            }
+            const int dwellMs = rec->held
+                                    ? HeldDwellMs(g_settings.revealDwellMs)
+                                    : g_settings.revealDwellMs;
+            if (now - (LONG64)rec->dwellStart < dwellMs) {
+                continue;
+            }
+            // If Windows believes this taskbar hidden too, the hit test makes
+            // it show it; if not, it does nothing. Either way the mod reveals.
+            if (rec->clipped) {
+                RevealHeld(rec, pt);
+            }
+            RevealModBar(rec);
+            continue;
+        }
+
+        if (PtInRect(&bar, pt) || PointerOverShellSurface() ||
+            ShellSurfaceInForeground() || QuickSettingsOpen() ||
+            now < InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
+            rec->leaveTicks = 0;
+            rec->lastKeptUp = now;
+            continue;
+        }
+        if (!HideDelayElapsed(now, rec->lastKeptUp, g_settings.hideDelayMs)) {
+            rec->leaveTicks = 0;
+            continue;
+        }
+        if (++rec->leaveTicks < LEAVE_TICKS) {
+            continue;
+        }
+        HideModBar(rec);
+    }
+}
+
+// Reveal every secondary taskbar the mod drives: a notification asked one of
+// them to show, and which one is not known here.
+void RevealModSecondaries() {
+    if (!BarsHandled()) {
+        return;
+    }
+    for (int i = 0; i < g_recCount; i++) {
+        if (ModDriven(&g_recs[i]) && !IsRectEmpty(&g_recs[i].display)) {
+            RevealModBar(&g_recs[i]);
+        }
+    }
+}
+
 // From the watch tick: reveal any held, hidden taskbar whose strip the
 // pointer has rested in.
 void WatchHeldReveals() {
@@ -2156,13 +2297,10 @@ void WatchHeldReveals() {
         if (!rec->placed || rec->hiddenAsked == 0 || !rec->clipped) {
             continue;
         }
-        // Off the bottom edge the primary is revealed by WatcherTick, which
-        // also sets its state. A secondary there may be hidden completely,
-        // with no sliver for Windows to notice the pointer on, so it is
-        // revealed here whether held or not. On the bottom edge Windows
-        // reveals what is not held.
-        const bool offBottom = rec->edge < ABE_BOTTOM;
-        if (offBottom ? rec->primary : !rec->held) {
+        // The bottom edge only, and only what is held: Windows reveals the
+        // rest there. Off the bottom edge the primary is WatcherTick's and
+        // the secondaries are WatchSecondaries'.
+        if (rec->edge < ABE_BOTTOM || !rec->held) {
             continue;
         }
         const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
@@ -2279,6 +2417,9 @@ void WINAPI CSecondaryTray_Unhide_Hook(void* pThis, int flags, int request) {
                 break;
         }
     }
+    // Off the bottom edge the mod shows these taskbars itself, and Windows,
+    // which may believe this one is showing already, would do nothing.
+    RevealModSecondaries();
     CSecondaryTray_Unhide_Original(pThis, flags, request);
 }
 
@@ -2439,41 +2580,11 @@ void RefreshRecords() {
     }
 }
 
-// Off the bottom edge Windows hides a secondary taskbar only after something
-// has happened to it: the pointer came and went, or it was asked to show. One
-// that was already showing when the mod became active, or was created since,
-// just sits there while the primary hides. The hit test the mod uses to reveal
-// a taskbar makes Windows run that same "show, then hide when the pointer is
-// away" sequence, so each such taskbar gets it once.
-void PromptSecondariesToHide() {
-    if (!BarsHandled() || !g_trayUI || !g_offsetsVerified) {
-        return;
-    }
-    const UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
-    for (int i = 0; i < g_recCount; i++) {
-        TaskbarRec* rec = &g_recs[i];
-        if (rec->primary || rec->prompted || rec->edge >= ABE_BOTTOM ||
-            IsRectEmpty(&rec->display) || !(stored & ABS_AUTOHIDE)) {
-            continue;
-        }
-        rec->prompted = true;
-        if (rec->hiddenAsked > 0) {
-            continue;   // already hidden
-        }
-        RECT cur{};
-        GetWindowRect(rec->hwnd, &cur);
-        const POINT in{(cur.left + cur.right) / 2, (cur.top + cur.bottom) / 2};
-        Wh_Log(L"taskbar %p: prompting Windows to start hiding it", rec->hwnd);
-        SendMessageW(rec->hwnd, WM_NCHITTEST, 0, MAKELPARAM(in.x, in.y));
-    }
-}
-
 void MaybeRefreshRecords() {
     const ULONGLONG now = GetTickCount64();
     if (InterlockedExchange(&g_recsStale, 0) || now - g_recsRefreshed >= 1000) {
         g_recsRefreshed = now;
         RefreshRecords();
-        PromptSecondariesToHide();
     }
 }
 
@@ -2537,6 +2648,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         if (!g_fatalReason) {
             MaybeRefreshRecords();
             WatchHeldReveals();
+            WatchSecondaries();
         }
         WatcherTick();
         return 0;
