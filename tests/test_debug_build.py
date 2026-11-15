@@ -43,9 +43,20 @@ def test_only_the_debug_build_logs_each_request():
     assert 'Wh_Log(L"taskbar %p: Windows asks' not in text
 
 
+WINDHAWK = os.environ.get('WINDHAWK_DIR', '/mnt/c/Program Files/Windhawk')
+
+
 def test_debug_build_compiles(tmp_path):
+    # Needs Windhawk's compiler, as tests/test_mod_guard.py does: skipped
+    # where it is not installed, required where CI names it.
+    if not os.path.exists(os.path.join(WINDHAWK, 'Compiler/bin/clang++.exe')):
+        if 'WINDHAWK_DIR' in os.environ:
+            pytest.fail(f"Windhawk's compiler is not at {WINDHAWK}")
+        pytest.skip("Windhawk's compiler is not installed")
     out = tmp_path / 'debug.wh.cpp'
     out.write_text(debug_source(source()), newline='')
-    r = subprocess.run([os.path.join(ROOT, 'tools', 'compile-mod.sh'), str(out), str(tmp_path / 'debug.dll')],
-                       capture_output=True, text=True)
+    cmd = [os.path.join(ROOT, 'tools', 'compile-mod.sh'), str(out), str(tmp_path / 'debug.dll')]
+    if os.name == 'nt':   # CI runs this on Windows itself, where a script needs its shell named
+        cmd = ['bash', *(c.replace('\\', '/') for c in cmd)]
+    r = subprocess.run(cmd, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr

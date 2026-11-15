@@ -87,6 +87,6 @@ jobs:
       # The mod's check on its built-in addresses, compiled and run against the
       # real taskbar.dll each entry was matched for, and the mod's pure logic,
       # compiled on its own.
-      - run: python -m pytest tests/test_mod_guard.py tests/test_mod_logic.py -q -rs
+      - run: python -m pytest tests/test_mod_guard.py tests/test_mod_logic.py tests/test_debug_build.py -q -rs
         env:
           TASKBAR_FIXTURES: required
