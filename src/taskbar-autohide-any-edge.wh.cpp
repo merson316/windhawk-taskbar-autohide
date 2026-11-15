@@ -48,9 +48,8 @@ or the other, not both, since they hook the same function.
 In the order these actually turn out to be the cause:
 
 - **Auto-hide is not enabled in Windows.** Settings > Personalisation > Taskbar
-  > Taskbar behaviours. On a non-bottom edge that toggle can read back as off
-  even when it is on -- that is the bug this mod fixes, so seeing it turn itself
-  off means the mod is not running.
+  > Taskbar behaviours. Windows greys that option out when the taskbar is not
+  at the bottom, so set it with the taskbar at the bottom and then move it.
 - **The taskbar is on the bottom edge**, where Windows already handles
   auto-hide. The mod leaves it alone.
 - **The edge faces another display**, so the mod skips it deliberately. See
@@ -193,9 +192,8 @@ reason instead of failing silently. The taskbar is left alone in that state.
 - keepTaskbarOnTop: true
   $name: Keep the taskbar above other windows
   $description: >-
-    Windows can drop the taskbar out of the always-on-top band while it is
-    hidden, and the reveal does not put it back, so it slides up behind
-    whatever sits over that edge. This puts it back as it appears.
+    Off the bottom edge a revealed taskbar can come up behind whatever
+    sits over that edge. This puts it back in front as it appears.
 
     Left alone when a full-screen window is in front: Windows lowers the
     taskbar there on purpose, and overriding that would put it over
@@ -244,9 +242,11 @@ volatile LONG g_watchStop = 0;
 #define WARN_NO_TASKBAR_MS 30000
 #define WARN_AUTOHIDE_OFF_MS 15000
 // ...and auto-hide must have read "off" for this long. After Explorer starts
-// with the taskbar off the bottom edge, Windows reports it off for the best
-// part of a minute before it settles (seen: off at start, on 77 s later, with
-// nothing touched).
+// with the taskbar off the bottom edge the flags read off for the best part
+// of a minute and then on, with nothing touched (seen: 77 s). At start
+// TrayUI::_KickStartAutohide stores 0 when GetAutoHideFlags answers 0, which
+// it does off the bottom edge until the mod's hook is in place; what sets the
+// flags again later is outside taskbar.dll.
 #define WARN_AUTOHIDE_STAYS_OFF_MS 120000
 
 // Set when the mod cannot do its job. Kept rather than returning FALSE from
@@ -265,10 +265,12 @@ HMODULE g_symbolsMissingFor = nullptr;
 // unloading must not wait on a slow network.
 PVOID volatile g_symbolRequest = nullptr;
 
-// 1 while the taskbar sits on an edge this mod would act on but Windows'
-// auto-hide toggle is off. That is the most common reason the mod appears to do
-// nothing, and Windows cannot show it: off-bottom, the Settings toggle reads
-// back through the same masked GetAutoHideFlags this mod unmasks.
+// When the taskbar sits on an edge this mod would act on but Windows has
+// auto-hide off. That is the most common reason the mod appears to do
+// nothing. The Settings toggle is not a reliable witness: it reads a second
+// member (TaskbarSettings::get_HideTaskbar, the "desktop mode" setting), not
+// the flags the mod and Windows' hide logic use, and Settings greys the option
+// out off the bottom edge.
 volatile LONG64 g_autoHideOffSince = 0;   // tick it was first seen off; 0 = on
 volatile LONG g_warned = 0;
 
@@ -1445,7 +1447,10 @@ HWND FirstRealWindowAbove(HWND wnd) {
 }
 
 // A window that is not topmost sitting above the taskbar means the taskbar has
-// lost its place in the topmost band.
+// lost its place. Seen off the bottom edge after a reveal. What causes it is
+// not in taskbar.dll: there TrayUI::_ResetZorder only sends the taskbar to the
+// bottom for a full-screen window, and that clears the topmost style, which
+// this case keeps.
 bool TaskbarDemoted() {
     HWND above = FirstRealWindowAbove(g_trayWnd);
     return above && (GetWindowLongW(above, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0;
