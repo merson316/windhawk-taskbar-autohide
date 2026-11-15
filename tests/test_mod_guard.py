@@ -46,9 +46,9 @@ def extract(src):
     return '\n\n'.join(p.group(0) for p in parts)
 
 
-def build(tmp_path, code):
-    """Compile code with Windhawk's compiler; return a runner taking the
-    harness's arguments, the first of them a DLL path."""
+def compile_harness(tmp_path, code):
+    """Compile code with Windhawk's compiler. Returns (exe path, function
+    turning a path into one the exe can open)."""
     if not os.path.exists(CLANG):
         if 'WINDHAWK_DIR' in os.environ:   # named explicitly, as in CI: must be there
             pytest.fail(f'no compiler at {CLANG}')
@@ -64,6 +64,13 @@ def build(tmp_path, code):
                        capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(CLANG)))
     assert p.returncode == 0, p.stderr
     exe.chmod(0o755)   # written from Windows, so it lands without the execute bit
+    return exe, win
+
+
+def build(tmp_path, code):
+    """Compile code; return a runner taking the harness's arguments, the
+    first of them a DLL path."""
+    exe, win = compile_harness(tmp_path, code)
     return lambda dll, *args: subprocess.run([str(exe), win(dll), *args], capture_output=True, text=True)
 
 

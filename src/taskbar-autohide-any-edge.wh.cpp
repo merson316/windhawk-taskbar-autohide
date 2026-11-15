@@ -332,6 +332,15 @@ void LoadSettings() {
 }
 
 
+// --------------------------------------------------------------- pure logic
+
+// The mod's decisions, kept apart from the Windows calls that feed them: plain
+// values in, plain values out, no globals. tests/test_mod_logic.py compiles
+// everything between the two markers on its own and runs it, so nothing in
+// here may use more than <windows.h> types.
+// ==PureLogic==
+// ==/PureLogic==
+
 extern HWND g_trayWnd;   // defined with the taskbar state below
 
 // True when another display sits immediately beyond this edge of the taskbar's
