@@ -44,3 +44,14 @@ def test_winbindex_builds():
                            'virtualSize': 3178496}},
     }
     assert winbindex_builds(data) == [('10.0.26100.9711', 1989904251, 3178496)]
+
+
+def test_check_build_durations_in_a_reworked_slide_window(dll_10066):
+    # 10066 loads the durations at other offsets and into another register.
+    rvas = {'getAutoHideFlags': 0x45020, 'slideWindow': 0xB08B0}
+    assert check_build(PE(dll_10066), None, rvas)['durations'] is True
+
+
+def test_check_build_durations_absent(dll_9807):
+    rvas = {'getAutoHideFlags': 0x41F70, 'slideWindow': 0x41ED0}   # GetDockedRect, not SlideWindow
+    assert check_build(PE(dll_9807), None, rvas)['durations'] is False
