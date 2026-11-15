@@ -408,6 +408,120 @@ bool HideDelayElapsed(LONG64 now, LONG64 lastKeptUp, int delayMs) {
     return now - lastKeptUp >= delayMs;
 }
 
+// ---- taskbars held on their own display
+//
+// Windows hides a taskbar by moving its window past the docked edge. With
+// another display past that edge, the hidden window sits mostly on that
+// display and takes its DPI, and the icons come back at the wrong size. Such a
+// taskbar is "held": its window travels less than half its thickness, so most
+// of it stays where it belongs, and a window region takes away the rest.
+
+// Whether another display touches the one-pixel band just past `edge` of
+// `own`. An edge that only partly faces another display counts.
+bool DisplayBeyond(const RECT& own, UINT edge, const RECT* others, int count) {
+    RECT band = own;
+    switch (edge) {
+        case ABE_LEFT:   band.right = own.left;  band.left = own.left - 1;     break;
+        case ABE_TOP:    band.bottom = own.top;  band.top = own.top - 1;       break;
+        case ABE_RIGHT:  band.left = own.right;  band.right = own.right + 1;   break;
+        default:         band.top = own.bottom;  band.bottom = own.bottom + 1; break;
+    }
+    for (int i = 0; i < count; i++) {
+        const RECT& o = others[i];
+        if (o.left < band.right && band.left < o.right && o.top < band.bottom &&
+            band.top < o.bottom) {
+            return true;
+        }
+    }
+    return false;
+}
+
+struct BarPlacement {
+    int x, y;       // the window's top-left
+    RECT region;    // in window coordinates; meaningful when clipped
+    bool clipped;
+};
+
+// Where a taskbar's window and region go with `hiddenPx` of its thickness
+// hidden. `shown` is its top-left when fully shown. A taskbar that is not held
+// travels the whole way; a held one stops at thickness / 2 - 2. Either way the
+// region leaves exactly the part Windows wanted on screen, against the edge.
+BarPlacement PlaceBar(POINT shown, SIZE size, UINT edge, bool held,
+                      int hiddenPx) {
+    const bool vertical = edge == ABE_LEFT || edge == ABE_RIGHT;
+    const int thickness = vertical ? size.cx : size.cy;
+    if (hiddenPx < 0) hiddenPx = 0;
+    if (hiddenPx > thickness) hiddenPx = thickness;
+
+    int move = hiddenPx;
+    if (held) {
+        int limit = thickness / 2 - 2;
+        if (limit < 0) limit = 0;
+        if (move > limit) move = limit;
+    }
+    const int visible = thickness - hiddenPx;
+
+    BarPlacement p{shown.x, shown.y, {0, 0, 0, 0}, hiddenPx > 0};
+    if (!p.clipped) {
+        return p;
+    }
+    p.region = {0, 0, size.cx, size.cy};
+    switch (edge) {
+        case ABE_LEFT:
+            p.x -= move;
+            p.region.left = move;
+            p.region.right = move + visible;
+            break;
+        case ABE_TOP:
+            p.y -= move;
+            p.region.top = move;
+            p.region.bottom = move + visible;
+            break;
+        case ABE_RIGHT:
+            p.x += move;
+            p.region.right = size.cx - move;
+            p.region.left = p.region.right - visible;
+            break;
+        default:
+            p.y += move;
+            p.region.bottom = size.cy - move;
+            p.region.top = p.region.bottom - visible;
+            break;
+    }
+    return p;
+}
+
+// The strip along the docked edge of the taskbar's own display, as long as the
+// taskbar, where a resting pointer reveals it. `widthPx` is at 100% scaling.
+RECT RevealStrip(const RECT& display, const RECT& bar, UINT edge, int widthPx,
+                 UINT dpi) {
+    const int depth = MulDiv(widthPx, (int)dpi, 96);
+    switch (edge) {
+        case ABE_LEFT:
+            return {display.left, bar.top, display.left + depth, bar.bottom};
+        case ABE_TOP:
+            return {bar.left, display.top, bar.right, display.top + depth};
+        case ABE_RIGHT:
+            return {display.right - depth, bar.top, display.right, bar.bottom};
+        default:
+            return {bar.left, display.bottom - depth, bar.right, display.bottom};
+    }
+}
+
+// On a held edge the pointer crosses the strip every time it moves between
+// the two displays, so the reveal always waits a little.
+int HeldDwellMs(int settingMs) {
+    return settingMs > 150 ? settingMs : 150;
+}
+
+// A taskbar steps once per refresh of its own display, up to the cap.
+int StepsPerSecond(int displayHz, int capFps) {
+    if (displayHz <= 1) {
+        displayHz = 60;   // the driver did not say
+    }
+    return displayHz < capFps ? displayHz : capFps;
+}
+
 // ==/PureLogic==
 
 extern HWND g_trayWnd;   // defined with the taskbar state below

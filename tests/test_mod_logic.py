@@ -39,6 +39,38 @@ int main(int argc, char** argv) {
         printf("%%d\n", HideDelayElapsed(a[0], a[1], (int)a[2]) ? 1 : 0);
         return 0;
     }
+    if (!strcmp(cmd, "beyond")) {   // own(4) edge others(4 each)
+        RECT own{(LONG)a[0], (LONG)a[1], (LONG)a[2], (LONG)a[3]};
+        RECT others[8];
+        int count = 0;
+        for (int i = 5; i + 3 < n && count < 8; i += 4) {
+            others[count++] = {(LONG)a[i], (LONG)a[i + 1], (LONG)a[i + 2], (LONG)a[i + 3]};
+        }
+        printf("%%d\n", DisplayBeyond(own, (UINT)a[4], others, count) ? 1 : 0);
+        return 0;
+    }
+    if (!strcmp(cmd, "place")) {   // shownX shownY width height edge held hiddenPx
+        BarPlacement p = PlaceBar({(LONG)a[0], (LONG)a[1]}, {(LONG)a[2], (LONG)a[3]}, (UINT)a[4],
+                                  a[5] != 0, (int)a[6]);
+        printf("%%d %%d %%ld %%ld %%ld %%ld %%d\n", p.x, p.y, p.region.left, p.region.top,
+               p.region.right, p.region.bottom, p.clipped ? 1 : 0);
+        return 0;
+    }
+    if (!strcmp(cmd, "strip")) {   // display(4) bar(4) edge widthPx dpi
+        RECT r = RevealStrip({(LONG)a[0], (LONG)a[1], (LONG)a[2], (LONG)a[3]},
+                             {(LONG)a[4], (LONG)a[5], (LONG)a[6], (LONG)a[7]}, (UINT)a[8], (int)a[9],
+                             (UINT)a[10]);
+        printf("%%ld %%ld %%ld %%ld\n", r.left, r.top, r.right, r.bottom);
+        return 0;
+    }
+    if (!strcmp(cmd, "dwell")) {
+        printf("%%d\n", HeldDwellMs((int)a[0]));
+        return 0;
+    }
+    if (!strcmp(cmd, "fps")) {   // displayHz capFps
+        printf("%%d\n", StepsPerSecond((int)a[0], (int)a[1]));
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -111,3 +143,60 @@ def test_hide_delay(logic):
     assert logic('delay', 1000, 1000, 0) == [1]      # 0 hides at once
     assert logic('delay', 1499, 1000, 500) == [0]
     assert logic('delay', 1500, 1000, 500) == [1]
+
+
+# ---- geometry: taskbars held on their own display (#11) ----------------------
+# Edges: 0 left, 1 top, 2 right, 3 bottom. Rectangles are left, top, right, bottom.
+
+PRIMARY, UPPER = (0, 0, 3440, 1440), (988, -2560, 2428, 0)   # the measured layout
+
+
+def test_beyond(logic):
+    def b(own, edge, *others):
+        return logic('beyond', *own, edge, *[v for o in others for v in o])[0]
+    assert b(UPPER, 3, PRIMARY) == 1 and b(PRIMARY, 3, UPPER) == 0   # stacked
+    assert b(PRIMARY, 1, UPPER) == 1                                  # top of the lower one
+    assert b((0, 0, 1920, 1080), 2, (1920, 0, 3840, 1080)) == 1       # side by side
+    assert b((0, 0, 1920, 1080), 3, (1920, 0, 3840, 1080)) == 0
+    assert b((0, 0, 1920, 1080), 2, (1920, 1000, 3840, 2080)) == 1    # partly facing counts
+    assert b((0, 0, 1920, 1080), 2, (1920, 1080, 3840, 2160)) == 0    # corners only
+    assert b((-1920, 0, 0, 1080), 0) == 0                             # negative coordinates, alone
+    assert b((0, 0, 1920, 1080), 3, (1920, 0, 3840, 1080), (0, 1080, 1920, 2160)) == 1
+
+
+def test_place_held_bottom_matches_the_spike(logic):
+    def place(hidden):
+        return logic('place', 988, -60, 1440, 60, 3, 1, hidden)
+    assert place(0) == [988, -60, 0, 0, 0, 0, 0]                # shown, no region
+    assert place(10) == [988, -50, 0, 0, 1440, 50, 1]           # sliding, overhang clipped
+    assert place(58) == [988, -32, 0, 30, 1440, 32, 1]          # travel 28, 2 px left
+
+
+def test_place_not_held_slides_all_the_way(logic):
+    assert logic('place', 0, 1392, 3440, 48, 3, 0, 46) == [0, 1438, 0, 0, 3440, 2, 1]
+
+
+def test_place_on_each_edge(logic):
+    # 60 px thick, held, 58 hidden: the window travels 28 and 2 px stay, against the edge.
+    assert logic('place', 0, 0, 60, 1080, 0, 1, 58) == [-28, 0, 28, 0, 30, 1080, 1]        # left
+    assert logic('place', 0, 0, 1920, 60, 1, 1, 58) == [0, -28, 0, 28, 1920, 30, 1]        # top
+    assert logic('place', 1860, 0, 60, 1080, 2, 1, 58) == [1888, 0, 30, 0, 32, 1080, 1]    # right
+
+
+def test_held_window_is_never_mostly_off_its_display(logic):
+    for edge, shown in ((0, (0, 0)), (1, (0, 0)), (2, (1860, 0)), (3, (0, 1020))):
+        size = (60, 1080) if edge in (0, 2) else (1920, 60)
+        for hidden in (0, 1, 27, 28, 29, 30, 58, 60):
+            x, y, *_ = logic('place', *shown, *size, edge, 1, hidden)
+            assert abs(x - shown[0]) + abs(y - shown[1]) <= 28
+
+
+def test_strip_scales_with_dpi(logic):
+    assert logic('strip', *UPPER, 988, -60, 2428, 0, 3, 8, 120) == [988, -10, 2428, 0]
+    assert logic('strip', *PRIMARY, 0, 1392, 3440, 1440, 3, 8, 96) == [0, 1432, 3440, 1440]
+    assert logic('strip', 0, 0, 1920, 1080, 0, 0, 48, 1080, 0, 8, 96) == [0, 0, 8, 1080]   # left
+
+
+def test_dwell_and_rate(logic):
+    assert [logic('dwell', v)[0] for v in (0, 150, 400)] == [150, 150, 400]
+    assert [logic('fps', *v)[0] for v in ((60, 90), (240, 90), (240, 240), (0, 90))] == [60, 90, 240, 60]
