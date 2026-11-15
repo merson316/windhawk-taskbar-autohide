@@ -1907,20 +1907,21 @@ HANDLE g_barWake = nullptr;
 HANDLE g_barThread = nullptr;
 volatile LONG g_barStop = 0;
 
-// How much of this taskbar the mod hides. "Hide completely" is for the
-// primary off the bottom edge only: the mod reveals that one itself, from the
-// pointer's position. Any other taskbar that is not held keeps Windows' sliver,
-// where Windows notices the pointer. (Without it on the left edge, a secondary
-// could not be brought back: its window was then wholly off its display.) A
-// held taskbar hides completely and is revealed by RevealHeld, which works
-// because part of its window is still on its display.
+// How much of this taskbar the mod hides. "Hide completely" is for every
+// taskbar off the bottom edge: there the mod reveals each one itself, from
+// the pointer resting in the strip at its display's edge, and has Windows
+// unhide it with a message, so nothing needs the pointer to find a sliver of
+// window. (It was once the primary only: a secondary was then revealed by a
+// hit test, which needs the pointer inside the window, and a wholly hidden
+// one could not be brought back.) On the bottom edge Windows reveals a
+// taskbar that is not held from its sliver, so the sliver stays. A held
+// taskbar hides completely on every edge.
 int HiddenTargetFor(const TaskbarRec* rec) {
     const int thickness = (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT)
                               ? rec->size.cx
                               : rec->size.cy;
     return HiddenTarget(thickness,
-                        g_settings.hideFully && rec->primary &&
-                            rec->edge < ABE_BOTTOM,
+                        g_settings.hideFully && rec->edge < ABE_BOTTOM,
                         rec->held);
 }
 

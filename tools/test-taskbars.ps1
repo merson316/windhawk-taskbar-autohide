@@ -485,6 +485,12 @@ function Set-Edge($e) {
     return [TaskbarDriver]::SetEdge([uint32]$e)
 }
 
+# The mod's "Hide completely" setting: on unless it was turned off.
+function Hide-Fully {
+    $v = (Get-ItemProperty 'HKLM:\SOFTWARE\Windhawk\Engine\Mods\local@taskbar-autohide-any-edge\Settings' -ErrorAction SilentlyContinue).hideFully
+    return ($null -eq $v) -or ([int]$v -ne 0)
+}
+
 function Wanted($name) { -not $Only -or $name -match $Only }
 
 function Guard {
@@ -530,6 +536,11 @@ function Judge-Trace($name, $trace, $from, $to, $homeDpi) {
     $dir = [Math]::Sign($to - $from)
     $back = 0; $jump = 0; $prev = $trace[0]
     foreach ($s in $moves) {
+        # A sample where the window claims far more than the screen shows is
+        # the region being swapped between two steps, caught mid-way (seen
+        # once: one 4 ms sample of 48 px with 17 drawn). What stays wrong is
+        # caught by the checks on what is drawn.
+        if ($s.Drawn -ge 0 -and ($s.Showing - $s.Drawn) * 3 -gt $last.Showing + $trace[0].Showing + $dist) { continue }
         $d = ($s.Showing - $prev.Showing) * $dir
         # Up to 2 px: on the bottom edge Windows puts its own 2 px region on
         # for a few ms after a hide, before the mod's is back.
@@ -633,7 +644,15 @@ function Test-Edge($edge, $changed) {
             Park $away
             $t = [TaskbarDriver]::Trace($b.Hwnd, 0, 2, 400, 6000)
             Guard
-            if (Wanted "hide") { Judge-Trace "$en/hide/$name" $t $t[0].Showing 0 $b.HomeDpi }
+            if (Wanted "hide") {
+                Judge-Trace "$en/hide/$name" $t $t[0].Showing 0 $b.HomeDpi
+                # With the mod and its "Hide completely" setting, off the
+                # bottom edge, no line of taskbar is left along the edge.
+                if ($mod -and $edge -ne 3 -and (Hide-Fully)) {
+                    $left = $t[$t.Count - 1].Showing
+                    Check "$en/hide/$name/no line left" ($left -eq 0) "$left px still in view"
+                }
+            }
         }
     }
 
