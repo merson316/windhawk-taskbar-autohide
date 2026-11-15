@@ -80,6 +80,11 @@ jobs:
           ls "$WINDHAWK_DIR"
           ls "$WINDHAWK_DIR"/Compiler/bin/clang++.exe "$WINDHAWK_DIR"/Engine/*/64/windhawk.lib
       - run: tools/compile-mod.sh
+      # The debug build is the same source with its detailed log on: it must
+      # compile too.
+      - run: |
+          python tools/make_debug_build.py src/taskbar-autohide-any-edge.wh.cpp "$RUNNER_TEMP/debug.wh.cpp"
+          tools/compile-mod.sh "$RUNNER_TEMP/debug.wh.cpp"
       # The elevated half of the install, against a temp folder and HKCU.
       - run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install-mod.Tests.ps1
         shell: pwsh
