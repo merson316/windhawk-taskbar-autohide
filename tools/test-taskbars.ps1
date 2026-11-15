@@ -481,9 +481,12 @@ function Monitor-Named($device) { [TaskbarDriver]::Monitors() | Where-Object { $
 # A point no taskbar reacts to: the middle of the given display.
 function Park($m) { [TaskbarDriver]::MoveTo([int](($m.Left + $m.Right) / 2), [int](($m.Top + $m.Bottom) / 2)) }
 
-# The pixel at the middle of the display's edge the taskbar is on.
+# A pixel on the display's edge the taskbar is on.
+# A quarter of the way along, not the middle: with centred icons the middle is
+# over a button, and its tooltip then fades in over the strip of screen the
+# run looks at.
 function Touch-Edge($m, $edge) {
-    $cx = [int](($m.Left + $m.Right) / 2); $cy = [int](($m.Top + $m.Bottom) / 2)
+    $cx = [int]($m.Left + ($m.Right - $m.Left) / 4); $cy = [int]($m.Top + ($m.Bottom - $m.Top) / 4)
     switch ($edge) {
         0 { [TaskbarDriver]::MoveTo($m.Left, $cy) }
         1 { [TaskbarDriver]::MoveTo($cx, $m.Top) }
