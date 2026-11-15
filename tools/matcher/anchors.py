@@ -7,8 +7,6 @@ import struct
 from . import scan
 
 GET_STUCK_PLACE = bytes.fromhex('8B811C010000 83F8FF 7506 8B8110010000 C3')
-SHOW_DURATION = bytes.fromhex('448BB36C010000')   # mov r14d,[rbx+16Ch], at +0xA6
-HIDE_DURATION = bytes.fromhex('448BB368010000')   # mov r14d,[rbx+168h], at +0x123
 PERMIT_FIELDS = bytes.fromhex('4C8D8790010000488D9798010000')   # lea r8,[rdi+190h]; lea rdx,[rdi+198h]
 PERMIT_LIST = bytes.fromhex('488D8F40020000')   # lea rcx,[rdi+240h]
 
@@ -84,11 +82,14 @@ def get_stuck_place(pe):
 
 
 def slide_window(pe):
-    # The loads sit at fixed offsets from the function start; a build that
-    # shifts the body shifts them too, so require the start itself.
-    return [r - 0xA6 for r in find_bytes(pe, SHOW_DURATION)
-            if pe.function_containing(r) == r - 0xA6
-            and pe.read(r - 0xA6 + 0x123, len(HIDE_DURATION)) == HIDE_DURATION]
+    """Functions the mod's own ScanForDurationLoads accepts: ones that load
+    both slide durations from this. Other functions read those members too,
+    so match.py still has to tell which candidate is SlideWindow."""
+    show = struct.pack('<I', scan.SHOW_DURATION_OFFSET)
+    sites = [r - 2 for r in find_bytes(pe, show)
+             if pe.read(r - 2, 1) == b'\x8B' and pe.read(r - 1, 1)[0] & 0xC7 == 0x83]
+    return [f for f in _starts(pe, sites)
+            if scan.scan_for_durations(pe.read(f, scan.SLIDE_SCAN_LENGTH))]
 
 
 def permit_auto_hide(pe):

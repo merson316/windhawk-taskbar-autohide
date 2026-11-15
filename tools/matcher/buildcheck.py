@@ -3,9 +3,6 @@ and its code passes the checks the mod runs when it loads."""
 from . import HOOKED, scan
 from .pdb import publics
 
-SHOW_DURATION = (0xA6, bytes.fromhex('448BB36C010000'))
-HIDE_DURATION = (0x123, bytes.fromhex('448BB368010000'))
-
 
 def accepted_layouts(src_text):
     """GetAutoHideFlags layouts a version's ScanForOffsets accepts, read from
@@ -30,8 +27,7 @@ def check_build(pe, pdb_path, rvas=None):
     if 'getAutoHideFlags' in rvas:
         out['layout'] = layout(pe, rvas['getAutoHideFlags'])
     if 'slideWindow' in rvas:
-        out['durations'] = all(pe.read(rvas['slideWindow'] + off, len(sig)) == sig
-                               for off, sig in (SHOW_DURATION, HIDE_DURATION))
+        out['durations'] = scan.scan_for_durations(pe.read(rvas['slideWindow'], scan.SLIDE_SCAN_LENGTH))
     return out
 
 

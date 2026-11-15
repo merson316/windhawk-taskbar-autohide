@@ -60,3 +60,65 @@ def test_anchor_requires_the_mods_scan(monkeypatch, dll_9807):
     assert anchors.get_auto_hide_flags(PE(dll_9807)) == [0x41F70]
     monkeypatch.setattr(scan, 'scan_for_offsets', lambda fn, layouts: None)
     assert anchors.get_auto_hide_flags(PE(dll_9807)) == []
+
+
+# ---- SlideWindow's duration loads ------------------------------------------
+
+from matcher.scan import scan_for_durations  # noqa: E402
+
+SHOW_R14 = bytes.fromhex('448BB36C010000')   # mov r14d,[rbx+16Ch]
+HIDE_R14 = bytes.fromhex('448BB368010000')   # mov r14d,[rbx+168h]
+SHOW_R15 = bytes.fromhex('448BBB6C010000')   # mov r15d,[rbx+16Ch]
+HIDE_R15 = bytes.fromhex('448BBB68010000')   # mov r15d,[rbx+168h]
+NOPS = b'\x90' * 16
+
+
+def test_durations_real_builds(dll_9549, pdb_9549, dll_9807):
+    from matcher import HOOKED
+    from matcher.pdb import publics
+    slide = publics(pdb_9549, [HOOKED['slideWindow']])[HOOKED['slideWindow']]
+    assert scan_for_durations(PE(dll_9549).read(slide, 0x200))
+    assert scan_for_durations(PE(dll_9807).read(0x41260, 0x200))
+    # GetDockedRect loads neither duration.
+    assert not scan_for_durations(PE(dll_9807).read(0x41ED0, 0x200))
+
+
+def test_durations_reworked_build(dll_10066):
+    # 10066 moved both loads and changed their register.
+    assert scan_for_durations(PE(dll_10066).read(0xB08B0, 0x200))
+
+
+def test_durations_found_wherever_the_loads_sit():
+    assert scan_for_durations(NOPS + SHOW_R14 + NOPS * 5 + HIDE_R14 + NOPS)
+    assert scan_for_durations(NOPS * 9 + SHOW_R15 + b'\xEB\x07' + HIDE_R15 + NOPS)
+    assert scan_for_durations(NOPS + HIDE_R15 + NOPS + SHOW_R15 + NOPS)
+
+
+def test_durations_need_both_loads():
+    assert not scan_for_durations(NOPS + SHOW_R14 + NOPS * 4)
+    assert not scan_for_durations(NOPS + HIDE_R14 + NOPS * 4)
+
+
+def test_durations_need_one_register():
+    # One load into r14d and the other into r15d is not the one duration
+    # variable SlideWindow fills on either branch.
+    assert not scan_for_durations(NOPS + SHOW_R14 + NOPS + HIDE_R15 + NOPS)
+
+
+def test_durations_repeated_load_rejected():
+    assert not scan_for_durations(NOPS + SHOW_R14 + HIDE_R14 + NOPS + SHOW_R14 + NOPS)
+
+
+def test_durations_other_base_register_rejected():
+    # mov r14d,[rsi+16Ch]: the durations are read from this, which is in rbx.
+    other = bytes.fromhex('448BB66C010000') + NOPS + bytes.fromhex('448BB668010000')
+    assert not scan_for_durations(NOPS + other + NOPS)
+
+
+def test_durations_beyond_the_scanned_bytes_ignored():
+    assert not scan_for_durations(b'\x90' * 0x200 + SHOW_R14 + HIDE_R14)
+
+
+def test_durations_after_the_functions_padding_ignored():
+    # A short function must not be credited with the loads of the one after it.
+    assert not scan_for_durations(NOPS + b'\xCC' * 8 + SHOW_R14 + NOPS + HIDE_R14 + NOPS)
