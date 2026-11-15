@@ -1779,6 +1779,7 @@ struct TaskbarRec {
     int frameUs;
     int steps, late;
     double lastStepMs, minGapMs, maxGapMs;
+    double nextStepMs;   // when its next step is due
 
     // Revealing a held taskbar from the strip on its own display.
     ULONGLONG dwellStart;   // when the pointer came to rest in the strip
@@ -2051,6 +2052,7 @@ void StartBarAnimation(TaskbarRec* rec, int hiddenTarget) {
         1000000 / StepsPerSecond(rec->displayHz, g_settings.frameRate);
     rec->steps = rec->late = 0;
     rec->lastStepMs = rec->startMs;
+    rec->nextStepMs = rec->startMs;
     rec->minGapMs = 1e9;
     rec->maxGapMs = 0;
     rec->animating = true;
@@ -2098,21 +2100,39 @@ void TickBar(TaskbarRec* rec) {
     }
 }
 
-// Step every animating taskbar. Returns the shortest frame among those still
-// animating, in microseconds, or 0 when none is.
+// Step every animating taskbar whose next frame is due. Each keeps the pace of
+// its own display: two taskbars animating together, on a 60 Hz and a 240 Hz
+// display, must not both step at the faster rate. Returns how long until the
+// next step is due, in microseconds, or 0 when nothing is animating.
 LRESULT TickBars() {
-    int frame = 0;
+    const double now = NowMs();
+    double soonest = 0;
+    bool any = false;
     for (int i = 0; i < g_recCount; i++) {
         TaskbarRec* rec = &g_recs[i];
         if (!rec->animating) {
             continue;
         }
-        TickBar(rec);
-        if (rec->animating && (frame == 0 || rec->frameUs < frame)) {
-            frame = rec->frameUs;
+        if (now >= rec->nextStepMs - 0.5) {
+            TickBar(rec);
+            // Aim at frame boundaries from the start, so a late step does
+            // not push the later ones back; skip any already missed.
+            const double frame = rec->frameUs / 1000.0;
+            rec->nextStepMs += frame;
+            if (rec->nextStepMs <= now) {
+                rec->nextStepMs = now + frame;
+            }
+        }
+        if (rec->animating && (!any || rec->nextStepMs < soonest)) {
+            soonest = rec->nextStepMs;
+            any = true;
         }
     }
-    return frame;
+    if (!any) {
+        return 0;
+    }
+    const double wait = soonest - NowMs();
+    return wait < 0.2 ? 200 : (LRESULT)(wait * 1000.0);
 }
 
 // WM_WINDOWPOSCHANGING on a taskbar the mod animates, after the taskbar's own
@@ -2340,9 +2360,9 @@ void WINAPI CSecondaryTray_Unhide_Hook(void* pThis, int flags, int request) {
     CSecondaryTray_Unhide_Original(pThis, flags, request);
 }
 
-// Paces every animation: one tick per frame, from a high-resolution timer,
-// aimed at frame boundaries so a late tick does not push the later ones back.
-// The step itself runs on the taskbar's thread, which owns the records.
+// Paces every animation from a high-resolution timer: it asks the taskbar's
+// thread, which owns the records, to step whatever is due, and sleeps for as
+// long as that thread says until the next step.
 DWORD WINAPI BarThreadProc(LPVOID) {
     HANDLE timer = CreateWaitableTimerExW(
         nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
@@ -2353,29 +2373,22 @@ DWORD WINAPI BarThreadProc(LPVOID) {
 
     while (WaitForSingleObject(g_barWake, INFINITE) == WAIT_OBJECT_0 &&
            !InterlockedCompareExchange(&g_barStop, 0, 0)) {
-        double next = NowMs();
         for (;;) {
-            DWORD_PTR frameUs = 0;
+            DWORD_PTR waitUs = 0;
             HWND tray = g_trayWnd;
             if (!tray ||
                 !SendMessageTimeoutW(tray, g_barTickMsg, 0, 0,
-                                     SMTO_ABORTIFHUNG, 200, &frameUs) ||
-                !frameUs || InterlockedCompareExchange(&g_barStop, 0, 0)) {
+                                     SMTO_ABORTIFHUNG, 200, &waitUs) ||
+                !waitUs || InterlockedCompareExchange(&g_barStop, 0, 0)) {
                 break;
             }
-            next += frameUs / 1000.0;
-            const double wait = next - NowMs();
-            if (wait <= 0) {
-                next = NowMs();
-                continue;
-            }
             LARGE_INTEGER due;
-            due.QuadPart = -(LONGLONG)(wait * 10000.0);
+            due.QuadPart = -(LONGLONG)waitUs * 10;
             if (timer &&
                 SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
                 WaitForSingleObject(timer, 100);
             } else {
-                Sleep((DWORD)wait);
+                Sleep((DWORD)(waitUs / 1000));
             }
         }
     }
