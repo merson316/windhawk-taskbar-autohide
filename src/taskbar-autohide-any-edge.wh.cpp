@@ -558,6 +558,32 @@ bool DisplayBeyond(const RECT& own, UINT edge, const RECT* others, int count) {
     return false;
 }
 
+// Whether another display touches the place a taskbar's window would lie in
+// once slid `thickness` past `edge` of `own`, corners included. A window on
+// no display is given the scaling of the nearest one, and Windows took a
+// display that only touches that place for the nearest (measured: a primary
+// at 125% with a taller display at 200% beside it; the primary's taskbar,
+// hidden off its top edge, came back at 200%). Such a taskbar must not leave
+// its display either.
+bool HiddenNearOther(const RECT& own, UINT edge, int thickness,
+                     const RECT* others, int count) {
+    RECT place = own;
+    switch (edge) {
+        case ABE_LEFT:   place.right = own.left;  place.left = own.left - thickness;     break;
+        case ABE_TOP:    place.bottom = own.top;  place.top = own.top - thickness;       break;
+        case ABE_RIGHT:  place.left = own.right;  place.right = own.right + thickness;   break;
+        default:         place.top = own.bottom;  place.bottom = own.bottom + thickness; break;
+    }
+    for (int i = 0; i < count; i++) {
+        const RECT& o = others[i];
+        if (o.left <= place.right && place.left <= o.right &&
+            o.top <= place.bottom && place.top <= o.bottom) {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct BarPlacement {
     int x, y;       // the window's top-left
     RECT region;    // in window coordinates; meaningful when clipped
@@ -1711,7 +1737,8 @@ struct TaskbarRec {
     UINT edge;
     bool held;         // another display lies past its docked edge
     // The window stays on its shown position and its content slides inside
-    // it. So for a held taskbar, and for every taskbar on the bottom edge
+    // it. So for a held taskbar, for one whose hidden place another display
+    // touches (HiddenNearOther), and for every taskbar on the bottom edge
     // while "Hide completely" is on: that is what lets the mod hide it
     // wholly there and reveal it from its own strip, where Windows would
     // need a sliver of window left on screen.
@@ -1876,8 +1903,14 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
         const RECT& m = displays.rect[own];
         const int hz = displays.hz[own];
         const bool held = DisplayBeyond(m, edge, others, nOthers);
+        RECT now{};
+        GetWindowRect(rec->hwnd, &now);
+        const int thickness = (edge == ABE_LEFT || edge == ABE_RIGHT)
+                                  ? now.right - now.left
+                                  : now.bottom - now.top;
         const bool inPlace =
-            held || (edge == ABE_BOTTOM && g_settings.hideFully);
+            held || (edge == ABE_BOTTOM && g_settings.hideFully) ||
+            HiddenNearOther(m, edge, thickness, others, nOthers);
         const bool changed = !EqualRect(&rec->display, &m) ||
                              rec->displayHz != hz || rec->edge != edge ||
                              rec->held != held || rec->inPlace != inPlace;

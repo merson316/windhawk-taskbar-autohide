@@ -49,6 +49,16 @@ int main(int argc, char** argv) {
         printf("%%d\n", DisplayBeyond(own, (UINT)a[4], others, count) ? 1 : 0);
         return 0;
     }
+    if (!strcmp(cmd, "near")) {   // own(4) edge thickness others(4 each)
+        RECT own{(LONG)a[0], (LONG)a[1], (LONG)a[2], (LONG)a[3]};
+        RECT others[8];
+        int count = 0;
+        for (int i = 6; i + 3 < n && count < 8; i += 4) {
+            others[count++] = {(LONG)a[i], (LONG)a[i + 1], (LONG)a[i + 2], (LONG)a[i + 3]};
+        }
+        printf("%%d\n", HiddenNearOther(own, (UINT)a[4], (int)a[5], others, count) ? 1 : 0);
+        return 0;
+    }
     if (!strcmp(cmd, "place")) {   // shownX shownY width height edge held hiddenPx
         BarPlacement p = PlaceBar({(LONG)a[0], (LONG)a[1]}, {(LONG)a[2], (LONG)a[3]}, (UINT)a[4],
                                   a[5] != 0, (int)a[6]);
@@ -202,6 +212,27 @@ def test_beyond(logic):
     assert b((0, 0, 1920, 1080), 2, (1920, 1080, 3840, 2160)) == 0    # corners only
     assert b((-1920, 0, 0, 1080), 0) == 0                             # negative coordinates, alone
     assert b((0, 0, 1920, 1080), 3, (1920, 0, 3840, 1080), (0, 1080, 1920, 2160)) == 1
+
+
+def test_hidden_window_near_another_display(logic):
+    # Where a taskbar's window would lie once slid off its display, and
+    # whether another display touches that place. Windows gives a window that
+    # is on no display the scaling of the nearest one, and one that touches
+    # counts as near (measured: primary (0,0,3440,1440) at 125%, the other
+    # display (3440,-418,4880,2142) at 200% beside it and reaching higher; the
+    # primary's taskbar, hidden off its top edge, took 200%).
+    def near(own, edge, thickness, *others):
+        return logic('near', *own, edge, thickness, *[v for o in others for v in o])[0]
+    side = (3440, -418, 4880, 2142)
+    assert near(PRIMARY, 1, 60, side) == 1            # the measured case
+    assert near(PRIMARY, 3, 60, side) == 1            # it reaches lower as well
+    assert near(PRIMARY, 0, 60, side) == 0            # the far side
+    assert near(PRIMARY, 2, 60, side) == 1            # facing it: held, and near
+    assert near(UPPER, 3, 60, PRIMARY) == 1           # stacked
+    level = (3440, 0, 4880, 1440)                     # beside it, same top and bottom:
+    assert near(PRIMARY, 1, 60, level) == 1           # touching at a corner counts too
+    assert near(PRIMARY, 1, 60, (3442, -418, 4880, 2142)) == 0   # a gap between them
+    assert near(PRIMARY, 1, 60) == 0                  # one display
 
 
 def test_place_held_window_stays_and_its_content_slides(logic):
