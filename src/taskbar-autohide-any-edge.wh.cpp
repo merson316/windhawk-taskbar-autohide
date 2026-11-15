@@ -243,6 +243,11 @@ volatile LONG g_watchStop = 0;
 #define WARN_SETTLE_MS 5000
 #define WARN_NO_TASKBAR_MS 30000
 #define WARN_AUTOHIDE_OFF_MS 15000
+// ...and auto-hide must have read "off" for this long. After Explorer starts
+// with the taskbar off the bottom edge, Windows reports it off for the best
+// part of a minute before it settles (seen: off at start, on 77 s later, with
+// nothing touched).
+#define WARN_AUTOHIDE_STAYS_OFF_MS 120000
 
 // Set when the mod cannot do its job. Kept rather than returning FALSE from
 // Wh_ModInit: Windhawk unloads a mod whose init failed, taking the DLL out from
@@ -1457,6 +1462,7 @@ void RaiseTaskbarIfDemoted() {
 // Defined with the taskbar records below.
 bool PrimaryBarReady();
 bool PrimaryBarHeld();
+void RevealPrimaryBar();
 void HidePrimaryBar(const RECT& docked, UINT edge);
 
 void WatcherTick() {
@@ -1488,6 +1494,8 @@ void WatcherTick() {
     }
 
     if (!(stored & ABS_AUTOHIDE)) {
+        // Switched off while the mod had the taskbar hidden: bring it back.
+        RevealPrimaryBar();
         return;
     }
 
@@ -1617,6 +1625,7 @@ struct TaskbarRec {
     int lastAskedOff;  // what Windows last asked for, for the log
     bool clipped;
     RECT region;       // the window region in force, when clipped
+    bool cloaked;      // hidden from the compositor while held and at rest
 
     bool animating;
     int from, to;      // hidden pixels
@@ -1703,6 +1712,7 @@ UINT DockedEdge() {
 }
 
 void ReleaseBar(TaskbarRec* rec, bool shown = false);
+void CloakBar(TaskbarRec* rec, bool cloak);
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget);
 
 // Fill in what depends on the display layout. Returns false when no display
@@ -1733,6 +1743,7 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
                     SetWindowRgn(rec->hwnd, nullptr, TRUE);
                     rec->clipped = false;
                 }
+                CloakBar(rec, false);
                 rec->placed = false;
                 rec->held = false;
                 rec->display = {0, 0, 0, 0};
@@ -1870,6 +1881,22 @@ void HideModBar(TaskbarRec* rec) {
     }
 }
 
+// A held taskbar at rest is cloaked: taken out of what the compositor draws.
+// Its region is meant to leave nothing showing, but on the primary a region
+// change is not always drawn at once, and the taskbar was left on screen half
+// slid away, or vanished late. Cloaking is immediate. It is only ever on while
+// the taskbar is fully hidden and still.
+void CloakBar(TaskbarRec* rec, bool cloak) {
+    if (rec->cloaked == cloak) {
+        return;
+    }
+    BOOL value = cloak;
+    if (SUCCEEDED(DwmSetWindowAttribute(rec->hwnd, DWMWA_CLOAK, &value,
+                                        sizeof(value)))) {
+        rec->cloaked = cloak;
+    }
+}
+
 // Move a taskbar's window, marking the move as the mod's own so the handler
 // puts this position back after the taskbar has replaced it. The mark names
 // the position: while this SetWindowPos runs, the taskbar reacts to the move
@@ -1931,6 +1958,7 @@ void ReleaseBar(TaskbarRec* rec, bool shown) {
     rec->dwellStart = 0;
     rec->revealSent = 0;
     rec->revealStage = 0;
+    CloakBar(rec, false);
     if (!rec->placed) {
         return;
     }
@@ -1966,6 +1994,14 @@ bool PrimaryBarReady() {
     return rec && !IsRectEmpty(&rec->display) && BarsHandled();
 }
 
+void RevealPrimaryBar() {
+    TaskbarRec* rec = g_trayWnd ? RecFor(g_trayWnd) : nullptr;
+    if (rec && rec->placed && rec->hiddenAsked > 0 && BarsHandled()) {
+        rec->hiddenAsked = 0;
+        StartBarAnimation(rec, 0);
+    }
+}
+
 bool PrimaryBarHeld() {
     TaskbarRec* rec = g_trayWnd ? RecFor(g_trayWnd) : nullptr;
     return rec && rec->held;
@@ -1986,6 +2022,7 @@ void HidePrimaryBar(const RECT& docked, UINT edge) {
 }
 
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget) {
+    CloakBar(rec, false);
     rec->from = rec->hiddenNow;
     rec->to = hiddenTarget;
     rec->startMs = NowMs();
@@ -2024,7 +2061,22 @@ void TickBar(TaskbarRec* rec) {
         t = 1.0;
     }
     const double e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
-    const double pos = rec->from + (rec->to - rec->from) * e;
+
+    // A held taskbar can only slide as far as its window may travel. The
+    // whole duration goes on that slide, and what is still showing at the end
+    // of a hide is cut, by the region and the cloak. (Wiping the rest away
+    // with the region was not drawn reliably on the primary.)
+    int from = rec->from, to = rec->to;
+    if (rec->held) {
+        const int thickness =
+            (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT) ? rec->size.cx
+                                                              : rec->size.cy;
+        int limit = thickness / 2 - 2;
+        if (limit < 0) limit = 0;
+        if (from > limit) from = limit;
+        if (to > limit) to = limit;
+    }
+    const double pos = from + (to - from) * e;
     ApplyPlacement(rec, t >= 1.0 ? rec->to : (int)(pos + 0.5));
 
     const double gap = now - rec->lastStepMs;
@@ -2038,6 +2090,9 @@ void TickBar(TaskbarRec* rec) {
 
     if (t >= 1.0) {
         rec->animating = false;
+        if (rec->held && rec->to > 0) {
+            CloakBar(rec, true);
+        }
         Wh_Log(L"taskbar %p %s %d->%d px in %d ms at %d fps: %d steps, gap "
                L"%d..%d us, %d late, dpi %u",
                rec->hwnd, rec->to > rec->from ? L"hide" : L"reveal", rec->from,
@@ -2119,6 +2174,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
             SetWindowRgn(rec->hwnd, nullptr, TRUE);
             rec->clipped = false;
         }
+        CloakBar(rec, false);
         rec->placed = false;
         rec->held = false;
         rec->display = {0, 0, 0, 0};
@@ -2586,6 +2642,8 @@ void RefreshRecords() {
             // placement below sets the right one or removes it.
             rec->clipped = true;
             rec->region = {-1, -1, -1, -1};
+            rec->cloaked = true;
+            CloakBar(rec, false);
 
             // Never take one over more hidden than the mod itself would hide
             // it: a taskbar with nothing left on screen cannot be revealed.
@@ -2594,6 +2652,9 @@ void RefreshRecords() {
                 rec->hiddenNow = rec->hiddenAsked = most;
             }
             ApplyPlacement(rec, rec->hiddenNow);
+            if (rec->held && rec->hiddenNow > 0) {
+                CloakBar(rec, true);
+            }
         }
     }
 }
@@ -2983,7 +3044,8 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
                        AutoHideOffLongEnough(
                            InterlockedCompareExchange64(&g_autoHideOffSince, 0,
                                                         0),
-                           (LONG64)GetTickCount64(), WARN_AUTOHIDE_OFF_MS) &&
+                           (LONG64)GetTickCount64(),
+                           WARN_AUTOHIDE_STAYS_OFF_MS) &&
                        ThisProcessOwnsTaskbar()) {
                 WarnOnce(L"Auto-hide is turned off in Windows, so there is "
                          L"nothing for this mod to do. Turn it on under "
@@ -3528,8 +3590,11 @@ void ReleaseBarsOnUnload() {
     // Whatever happened above, no taskbar may be left with one of the mod's
     // regions: an empty one makes it invisible for good. Removing a region
     // works from any thread.
+    BOOL uncloak = FALSE;
     if (g_trayWnd) {
         SetWindowRgn(g_trayWnd, nullptr, TRUE);
+        DwmSetWindowAttribute(g_trayWnd, DWMWA_CLOAK, &uncloak,
+                              sizeof(uncloak));
     }
     const DWORD pid = GetCurrentProcessId();
     for (HWND w = nullptr;
@@ -3538,6 +3603,7 @@ void ReleaseBarsOnUnload() {
         GetWindowThreadProcessId(w, &owner);
         if (owner == pid) {
             SetWindowRgn(w, nullptr, TRUE);
+            DwmSetWindowAttribute(w, DWMWA_CLOAK, &uncloak, sizeof(uncloak));
         }
     }
     InterlockedExchange(&g_barsReleased, 1);
