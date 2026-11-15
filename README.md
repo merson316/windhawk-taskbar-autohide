@@ -50,8 +50,9 @@ the masked result — `GetDockedRect` returns the hidden rect only when
 
 ## Requirements
 
-Windows 11 build 26200 or newer, x86-64. Developed and tested against
-10.0.26300.9278.
+Windows 11 build 26200 or newer, x86-64. Version 2.0.0 was tested with
+`tools/test-taskbars.ps1` on `taskbar.dll` 10.0.26100.10066: one display, two
+stacked and two side by side, at 100% to 200% scaling.
 
 The mod finds the taskbar's functions through Microsoft's debug symbols, which
 Windhawk downloads on first use. Microsoft sometimes publishes them days after a
