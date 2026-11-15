@@ -288,6 +288,12 @@ the neighbouring display or is not drawn fails. Run it with the mod disabled
 to see what Windows does by itself. `-Snapshot` only looks. Moving the mouse
 stops a run.
 
+The shipped mod logs what it found and what stopped it, a line each. A debug
+build also logs every request Windows makes of a taskbar and every slide. It is
+the same source with one line changed (`tools/make_debug_build.py`), and each
+release carries it as `taskbar-autohide-any-edge.debug.wh.cpp`, for reporting a
+problem.
+
 `tools/install-dev-build.py` installs the working copy in Windhawk through the
 same elevated task a release uses, as the installed version with its last
 number raised by one.

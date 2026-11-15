@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from matcher.apply import known_builds  # noqa: E402
 from matcher.buildcheck import accepted_layouts, os_builds, reads_durations  # noqa: E402
+from make_debug_build import has_switch  # noqa: E402
 from matcher.pe import PE  # noqa: E402
 from matcher.reference import pdb_published  # noqa: E402
 
@@ -31,6 +32,8 @@ SUPPORT = {'built-in': 'Built-in addresses (Microsoft has not published symbols)
 SHOWN = 5
 INSTALL = ('Download `taskbar-autohide-any-edge.wh.cpp` below, then in Windhawk: '
            'Create a new mod → replace the contents → Compile → Enable.')
+DEBUG_BUILD = ('`taskbar-autohide-any-edge.debug.wh.cpp` is the same mod with a detailed log. '
+               'Use it only to report a problem.')
 
 
 def should_work_for(layouts, builds, tested_taskbars, known=(), published=(), durations_needed=True):
@@ -56,7 +59,7 @@ def _build_rows(builds, how):
          f'{"Built-in addresses" if b.get("built_in") else SUPPORT["symbols"]} |' for b in builds]
 
 
-def render(version, compat, changes, should_work=()):
+def render(version, compat, changes, should_work=(), debug_build=False):
     out = ['## Works with', '']
     tested = [c for c in compat if version in c['tested_with']]
     if tested:
@@ -78,6 +81,8 @@ def render(version, compat, changes, should_work=()):
     out += [OTHER_BUILDS, '', WINVER_TIP, '', '## Changes', '']
     out += [f'- {c}' for c in changes]
     out += ['', '## Install', '', INSTALL, '']
+    if debug_build:
+        out += [DEBUG_BUILD, '']
     return '\n'.join(out)
 
 
@@ -148,7 +153,7 @@ def main():
     source = source_at(args.version)
     should_work = should_work_for(accepted_layouts(source), builds, tested, known, published,
                                   durations_needed=reads_durations(source))
-    print(render(args.version, compat, changes, should_work))
+    print(render(args.version, compat, changes, should_work, debug_build=has_switch(source)))
 
 
 if __name__ == '__main__':

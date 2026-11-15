@@ -109,3 +109,9 @@ def test_should_work_for_a_version_that_reads_no_durations():
     assert should_work_for({'old'}, builds, set()) == []
     assert [b['taskbar'] for b in should_work_for({'old'}, builds, set(), durations_needed=False)] == [
         '10.0.26100.9807']
+
+
+def test_notes_name_the_debug_build_only_when_there_is_one():
+    assert 'debug.wh.cpp' not in render('1.18.0', COMPAT, ['x'])
+    with_it = render('2.0.0', COMPAT, ['x'], debug_build=True)
+    assert 'taskbar-autohide-any-edge.debug.wh.cpp' in with_it

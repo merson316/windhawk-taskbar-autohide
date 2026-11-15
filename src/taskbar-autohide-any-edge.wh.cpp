@@ -212,6 +212,13 @@ reason instead of failing silently. The taskbar is left alone in that state.
 */
 // ==/WindhawkModSettings==
 
+// The mod's log says what it found and what stopped it, once each. A debug
+// build also logs every request Windows makes of a taskbar and every slide,
+// which is what a report of odd behaviour needs. tools/make-debug-build.py
+// makes that build from this file by enabling the line below; nothing else
+// differs.
+// #define TASKBAR_AUTOHIDE_DEBUG
+
 #include <windhawk_utils.h>
 
 #include <initializer_list>
@@ -220,6 +227,13 @@ reason instead of failing silently. The taskbar is left alone in that state.
 #include <shellapi.h>
 #include <winhttp.h>
 #include <wtsapi32.h>
+
+#ifdef TASKBAR_AUTOHIDE_DEBUG
+#define DLog(...) Wh_Log(__VA_ARGS__)
+#else
+#define DLog(...) ((void)0)
+#endif
+
 
 // ABE_LEFT/TOP/RIGHT/BOTTOM and ABS_AUTOHIDE/ABS_ALWAYSONTOP come from
 // shellapi.h.
@@ -1014,7 +1028,7 @@ bool EdgeSettling(UINT edge) {
         const LONG before = InterlockedExchange(&g_lastEdgeSeen, (LONG)edge);
         if (before != -1 && before != (LONG)edge) {
             InterlockedExchange64(&g_edgeSettleUntil, now + EDGE_SETTLE_MS);
-            Wh_Log(L"taskbar moved from edge %d to edge %u: standing back for "
+            DLog(L"taskbar moved from edge %d to edge %u: standing back for "
                    L"%d ms",
                    (int)before, edge, EDGE_SETTLE_MS);
         }
@@ -1399,7 +1413,7 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
     // mod goes there on its own clock. Secondary taskbars slide through this
     // function too.
     if (!EdgeChangeInProgress() && BarsHandled() && RecFor(hWnd)) {
-        Wh_Log(L"taskbar %p: SlideWindow to (%d,%d,%d,%d), show %d, animate "
+        DLog(L"taskbar %p: SlideWindow to (%d,%d,%d,%d), show %d, animate "
                L"%d -> not animated by Windows",
                hWnd, rect ? rect->left : 0, rect ? rect->top : 0,
                rect ? rect->right : 0, rect ? rect->bottom : 0, show, animate);
@@ -1755,7 +1769,7 @@ bool AnyHeld() {
 void DropRec(HWND hwnd) {
     for (int i = 0; i < g_recCount; i++) {
         if (g_recs[i].hwnd == hwnd) {
-            Wh_Log(L"taskbar %p: record dropped", hwnd);
+            DLog(L"taskbar %p: record dropped", hwnd);
             g_recs[i] = g_recs[--g_recCount];
             return;
         }
@@ -1819,7 +1833,7 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
                 // The mod is holding it somewhere no display claims: the
                 // layout changed without Windows moving it first. Stop
                 // holding it; Windows places it at its next move.
-                Wh_Log(L"taskbar %p at (%d,%d,%d,%d) is on no display's "
+                DLog(L"taskbar %p at (%d,%d,%d,%d) is on no display's "
                        L"edge: letting go",
                        rec->hwnd, bar.left, bar.top, bar.right, bar.bottom);
                 rec->animating = false;
@@ -2115,7 +2129,7 @@ void ReleaseBar(TaskbarRec* rec, bool shown) {
     }
     rec->hiddenNow = rec->hiddenAsked;
     rec->placed = false;
-    Wh_Log(L"taskbar %p released at (%d,%d), %d px hidden", rec->hwnd, p.x,
+    DLog(L"taskbar %p released at (%d,%d), %d px hidden", rec->hwnd, p.x,
            p.y, rec->hiddenAsked);
 }
 
@@ -2214,7 +2228,7 @@ void TickBar(TaskbarRec* rec) {
 
     if (t >= 1.0) {
         rec->animating = false;
-        Wh_Log(L"taskbar %p %s %d->%d px in %d ms at %d fps: %d steps, gap "
+        DLog(L"taskbar %p %s %d->%d px in %d ms at %d fps: %d steps, gap "
                L"%d..%d us, %d late, dpi %u",
                rec->hwnd, rec->to > rec->from ? L"hide" : L"reveal", rec->from,
                rec->to, (int)(now - rec->startMs), 1000000 / rec->frameUs,
@@ -2392,7 +2406,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
         // the record holds is out of date, and replacing this position from
         // it would pin the taskbar where its display used to be. Let Windows
         // have its way, forget the display, and read the facts again.
-        Wh_Log(L"taskbar %p asked to (%d,%d,%d,%d), off the display it was "
+        DLog(L"taskbar %p asked to (%d,%d,%d,%d), off the display it was "
                L"on: letting go until the layout is read again",
                rec->hwnd, asked.left, asked.top, asked.right, asked.bottom);
         rec->animating = false;
@@ -2417,7 +2431,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
                                              : 0;
     const int off = dx ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
     if (off != rec->lastAskedOff) {
-        Wh_Log(L"taskbar %p: Windows asks (%d,%d,%d,%d), %d px hidden (was "
+        DLog(L"taskbar %p: Windows asks (%d,%d,%d,%d), %d px hidden (was "
                L"%d), flags %#x%s",
                rec->hwnd, asked.left, asked.top, asked.right, asked.bottom,
                off, rec->lastAskedOff, wp->flags,
@@ -2649,7 +2663,7 @@ void WatchHeldReveals() {
         if (rec->revealStage == 0) {
             RevealHeld(rec, pt);
         } else if (now - rec->revealSent >= 1000) {
-            Wh_Log(L"taskbar %p still hidden a second after the reveal hit "
+            DLog(L"taskbar %p still hidden a second after the reveal hit "
                    L"test; trying again",
                    rec->hwnd);
             rec->revealStage = 0;
@@ -2802,6 +2816,7 @@ LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
 
+#ifdef TASKBAR_AUTOHIDE_DEBUG
     // For some seconds after an edge change, record what is asked of a
     // secondary taskbar's window, before and after Windows has had its say.
     if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
@@ -2821,7 +2836,7 @@ LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
         }
         const WINDOWPOS* after = (const WINDOWPOS*)lParam;
-        Wh_Log(L"edge change: secondary %p at (%d,%d,%d,%d) asked (%d,%d) "
+        DLog(L"edge change: secondary %p at (%d,%d,%d,%d) asked (%d,%d) "
                L"%dx%d flags %#x%s -> (%d,%d) %dx%d flags %#x",
                hWnd, cur.left, cur.top, cur.right, cur.bottom, before.x,
                before.y, before.cx, before.cy, before.flags,
@@ -2829,6 +2844,7 @@ LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                after->cy, after->flags);
         return r;
     }
+#endif
 
     if (uMsg == WM_WINDOWPOSCHANGING && lParam && BarsHandled()) {
         TaskbarRec* rec = RecFor(hWnd);
@@ -2928,7 +2944,7 @@ void RefreshRecords() {
                 rec->clipped = true;
                 rec->region = {0, 0, 0, 0};
                 MoveBar(rec, rec->shown.x, rec->shown.y);
-                Wh_Log(L"taskbar %p taken over while hidden: dpi now %u",
+                DLog(L"taskbar %p taken over while hidden: dpi now %u",
                        rec->hwnd, GetDpiForWindow(rec->hwnd));
             }
             // A region may be left on the window by an instance of the mod
@@ -2970,6 +2986,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return TickBars();
     }
 
+#ifdef TASKBAR_AUTOHIDE_DEBUG
     // While the edge is changing, and for the moment after, record what
     // reaches the tray: what Windows asks of the window and what state it
     // holds. This is how an edge change that goes wrong gets explained.
@@ -2985,18 +3002,20 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         const UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
         if (uMsg == WM_WINDOWPOSCHANGING && lParam) {
             const WINDOWPOS* wp = (const WINDOWPOS*)lParam;
-            Wh_Log(L"edge change: Windows asks (%d,%d) %dx%d flags %#x; "
+            DLog(L"edge change: Windows asks (%d,%d) %dx%d flags %#x; "
                    L"window (%d,%d,%d,%d), edge %u, flags %#x",
                    wp->x, wp->y, wp->cx, wp->cy, wp->flags, cur.left, cur.top,
                    cur.right, cur.bottom, edge, stored);
         } else {
-            Wh_Log(L"edge change: message %#x (%#llx, %#llx); window "
+            DLog(L"edge change: message %#x (%#llx, %#llx); window "
                    L"(%d,%d,%d,%d), edge %u, flags %#x",
                    uMsg, (unsigned long long)wParam,
                    (unsigned long long)lParam, cur.left, cur.top, cur.right,
                    cur.bottom, edge, stored);
         }
     }
+
+#endif
 
     // A request for the edge the taskbar is already on changes nothing in
     // Windows (SetStuckPlace returns early), and every process with the
@@ -3013,7 +3032,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         // The taskbar is being moved to another edge. See
         // EdgeChangeInProgress: give every taskbar back, then answer nothing
         // for Windows until the call returns and a moment after.
-        Wh_Log(L"taskbar is changing edge (message %#x, wParam %#llx, lParam "
+        DLog(L"taskbar is changing edge (message %#x, wParam %#llx, lParam "
                L"%#llx): the mod stands back",
                uMsg, (unsigned long long)wParam, (unsigned long long)lParam);
 
@@ -3057,7 +3076,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                 *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
             RECT now{};
             GetWindowRect(hWnd, &now);
-            Wh_Log(L"edge change handled: edge now %u, flags %#x, window at "
+            DLog(L"edge change handled: edge now %u, flags %#x, window at "
                    L"(%d,%d,%d,%d)",
                    edge, stored, now.left, now.top, now.right, now.bottom);
             InterlockedExchange(&g_lastEdgeSeen, (LONG)edge);
@@ -3071,7 +3090,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         // bottom edge the flags read off for about a minute and then on; this
         // is one of the three messages that can do that, and the log says
         // when it arrives.
-        Wh_Log(L"auto-hide set through the tray's setting message: %lld",
+        DLog(L"auto-hide set through the tray's setting message: %lld",
                (long long)lParam);
     }
 
@@ -3095,7 +3114,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             }
             // Not the hit test: that only works with the pointer near, and
             // at unload it is in Windhawk's window.
-            Wh_Log(L"unload: unhiding taskbar %p through Windows", rec->hwnd);
+            DLog(L"unload: unhiding taskbar %p through Windows", rec->hwnd);
             UnhideThroughWindows(rec->hwnd);
             asked++;
         }
@@ -4004,7 +4023,7 @@ void ReleaseBarsOnUnload() {
                 ? SendMessageTimeoutW(g_trayWnd, g_barRevealMsg, 0, 0,
                                       SMTO_ABORTIFHUNG, 2000, &asked)
                 : 0;
-        Wh_Log(L"unload: reveal message %s (error %u), %d secondaries asked",
+        DLog(L"unload: reveal message %s (error %u), %d secondaries asked",
                revealSent ? L"delivered" : L"NOT delivered",
                revealSent ? 0 : GetLastError(), (int)asked);
         if (revealSent && asked) {
@@ -4016,11 +4035,11 @@ void ReleaseBarsOnUnload() {
         const LRESULT releaseSent =
             SendMessageTimeoutW(g_trayWnd, g_barReleaseMsg, 0, 0,
                                 SMTO_ABORTIFHUNG, 2000, &done);
-        Wh_Log(L"unload: release message %s (error %u)",
+        DLog(L"unload: release message %s (error %u)",
                releaseSent && done ? L"handled" : L"NOT handled",
                releaseSent ? 0 : GetLastError());
     } else {
-        Wh_Log(L"unload: nothing to release (window %p, subclassed %d, "
+        DLog(L"unload: nothing to release (window %p, subclassed %d, "
                L"released %d)",
                g_trayWnd, g_subclassed,
                (int)InterlockedCompareExchange(&g_barsReleased, 0, 0));
