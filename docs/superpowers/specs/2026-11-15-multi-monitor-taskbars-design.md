@@ -122,6 +122,15 @@ first use it is not visible with an empty rectangle. Open, it is visible at
 by Win+A, it keeps that rectangle and stops being visible. It was never
 cloaked. So "visible, not cloaked, on a display" tells open from dismissed.
 
+Secondary taskbars and notifications (9974's PDB and code):
+`CSecondaryTray::Unhide(UnhideRequest)` is a four-instruction thunk that
+adjusts `this` and jumps to the private `_Unhide(TrayUnhideFlags,
+UnhideRequest)` with flags 0, so hooking `_Unhide` alone sees every request
+once. Sending a held taskbar `WM_NCHITTEST` alone reveals it (five of five,
+about 62 ms later); no mouse move is needed. Pressing the Win key with the
+pointer on the upper display opens Start on the primary with the mod disabled
+too.
+
 Not tested: left, right and top edges with a display beyond them; three or
 more displays; edges that only partly face another display; Start, Search and
 Quick Settings opened from a held taskbar; a held taskbar together with the
@@ -266,7 +275,7 @@ setting's description says so.
    another display" off by default.
 
 The owner has since decided that all four steps ship as one release, tested
-on every edge before it goes out. The steps remain the order of work, and
+on every edge before it goes out, and that the release is **v2.0.0**. The steps remain the order of work, and
 each still leaves the mod working. A release with code changes uses the manual
 `tools/release.sh` flow and takes the next minor version; an open build PR is
 closed and reopened by the watcher, as the README describes.

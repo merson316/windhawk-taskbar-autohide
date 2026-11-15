@@ -12,3 +12,8 @@
 ?Unhide@TrayUI@@UEAAXW4TrayUnhideFlags@TrayCommon@@W4UnhideRequest@3@@Z	public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest)
 ?SetUnhideTimer@TrayUI@@UEAAXJJ@Z	public: virtual void __cdecl TrayUI::SetUnhideTimer(long,long)
 ?_AutoHideCollision@TrayUI@@QEAAXXZ	public: void __cdecl TrayUI::_AutoHideCollision(void)
+?Unhide@CSecondaryTray@@UEAAXW4UnhideRequest@TrayCommon@@@Z	public: virtual void __cdecl CSecondaryTray::Unhide(enum TrayCommon::UnhideRequest)
+?_Unhide@CSecondaryTray@@AEAAXW4TrayUnhideFlags@TrayCommon@@W4UnhideRequest@3@@Z	private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest)
+?_AutoHide@CSecondaryTray@@AEAAX_N@Z	private: void __cdecl CSecondaryTray::_AutoHide(bool)
+?GetStuckPlace@CSecondaryTray@@UEAAXPEAK@Z	public: virtual void __cdecl CSecondaryTray::GetStuckPlace(unsigned long *)
+?GetMonitor@CSecondaryTray@@UEAAPEAUHMONITOR__@@XZ	public: virtual struct HMONITOR__ * __cdecl CSecondaryTray::GetMonitor(void)

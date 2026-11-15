@@ -2255,6 +2255,91 @@ void WatchHeldReveals() {
     }
 }
 
+// ------------------------------------------ notifications, secondary taskbars
+
+// A flashing button asks every taskbar to show, and a secondary taskbar is
+// shown through CSecondaryTray::_Unhide, not TrayUI::Unhide. Its public
+// Unhide(UnhideRequest) is a thunk that adjusts `this` and jumps here with
+// flags 0, so this one function sees every request once. The same burst rule
+// applies, with a burst per taskbar.
+//
+// Hooked from symbols only. On a build whose symbols Microsoft has not
+// published it is left alone, and secondary taskbars keep Windows' behaviour.
+using CSecondaryTray_Unhide_t = void(WINAPI*)(void* pThis, int flags,
+                                              int request);
+CSecondaryTray_Unhide_t CSecondaryTray_Unhide_Original;
+
+struct SecondaryBurst {
+    void* tray;
+    BurstState burst;
+} g_secondaryBursts[MAX_TASKBARS];
+
+BurstState* SecondaryBurstFor(void* tray) {
+    SecondaryBurst* spare = &g_secondaryBursts[0];
+    for (SecondaryBurst& b : g_secondaryBursts) {
+        if (b.tray == tray) {
+            return &b.burst;
+        }
+        if (!b.tray) {
+            spare = &b;
+            break;
+        }
+    }
+    // New, or the table is full of taskbars long gone: start afresh.
+    spare->tray = tray;
+    spare->burst = {0, 0, -1};
+    return &spare->burst;
+}
+
+// Whether the pointer is at the docked edge of any secondary taskbar's
+// display: the user reaching for one, which a repeat must not be mistaken for.
+bool PointerAtSecondaryEdge() {
+    POINT pt{};
+    GetCursorPos(&pt);
+    for (int i = 0; i < g_recCount; i++) {
+        const TaskbarRec& rec = g_recs[i];
+        if (rec.primary || IsRectEmpty(&rec.display)) {
+            continue;
+        }
+        const RECT bar{rec.shown.x, rec.shown.y, rec.shown.x + rec.size.cx,
+                       rec.shown.y + rec.size.cy};
+        const RECT strip = RevealStrip(rec.display, bar, rec.edge,
+                                       HeldStripPx(g_settings.revealTolerance),
+                                       GetDpiForWindow(rec.hwnd));
+        if (PtInRect(&strip, pt)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void WINAPI CSecondaryTray_Unhide_Hook(void* pThis, int flags, int request) {
+    if (!g_fatalReason && g_settings.notificationHoldMs > 0) {
+        BurstState* burst = SecondaryBurstFor(pThis);
+        const LONG64 now = (LONG64)GetTickCount64();
+        switch (BurstDecide(burst, now, request, g_settings.notificationHoldMs,
+                            g_settings.notificationBurstGapMs,
+                            PointerAtSecondaryEdge(),
+                            ShellSurfaceInForeground())) {
+            case BURST_BEGIN:
+                // One hold for every taskbar: PermitAutoHide is asked by task
+                // lists, and which taskbar a task list belongs to is not
+                // known here. The later of the holds wins.
+                if (burst->holdUntil >
+                    InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
+                    InterlockedExchange64(&g_holdVisibleUntil,
+                                          burst->holdUntil);
+                }
+                break;
+            case BURST_DROP:
+                return;
+            case BURST_PASS:
+                break;
+        }
+    }
+    CSecondaryTray_Unhide_Original(pThis, flags, request);
+}
+
 // Paces every animation: one tick per frame, from a high-resolution timer,
 // aimed at frame boundaries so a late tick does not push the later ones back.
 // The step itself runs on the taskbar's thread, which owns the records.
@@ -3137,6 +3222,22 @@ PCWSTR SetUpHooks() {
                L"Windhawk downloads these from Microsoft the first time a mod "
                L"needs them, so check the internet connection and reload the "
                L"mod.";
+    }
+
+    // Optional, and from symbols only: it is not in kKnownBuilds. Without it
+    // the rest of the mod works, and a flashing button shows secondary
+    // taskbars as Windows itself would.
+    WindhawkUtils::SYMBOL_HOOK secondaryHooks[] = {
+        {{LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
+          LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
+         &CSecondaryTray_Unhide_Original, CSecondaryTray_Unhide_Hook, true},
+    };
+    if (known ||
+        !WindhawkUtils::HookSymbols(taskbar, secondaryHooks,
+                                    ARRAYSIZE(secondaryHooks)) ||
+        !CSecondaryTray_Unhide_Original) {
+        Wh_Log(L"secondary taskbars: notification handling unavailable on "
+               L"this build");
     }
 
     // Every one of these is load-bearing: running with any missing would change

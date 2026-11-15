@@ -25,6 +25,7 @@
 - "Skip edges facing another display" defaults to off from Task 15. While it is on, the mod stands down on left, top and right edges that face a display, as it does today.
 - All commits signed. Never disable signing. No pushes without the owner's word. Work on `multimonitor-experiment`.
 - A release with code changes uses `tools/release.sh` by hand, only when the owner asks.
+- This work is released as **v2.0.0** (the owner's decision, 2026-11-15). Set `// @version` to 2.0.0 in the release step, not before: the watcher's build PRs still bump the minor version on main until then.
 
 ## Review Focus
 
