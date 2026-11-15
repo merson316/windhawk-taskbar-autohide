@@ -2,7 +2,7 @@
 // @id              spike-secondary-park
 // @name            Spike: hidden secondary taskbar stays on its own display
 // @description     Throwaway experiment for issue #11. Not for release.
-// @version         0.5
+// @version         0.6
 // @author          merson316
 // @include         explorer.exe
 // @architecture    x86-64
@@ -45,6 +45,12 @@ Spike 4 adds the primary taskbar, so every taskbar moves the same way. A
 taskbar whose edge has no display beyond it has nowhere to spill onto, so it
 slides the whole way off the desktop whatever the motion setting says; the
 hold, and the wipe or half slide, apply only where a display lies beyond.
+
+Spike 6 measures what an animation costs. Each summary gains the CPU time
+spent during it by the taskbar's thread, the pacing thread, all of Explorer,
+and the compositor (dwm.exe) where Windows lets the mod read it. Change "Frame
+rate cap" to compare rates. With "Hold" off, Windows' own slide runs and is
+measured the same way, as the baseline.
 */
 // ==/WindhawkModReadme==
 
@@ -79,6 +85,7 @@ hold, and the wipe or half slide, apply only where a display lies beyond.
 #include <shellapi.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <tlhelp32.h>
 
 const UINT_PTR kTimerId = 0x7AB5C1D3;
 const UINT kTimerMs = 30;
@@ -100,6 +107,7 @@ struct Bar {
     bool clipped;
     bool ownMove;      // the mod itself is moving the window
     int overruled;     // own moves the taskbar tried to replace, this animation
+    ULONG64 cpu[4];    // Cpu at the start of this animation
 
     int asked;         // pixels hidden that Windows last asked for
     int cur;           // pixels hidden right now
@@ -347,6 +355,73 @@ void ApplyOffset(Bar* bar, int off) {
     bar->cur = off;
 }
 
+// CPU cycles spent so far. Must be called on the taskbar's thread.
+struct Cpu {
+    ULONG64 taskbar, pacing, explorer, dwm;
+};
+
+HANDLE g_dwm = nullptr;
+double g_cyclesPerMs = 0;
+
+Cpu SnapCpu() {
+    Cpu c{};
+    QueryThreadCycleTime(GetCurrentThread(), &c.taskbar);
+    if (g_animThread) {
+        QueryThreadCycleTime(g_animThread, &c.pacing);
+    }
+    QueryProcessCycleTime(GetCurrentProcess(), &c.explorer);
+    if (g_dwm) {
+        QueryProcessCycleTime(g_dwm, &c.dwm);
+    }
+    return c;
+}
+
+void LogCpu(HWND hwnd, PCWSTR what, const Cpu& a, const Cpu& b, int ms) {
+    if (g_cyclesPerMs <= 0) {
+        return;
+    }
+    const double tb = (b.taskbar - a.taskbar) / g_cyclesPerMs;
+    const double pc = (b.pacing - a.pacing) / g_cyclesPerMs;
+    const double ex = (b.explorer - a.explorer) / g_cyclesPerMs;
+    const double dw = (b.dwm - a.dwm) / g_cyclesPerMs;
+    WCHAR text[300];
+    _snwprintf(text, ARRAYSIZE(text) - 1,
+               L"%p cpu %s over %d ms: taskbar thread %.2f ms, pacing thread "
+               L"%.2f ms, all of explorer %.2f ms, dwm %.2f ms%s",
+               hwnd, what, ms, tb, pc, ex, dw,
+               g_dwm ? L"" : L" (dwm not readable)");
+    text[ARRAYSIZE(text) - 1] = 0;
+    Log(L"%s", text);
+}
+
+void OpenDwm() {
+    HKEY key;
+    DWORD mhz = 0, size = sizeof(mhz);
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", 0,
+                      KEY_READ, &key) == ERROR_SUCCESS) {
+        RegQueryValueExW(key, L"~MHz", nullptr, nullptr, (BYTE*)&mhz, &size);
+        RegCloseKey(key);
+    }
+    g_cyclesPerMs = mhz * 1000.0;
+
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        PROCESSENTRY32W e{};
+        e.dwSize = sizeof(e);
+        for (BOOL ok = Process32FirstW(snap, &e); ok;
+             ok = Process32NextW(snap, &e)) {
+            if (_wcsicmp(e.szExeFile, L"dwm.exe") == 0) {
+                g_dwm = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                                    e.th32ProcessID);
+                break;
+            }
+        }
+        CloseHandle(snap);
+    }
+    Log(L"cpu: %u MHz, dwm %s", mhz, g_dwm ? L"readable" : L"not readable");
+}
+
 void FinishAnimation(Bar* bar) {
     bar->animating = false;
     int n = bar->stepCount;
@@ -377,6 +452,14 @@ void FinishAnimation(Bar* bar) {
         n > 1 ? (int)minGap : 0, (int)maxGap, (int)frame, (int)late, maxJump,
         GetDpiForWindow(bar->hwnd), bar->overruled);
     Log(L"%p steps (0.1 ms:px) %s", bar->hwnd, list);
+    Cpu before{bar->cpu[0], bar->cpu[1], bar->cpu[2], bar->cpu[3]};
+    WCHAR what[64];
+    _snwprintf(what, ARRAYSIZE(what) - 1, L"%s at %d fps",
+               bar->to > bar->from ? L"hide" : L"reveal",
+               (int)(1000000 / (frame ? frame : 1)));
+    what[ARRAYSIZE(what) - 1] = 0;
+    LogCpu(bar->hwnd, what, before, SnapCpu(),
+           n ? (int)(bar->steps[n - 1].us / 1000) : 0);
 }
 
 // One animation step, on the taskbar's thread. Returns whether more follow.
@@ -410,6 +493,11 @@ void StartAnimation(Bar* bar, int to) {
     bar->durationMs = to > bar->cur ? g_hideMs : g_showMs;
     bar->stepCount = 0;
     bar->overruled = 0;
+    const Cpu c = SnapCpu();
+    bar->cpu[0] = c.taskbar;
+    bar->cpu[1] = c.pacing;
+    bar->cpu[2] = c.explorer;
+    bar->cpu[3] = c.dwm;
     bar->animating = true;
     int fps = bar->hz;
     if (g_maxFps > 0 && g_maxFps < fps) {
@@ -606,6 +694,15 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
         InterlockedIncrement(&g_slideCalls);
         animate = false;
     }
+    if (!g_hold && animate && FindBar(hWnd)) {
+        // The baseline: Windows' own slide, measured the same way.
+        const Cpu before = SnapCpu();
+        const LONGLONG start = Now();
+        TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+        LogCpu(hWnd, show ? L"Windows' own reveal" : L"Windows' own hide",
+               before, SnapCpu(), (int)((Now() - start) * 1000 / g_qpf));
+        return;
+    }
     TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
 }
 
@@ -731,7 +828,7 @@ BOOL Wh_ModInit() {
     LARGE_INTEGER f;
     QueryPerformanceFrequency(&f);
     g_qpf = f.QuadPart;
-    Log(L"---- spike 0.5 loaded");
+    Log(L"---- spike 0.6 loaded");
     LoadSettings();
 
     HMODULE taskbar =
@@ -752,6 +849,7 @@ BOOL Wh_ModInit() {
 
     g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_animThread = CreateThread(nullptr, 0, AnimThreadProc, nullptr, 0, nullptr);
+    OpenDwm();
     Attach();
     return TRUE;
 }
