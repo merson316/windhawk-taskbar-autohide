@@ -35,6 +35,10 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    if (!strcmp(cmd, "delay")) {   // now lastKeptUp delayMs
+        printf("%%d\n", HideDelayElapsed(a[0], a[1], (int)a[2]) ? 1 : 0);
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -98,3 +102,12 @@ def test_quiet_longer_than_the_gap_begins_again(logic):
 def test_pointer_or_open_surface_lets_a_repeat_through(logic):
     assert burst(logic, (0, 17, 0, 0), (5600, 17, 1, 0)) == [0, 1]
     assert burst(logic, (0, 17, 0, 0), (5600, 17, 0, 1)) == [0, 1]
+
+
+# ---- hide delay (#12) --------------------------------------------------------
+
+def test_hide_delay(logic):
+    # now, last moment something kept the taskbar up, delay
+    assert logic('delay', 1000, 1000, 0) == [1]      # 0 hides at once
+    assert logic('delay', 1499, 1000, 500) == [0]
+    assert logic('delay', 1500, 1000, 500) == [1]

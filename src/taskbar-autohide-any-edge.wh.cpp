@@ -135,6 +135,19 @@ reason instead of failing silently. The taskbar is left alone in that state.
     0 keeps the Windows default of 200 ms. Range 25-2000.
 
     Default: 0.
+- hideDelayMs: 0
+  $name: Hide delay (ms)
+  $description: >-
+    How long the taskbar stays up after the last moment something was keeping
+    it there: the pointer over it, Start or a flyout open, or a notification's
+    hold. Helps when moving the pointer to another display or into a flyout.
+    The pointer coming back starts the wait again.
+
+    This is the wait before the hide begins, not how long the slide takes.
+    It has no effect on the bottom edge, where Windows hides the taskbar
+    itself. Range 0-10000.
+
+    Default: 0.
 - notificationHoldMs: 1500
   $name: Notifications - keep visible for (ms)
   $description: >-
@@ -268,6 +281,7 @@ struct Settings {
     int notificationBurstGapMs = 10000;
     int hideDurationMs = 0;
     int showDurationMs = 0;
+    int hideDelayMs = 0;
 } g_settings;
 
 int ClampDuration(int ms) {
@@ -329,6 +343,13 @@ void LoadSettings() {
 
     g_settings.hideDurationMs = ClampDuration(Wh_GetIntSetting(L"hideDurationMs"));
     g_settings.showDurationMs = ClampDuration(Wh_GetIntSetting(L"showDurationMs"));
+
+    g_settings.hideDelayMs = Wh_GetIntSetting(L"hideDelayMs");
+    if (g_settings.hideDelayMs < 0) {
+        g_settings.hideDelayMs = 0;
+    } else if (g_settings.hideDelayMs > 10000) {
+        g_settings.hideDelayMs = 10000;
+    }
 }
 
 
@@ -379,6 +400,12 @@ BurstVerdict BurstDecide(BurstState* s, LONG64 now, int request, int holdMs,
         return BURST_DROP;
     }
     return BURST_PASS;
+}
+
+// Whether the hide delay has run out: `lastKeptUp` is the last moment
+// something was keeping the taskbar up.
+bool HideDelayElapsed(LONG64 now, LONG64 lastKeptUp, int delayMs) {
+    return now - lastKeptUp >= delayMs;
 }
 
 // ==/PureLogic==
@@ -526,6 +553,10 @@ HWND g_trayWnd = nullptr;
 bool g_subclassed = false;
 int g_leaveTicks = 0;
 ULONGLONG g_dwellStart = 0;
+
+// The last moment something was keeping the shown taskbar up; the hide delay
+// counts from here. Taskbar thread only.
+LONG64 g_lastKeptUp = 0;
 
 // Windows unhides the taskbar itself for notifications and flashing buttons.
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
@@ -1412,6 +1443,7 @@ void WatcherTick() {
         TrayUI_Unhide_Original(g_trayUI, 2, 1);
         g_inWatcherCall = false;
         g_leaveTicks = 0;
+        g_lastKeptUp = (LONG64)GetTickCount64();
         return;
     }
 
@@ -1431,16 +1463,24 @@ void WatcherTick() {
     // raise above.
     RaiseTaskbarIfDemoted();
 
+    const LONG64 tick = (LONG64)GetTickCount64();
+
     if (PtInRect(&docked, pt) || PointerOverShellSurface() ||
         ShellSurfaceInForeground()) {
         g_leaveTicks = 0;
+        g_lastKeptUp = tick;
         return;
     }
 
-    if ((LONG64)GetTickCount64() <
-        InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
+    if (tick < InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0)) {
         g_leaveTicks = 0;
+        g_lastKeptUp = tick;
         return;   // Windows asked for it to be visible
+    }
+
+    if (!HideDelayElapsed(tick, g_lastKeptUp, g_settings.hideDelayMs)) {
+        g_leaveTicks = 0;
+        return;
     }
 
     if (++g_leaveTicks < LEAVE_TICKS) {

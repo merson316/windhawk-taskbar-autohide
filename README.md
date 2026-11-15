@@ -77,6 +77,7 @@ Compile → Enable.
 | Animation frame rate | 90 | Frames per second for both slides. Higher is smoother and costs more CPU; range 30-240. Disable "Taskbar auto-hide speed" if you have it — both mods pace the same reveal. |
 | Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
+| Hide delay | 0 ms | How long the taskbar stays up after the pointer leaves it, or after Start or a flyout closes, before it hides. The pointer coming back starts the wait again. No effect on the bottom edge, where Windows hides the taskbar itself. Range 0-10000. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
 | Notifications - treat as one within | 10000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
 | Reveal dwell | 0 (off) | How long the pointer must rest in the trigger strip before the taskbar appears. Off by default; raise it if the taskbar appears when you were only crossing the edge. A pointer already over the taskbar never waits. |
