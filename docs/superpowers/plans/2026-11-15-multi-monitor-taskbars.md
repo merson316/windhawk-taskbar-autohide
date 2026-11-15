@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-15-multi-monitor-taskbars-design.md`. Read it first, with `research/spike-secondary-park.wh.cpp`, which is the working reference for Tasks 7 to 10.
 
-**Scope:** all four of the spec's delivery steps. Step 1 (`slidewindow-10066`) is already written and is Task 0. Tasks 1 to 5 are the small fixes, Tasks 6 to 11 the bottom edge, and Tasks 12 to 15 the left, top and right edges (the owner's decision: one release, tested on every edge before it ships). Only the bottom edge was spiked. Task 12 is therefore a measurement with a stop-and-report gate, and Tasks 13 to 15 are written against its expected result.
+**Scope:** all four of the spec's delivery steps, plus Task 16, a check of the whole mod against taskbar.dll that the owner added. Step 1 (`slidewindow-10066`) is already written and is Task 0. Tasks 1 to 5 are the small fixes, Tasks 6 to 11 the bottom edge, and Tasks 12 to 15 the left, top and right edges (the owner's decision: one release, tested on every edge before it ships). Only the bottom edge was spiked. Task 12 is therefore a measurement with a stop-and-report gate, and Tasks 13 to 15 are written against its expected result.
 
 ## Global Constraints
 
@@ -436,7 +436,37 @@ def test_hidden_target(logic):
 - [ ] **Step 5:** With `skipAdjacentEdges` turned on: the mod stands down on a facing edge exactly as the released mod does.
 - [ ] **Step 6:** Commit: `feat: held taskbars on every edge; "Skip edges facing another display" off by default`.
 
-### Task 16: The layout matrix, documents and the pre-release
+### Task 16: Check the whole mod against taskbar.dll, then clean up
+
+Added by the owner on 2026-11-15: "run the entire code pipeline through the same REA analysis, so all the things not from today. See if we can clean up code and optimise things."
+
+Everything written before 2026-11-15 rests on what was learned by experiment and from one hand analysis of 9549/9807. Today several fixes were written from guesses and some were wrong; reading taskbar.dll settled them. This task does the same for the rest of the mod, then removes what the reading shows is unneeded.
+
+**Files:**
+- Read: `src/taskbar-autohide-any-edge.wh.cpp` (all of it), `research/symbol-map.tsv`, `docs/findings-phase1.md`, `docs/ROADMAP.md`
+- Create: `docs/taskbar-internals.md` (what the code shows, with function names and RVAs for 9974 and 10066)
+- Modify: the mod, its tests, `research/symbol-map.tsv`
+
+**Method:** REA on taskbar.dll 10.0.26100.9974 (symbols published) and 10.0.26100.10066 (the build the owner will be on; names by matching against 9974). Long digs go to a subagent; only conclusions come back. For every claim: observed in code, or inferred, and from which function.
+
+- [ ] **Step 1: List every assumption the mod makes about Windows.** Go through the source top to bottom and write each one down with its line: each hook and why it exists, each member offset (`ScanForOffsets`: edge and flags; the duration members), each message or flag value (`ABS_ALWAYSONTOP` as "hidden", unhide requests, `WM_SETTINGCHANGE` nudges, the `SWP_FRAMECHANGED` nudge), each timing constant (`WATCH_TICK_MS`, `LEAVE_TICKS`, the warning delays, the settle period), each window class and child it relies on, and each comment that states how Windows behaves.
+- [ ] **Step 2: Check each against the code.** For each item: confirmed, wrong, or not determinable from taskbar.dll. Include at least:
+  - `GetAutoHideFlags`, `SetAutoHideFlags`, `GetDockedRect`, `Unhide`, `SlideWindow`, `PermitAutoHide`: what each really does, every caller, and whether the mod's hook is still the smallest correct intervention now that it animates and positions the taskbars itself.
+  - The watcher: whether TrayUI's own hide path (`_Hide`, `_SetAutoHideTimer`, `_OnTimer`) can be made to run off the bottom edge instead of the mod polling every 40 ms, and what stops it today (the earlier dig saw an edge test under a feature flag at the start of `_Hide`).
+  - `RaiseTaskbarIfDemoted` and "Keep the taskbar above other windows": what demotes the taskbar and whether Windows has a call for restoring it.
+  - `PointerOverShellSurface`, `ShellSurfaceInForeground`, the shell host list, `QuickSettingsOpen`: what Windows itself checks before hiding (the secondary's `_OnTimer` conditions are known; find the primary's) and whether the mod can ask Windows instead of keeping its own list.
+  - The Sleep and GetTickCount hooks: still needed only where Windows' own slide runs (the bottom edge with nothing held); confirm, and see whether calling `SlideWindow` unanimated plus the mod's own animation there too would let them go without changing one-display bottom behaviour that the owner cares about.
+  - `ScanForDurationLoads`: no longer used by the mod; decide with the matcher's needs in mind.
+  - Unload: `RestoreTaskbarIfHidden` writing TrayUI's flags directly, against what `SetAutoHideState` does.
+  - TrayUI+0x68 (the saved setting) for the first minute after Explorer starts.
+  - Everything in today's ledger marked "not checked against code".
+- [ ] **Step 3: Write `docs/taskbar-internals.md`.** One section per subsystem (edge change, auto-hide state, hide and unhide, window position, secondary taskbars, notifications, cloaking, content window), each stating what the code does, the functions and RVAs, and what remains inferred. It replaces the scattered comments as the reference, and `docs/findings-phase1.md` and the ROADMAP point to it.
+- [ ] **Step 4: Bring the list to the owner** as a table: assumption, verdict, proposed change (remove, simplify, fix, keep), risk. No code changes before this.
+- [ ] **Step 5: Apply the agreed changes, one commit each,** tests first where a pure function is involved. Delete code the reading shows is dead or redundant, correct comments that state Windows' behaviour wrongly, and replace polling or guessing with Windows' own calls where the code offers one.
+- [ ] **Step 6:** Run `.venv/bin/pytest tests -q -rs` and `tools/compile-mod.sh`. Expected: PASS. Report the mod's size before and after and which hooks remain.
+- [ ] **Step 7: Owner re-check** of each edge after the clean-up, with a recording, compared frame by frame against the last accepted recording.
+
+### Task 17: The layout matrix, documents and the pre-release
 
 **Files:**
 - Modify: `tools/measure-taskbars.ps1`, `README.md`, the mod's header block and readme, `docs/ROADMAP.md`
