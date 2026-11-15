@@ -1314,6 +1314,10 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
     // mod goes there on its own clock. Secondary taskbars slide through this
     // function too.
     if (BarsHandled() && RecFor(hWnd)) {
+        Wh_Log(L"taskbar %p: SlideWindow to (%d,%d,%d,%d), show %d, animate "
+               L"%d -> not animated by Windows",
+               hWnd, rect ? rect->left : 0, rect ? rect->top : 0,
+               rect ? rect->right : 0, rect ? rect->bottom : 0, show, animate);
         TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, false);
         return;
     }
@@ -1591,7 +1595,9 @@ struct TaskbarRec {
     // Set once the mod has put the window somewhere itself. From then on its
     // position says where the animation is, not what Windows wants.
     bool placed;
-    bool ownMove;      // inside the mod's own SetWindowPos
+    bool ownMove;      // inside the mod's own SetWindowPos...
+    int ownX, ownY;    // ...to this position
+    int lastAskedOff;  // what Windows last asked for, for the log
     bool clipped;
     RECT region;       // the window region in force, when clipped
 
@@ -1792,6 +1798,20 @@ HANDLE g_barWake = nullptr;
 HANDLE g_barThread = nullptr;
 volatile LONG g_barStop = 0;
 
+// Move a taskbar's window, marking the move as the mod's own so the handler
+// puts this position back after the taskbar has replaced it. The mark names
+// the position: while this SetWindowPos runs, the taskbar reacts to the move
+// by asking for its own idea of the position, nested inside this call, and
+// that request must not be mistaken for the mod's.
+void MoveBar(TaskbarRec* rec, int x, int y) {
+    rec->ownX = x;
+    rec->ownY = y;
+    rec->ownMove = true;
+    SetWindowPos(rec->hwnd, nullptr, x, y, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    rec->ownMove = false;
+}
+
 // Put the window and its region where `hiddenPx` hidden pixels call for.
 void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
     const BarPlacement p =
@@ -1800,10 +1820,7 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
     if (cur.left != p.x || cur.top != p.y) {
-        rec->ownMove = true;
-        SetWindowPos(rec->hwnd, nullptr, p.x, p.y, 0, 0,
-                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        rec->ownMove = false;
+        MoveBar(rec, p.x, p.y);
     }
 
     if (!p.clipped) {
@@ -1852,10 +1869,7 @@ void ReleaseBar(TaskbarRec* rec, bool shown) {
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
     if (cur.left != p.x || cur.top != p.y) {
-        rec->ownMove = true;
-        SetWindowPos(rec->hwnd, nullptr, p.x, p.y, 0, 0,
-                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-        rec->ownMove = false;
+        MoveBar(rec, p.x, p.y);
     }
     rec->hiddenNow = rec->hiddenAsked;
     rec->placed = false;
@@ -2001,7 +2015,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
         return;
     }
 
-    if (rec->ownMove) {
+    if (rec->ownMove && reqX == rec->ownX && reqY == rec->ownY) {
         // The taskbar's handler replaces any position with the one it
         // believes in. Put back what the mod asked for, or the window stays
         // put while the region moves and the motion runs backwards.
@@ -2045,6 +2059,14 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
                    : asked.bottom > m.bottom ? m.bottom - asked.bottom
                                              : 0;
     const int off = dx ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
+    if (off != rec->lastAskedOff) {
+        Wh_Log(L"taskbar %p: Windows asks (%d,%d,%d,%d), %d px hidden (was "
+               L"%d), flags %#x%s",
+               rec->hwnd, asked.left, asked.top, asked.right, asked.bottom,
+               off, rec->lastAskedOff, wp->flags,
+               rec->ownMove ? L", inside the mod's own move" : L"");
+        rec->lastAskedOff = off;
+    }
 
     // Windows says only "shown" or "hidden"; how much to hide is the mod's
     // own answer. On the bottom edge that is Windows' own 2 px sliver.
@@ -2381,10 +2403,7 @@ void RefreshRecords() {
                 }
                 rec->clipped = true;
                 rec->region = {0, 0, 0, 0};
-                rec->ownMove = true;
-                SetWindowPos(rec->hwnd, nullptr, rec->shown.x, rec->shown.y, 0,
-                             0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                rec->ownMove = false;
+                MoveBar(rec, rec->shown.x, rec->shown.y);
                 Wh_Log(L"taskbar %p taken over while hidden: dpi now %u",
                        rec->hwnd, GetDpiForWindow(rec->hwnd));
             }
