@@ -751,8 +751,12 @@ foreach ($b in [TaskbarDriver]::Bars()) { "  " + (Describe $b) }
 ""
 if ($Snapshot) { return }
 
-if (-not [TaskbarDriver]::AutoHide()) {
-    Write-Host "Windows reports auto-hide off. Turn on 'Automatically hide the taskbar' first." -ForegroundColor Red
+# Off the bottom edge, without the mod, Windows answers "off" whatever the
+# setting is. The stored setting is the one that counts.
+$stored = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3' -ErrorAction SilentlyContinue).Settings
+$autoHideSet = [TaskbarDriver]::AutoHide() -or ($stored -and ($stored[8] -band 1))
+if (-not $autoHideSet) {
+    Write-Host "Auto-hide is off. Turn on 'Automatically hide the taskbar' first." -ForegroundColor Red
     exit 2
 }
 
