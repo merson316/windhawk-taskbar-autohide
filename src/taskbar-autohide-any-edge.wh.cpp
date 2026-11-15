@@ -1341,6 +1341,7 @@ struct TaskbarRec;
 TaskbarRec* RecFor(HWND hwnd);
 bool BarsHandled();
 void SlideHint(HWND hwnd, bool show);
+void NoteSecondaryTray(HWND hwnd);
 
 void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                                     HMONITOR monitor, bool show, bool animate) {
@@ -1359,6 +1360,7 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                L"%d -> not animated by Windows",
                hWnd, rect ? rect->left : 0, rect ? rect->top : 0,
                rect ? rect->right : 0, rect ? rect->bottom : 0, show, animate);
+        NoteSecondaryTray(hWnd);
         TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, false);
         SlideHint(hWnd, show);
         return;
@@ -1667,6 +1669,12 @@ struct TaskbarRec {
     // A secondary off the bottom edge, which the mod hides and reveals itself.
     LONG64 lastKeptUp;      // last moment something was keeping it up
     int leaveTicks;
+
+    // The CSecondaryTray behind a secondary's window, and the unhide Windows
+    // last gave it, learned when Windows slides this window from inside that
+    // unhide. With it the mod can have Windows show the taskbar for real.
+    void* tray;
+    int trayFlags, trayRequest;
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -2459,6 +2467,24 @@ using CSecondaryTray_Unhide_t = void(WINAPI*)(void* pThis, int flags,
                                               int request);
 CSecondaryTray_Unhide_t CSecondaryTray_Unhide_Original;
 
+// Set while Windows is inside an unhide of a secondary taskbar.
+void* g_unhidingTray = nullptr;
+int g_unhidingFlags = 0, g_unhidingRequest = 0;
+
+// Windows is sliding this window. If that is happening inside a secondary
+// taskbar's unhide, the window is that taskbar's.
+void NoteSecondaryTray(HWND hwnd) {
+    if (!g_unhidingTray) {
+        return;
+    }
+    TaskbarRec* rec = RecFor(hwnd);
+    if (rec && !rec->primary) {
+        rec->tray = g_unhidingTray;
+        rec->trayFlags = g_unhidingFlags;
+        rec->trayRequest = g_unhidingRequest;
+    }
+}
+
 struct SecondaryBurst {
     void* tray;
     BurstState burst;
@@ -2530,7 +2556,12 @@ void WINAPI CSecondaryTray_Unhide_Hook(void* pThis, int flags, int request) {
     // Off the bottom edge the mod shows these taskbars itself, and Windows,
     // which may believe this one is showing already, would do nothing.
     RevealModSecondaries();
+    void* const outer = g_unhidingTray;
+    g_unhidingTray = pThis;
+    g_unhidingFlags = flags;
+    g_unhidingRequest = request;
     CSecondaryTray_Unhide_Original(pThis, flags, request);
+    g_unhidingTray = outer;
 }
 
 // Paces every animation from a high-resolution timer: it asks the taskbar's
@@ -2733,14 +2764,29 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         LRESULT asked = 0;
         for (int i = 0; i < g_recCount; i++) {
             TaskbarRec* rec = &g_recs[i];
-            if (rec->primary || rec->edge >= ABE_BOTTOM || !rec->placed ||
-                rec->hiddenAsked == 0) {
+            // Every secondary off the bottom edge, whatever the mod has it
+            // doing: Windows may believe it hidden while the mod shows it.
+            if (rec->primary || rec->edge >= ABE_BOTTOM ||
+                IsRectEmpty(&rec->display)) {
                 continue;
             }
-            RECT cur{};
-            GetWindowRect(rec->hwnd, &cur);
-            RevealHeld(rec, {(cur.left + cur.right) / 2,
-                             (cur.top + cur.bottom) / 2});
+            if (rec->tray && CSecondaryTray_Unhide_Original) {
+                // The sure way: the unhide Windows itself last used for this
+                // taskbar. The hit test below only works with the pointer
+                // near, and at unload it is in Windhawk's window.
+                Wh_Log(L"unload: unhiding taskbar %p through Windows",
+                       rec->hwnd);
+                CSecondaryTray_Unhide_Original(rec->tray, rec->trayFlags,
+                                               rec->trayRequest);
+            } else {
+                Wh_Log(L"unload: taskbar %p has no known tray, sending the "
+                       L"hit test",
+                       rec->hwnd);
+                RECT cur{};
+                GetWindowRect(rec->hwnd, &cur);
+                RevealHeld(rec, {(cur.left + cur.right) / 2,
+                                 (cur.top + cur.bottom) / 2});
+            }
             asked++;
         }
         return asked;
