@@ -1006,9 +1006,13 @@ void PublishAutoHideState(UINT edge, UINT stored) {
 
 // Returns the stored flags rather than the zero the original reports when the
 // taskbar is not docked to the bottom.
+// Set as the mod unloads, once every taskbar has been given back: from then
+// on Windows gets its own answer about auto-hide, as it will without the mod.
+volatile LONG g_unloading = 0;
+
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
-    if (g_fatalReason || !pThis || !g_offsetsVerified) {
+    if (g_fatalReason || g_unloading || !pThis || !g_offsetsVerified) {
         return ret;
     }
 
@@ -1794,6 +1798,7 @@ bool BarsHandled() {
 
 UINT g_barTickMsg = 0;
 UINT g_barReleaseMsg = 0;
+UINT g_barRevealMsg = 0;
 HANDLE g_barWake = nullptr;
 HANDLE g_barThread = nullptr;
 volatile LONG g_barStop = 0;
@@ -2449,21 +2454,38 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return TickBars();
     }
 
+    if (g_barRevealMsg && uMsg == g_barRevealMsg) {
+        // Unloading, off the bottom edge: have Windows itself reveal every
+        // hidden secondary taskbar while the mod can still ask it to. Moving
+        // the window back is not enough: Windows goes on believing the
+        // taskbar is hidden, it stays unusable until "show my taskbar on all
+        // displays" is toggled, and if the mod is loaded again its first
+        // reveal has nothing to animate. Returns how many were asked.
+        LRESULT asked = 0;
+        for (int i = 0; i < g_recCount; i++) {
+            TaskbarRec* rec = &g_recs[i];
+            if (rec->primary || rec->edge >= ABE_BOTTOM || !rec->placed ||
+                rec->hiddenAsked == 0) {
+                continue;
+            }
+            RECT cur{};
+            GetWindowRect(rec->hwnd, &cur);
+            RevealHeld(rec, {(cur.left + cur.right) / 2,
+                             (cur.top + cur.bottom) / 2});
+            asked++;
+        }
+        return asked;
+    }
+
     if (g_barReleaseMsg && uMsg == g_barReleaseMsg) {
         // Unloading. Release while the windows are still subclassed, so the
         // moves are not overruled, then leave every taskbar alone.
         ReleaseAllBars();
         InterlockedExchange(&g_barsReleased, 1);
-        // Without the mod Windows no longer treats auto-hide as on off the
-        // bottom edge. A secondary taskbar left believing it is hidden stays
-        // unreachable until "show on all displays" is toggled, so make each
-        // look at its state again.
-        for (int i = 0; i < g_recCount; i++) {
-            if (!g_recs[i].primary) {
-                PostMessageW(g_recs[i].hwnd, WM_SETTINGCHANGE, SPI_SETWORKAREA,
-                             0);
-            }
-        }
+        // From here Windows hears its own answer about auto-hide, which off
+        // the bottom edge is "off": nothing it has just shown is hidden again
+        // in the moments before the hooks go.
+        InterlockedExchange(&g_unloading, 1);
         return 1;
     }
 
@@ -3230,6 +3252,8 @@ BOOL Wh_ModInit() {
         RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeBarTick");
     g_barReleaseMsg =
         RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeBarRelease");
+    g_barRevealMsg =
+        RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeBarReveal");
     g_barWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (g_barTickMsg && g_barWake) {
         g_barThread =
@@ -3312,8 +3336,18 @@ void ReleaseBarsOnUnload() {
     // The watch and pacing threads have stopped. Put every taskbar back where
     // Windows last asked for it, whole, on the taskbar's own thread, which
     // owns the records.
-    if (g_trayWnd && g_subclassed && g_barReleaseMsg) {
-        DWORD_PTR done = 0;
+    if (g_trayWnd && g_subclassed && g_barReleaseMsg &&
+        !InterlockedCompareExchange(&g_barsReleased, 0, 0)) {
+        DWORD_PTR asked = 0, done = 0;
+        if (g_barRevealMsg &&
+            SendMessageTimeoutW(g_trayWnd, g_barRevealMsg, 0, 0,
+                                SMTO_ABORTIFHUNG, 2000, &asked) &&
+            asked) {
+            // Windows answers the hit test about 60 ms later, on the
+            // taskbar's thread. Give it time, but less than the half second
+            // after which it would hide the taskbar again.
+            Sleep(250);
+        }
         SendMessageTimeoutW(g_trayWnd, g_barReleaseMsg, 0, 0, SMTO_ABORTIFHUNG,
                             2000, &done);
     }
