@@ -439,8 +439,8 @@ bool HideDelayElapsed(LONG64 now, LONG64 lastKeptUp, int delayMs) {
 // Windows hides a taskbar by moving its window past the docked edge. With
 // another display past that edge, the hidden window sits mostly on that
 // display and takes its DPI, and the icons come back at the wrong size. Such a
-// taskbar is "held": its window travels less than half its thickness, so most
-// of it stays where it belongs, and a window region takes away the rest.
+// taskbar is "held": its window does not move at all, and its content slides
+// inside it instead (see PlaceBar).
 
 // Whether `bar`, a taskbar window docked to `edge`, is `display`'s taskbar. A
 // taskbar spans its display along the docked edge, and shown or hidden it
@@ -519,57 +519,74 @@ struct BarPlacement {
     int x, y;       // the window's top-left
     RECT region;    // in window coordinates; meaningful when clipped
     bool clipped;
+    int contentDx, contentDy;   // where the content sits inside the window
 };
 
-// Where a taskbar's window and region go with `hiddenPx` of its thickness
-// hidden. `shown` is its top-left when fully shown. A taskbar that is not held
-// travels the whole way; a held one travels thickness / 2 - 2 at most. Either
-// way the region leaves exactly thickness - hiddenPx showing, against the edge.
+// Where a taskbar's window, region and content go with `hiddenPx` of its
+// thickness hidden. `shown` is the window's top-left when fully shown.
+//
+// Not held: the window itself slides off the desktop, as Windows moves it.
+//
+// Held: the window may not leave its display, so it stays where it is and its
+// content, which is a child window, slides inside it toward the edge. The
+// window clips the content at the display's edge, so the whole taskbar is
+// seen sliding off in one piece, exactly as it does when the window moves, but
+// nothing is ever on the other display and the window's DPI cannot change.
+//
+// Either way the region keeps only what is still showing, so the rest of the
+// window's area does not take the pointer.
 BarPlacement PlaceBar(POINT shown, SIZE size, UINT edge, bool held,
                       int hiddenPx) {
     const bool vertical = edge == ABE_LEFT || edge == ABE_RIGHT;
     const int thickness = vertical ? size.cx : size.cy;
     if (hiddenPx < 0) hiddenPx = 0;
     if (hiddenPx > thickness) hiddenPx = thickness;
-
-    // A held window may travel thickness / 2 - 2 in all. It travels in
-    // proportion to how much is hidden, so it is still moving on every step of
-    // a hide or reveal while the region takes what shows down to nothing: the
-    // taskbar is seen leaving, and there is no moment where it stops and is
-    // cut. (A region change is drawn reliably while the window also moves.)
-    int move = hiddenPx;
-    if (held) {
-        int limit = thickness / 2 - 2;
-        if (limit < 0) limit = 0;
-        move = thickness > 0 ? hiddenPx * limit / thickness : 0;
-    }
     const int visible = thickness - hiddenPx;
 
-    BarPlacement p{shown.x, shown.y, {0, 0, 0, 0}, hiddenPx > 0};
+    BarPlacement p{shown.x, shown.y, {0, 0, 0, 0}, hiddenPx > 0, 0, 0};
     if (!p.clipped) {
         return p;
     }
     p.region = {0, 0, size.cx, size.cy};
+
+    if (held) {
+        switch (edge) {
+            case ABE_LEFT:
+                p.contentDx = -hiddenPx;
+                p.region.right = visible;
+                break;
+            case ABE_TOP:
+                p.contentDy = -hiddenPx;
+                p.region.bottom = visible;
+                break;
+            case ABE_RIGHT:
+                p.contentDx = hiddenPx;
+                p.region.left = hiddenPx;
+                break;
+            default:
+                p.contentDy = hiddenPx;
+                p.region.top = hiddenPx;
+                break;
+        }
+        return p;
+    }
+
     switch (edge) {
         case ABE_LEFT:
-            p.x -= move;
-            p.region.left = move;
-            p.region.right = move + visible;
+            p.x -= hiddenPx;
+            p.region.left = hiddenPx;
             break;
         case ABE_TOP:
-            p.y -= move;
-            p.region.top = move;
-            p.region.bottom = move + visible;
+            p.y -= hiddenPx;
+            p.region.top = hiddenPx;
             break;
         case ABE_RIGHT:
-            p.x += move;
-            p.region.right = size.cx - move;
-            p.region.left = p.region.right - visible;
+            p.x += hiddenPx;
+            p.region.right = visible;
             break;
         default:
-            p.y += move;
-            p.region.bottom = size.cy - move;
-            p.region.top = p.region.bottom - visible;
+            p.y += hiddenPx;
+            p.region.bottom = visible;
             break;
     }
     return p;
@@ -607,10 +624,8 @@ int HeldStripPx(int settingPx) {
 
 // How many pixels of its thickness a taskbar hides. Windows leaves a 2 px
 // sliver for the pointer to find, and "Hide completely" takes that away. A
-// held taskbar always hides all of itself: its window stops half way, so what
-// would be left showing is two rows from its middle, a line of icon tops
-// across the edge. It is revealed from the strip on its display, not from a
-// sliver.
+// held taskbar always hides all of itself: it is revealed from the strip on
+// its display, not from a sliver.
 int HiddenTarget(int thickness, bool hideFully, bool held) {
     return hideFully || held ? thickness : thickness - 2;
 }
@@ -1631,6 +1646,9 @@ struct TaskbarRec {
     bool clipped;
     RECT region;       // the window region in force, when clipped
     bool cloaked;      // hidden from the compositor while held and at rest
+    HWND content;      // the child window that draws the taskbar
+    int contentDx, contentDy;   // where the mod last put it
+    bool contentMoved;
 
     bool animating;
     int from, to;      // hidden pixels
@@ -1718,6 +1736,7 @@ UINT DockedEdge() {
 
 void ReleaseBar(TaskbarRec* rec, bool shown = false);
 void CloakBar(TaskbarRec* rec, bool cloak);
+void MoveBarContent(TaskbarRec* rec, int dx, int dy);
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget);
 
 // Fill in what depends on the display layout. Returns false when no display
@@ -1749,6 +1768,7 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
                     rec->clipped = false;
                 }
                 CloakBar(rec, false);
+                MoveBarContent(rec, 0, 0);
                 rec->placed = false;
                 rec->held = false;
                 rec->display = {0, 0, 0, 0};
@@ -1886,6 +1906,33 @@ void HideModBar(TaskbarRec* rec) {
     }
 }
 
+// The child window that draws a taskbar: its XAML content. Moving it inside the
+// taskbar's window is how a held taskbar slides.
+HWND BarContent(TaskbarRec* rec) {
+    if (!rec->content || !IsWindow(rec->content)) {
+        rec->content = FindWindowExW(
+            rec->hwnd, nullptr,
+            L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr);
+    }
+    return rec->content;
+}
+
+void MoveBarContent(TaskbarRec* rec, int dx, int dy) {
+    if (!rec->contentMoved && dx == 0 && dy == 0) {
+        return;   // never touched, and not asked to be
+    }
+    if (rec->contentMoved && rec->contentDx == dx && rec->contentDy == dy) {
+        return;
+    }
+    if (HWND content = BarContent(rec)) {
+        SetWindowPos(content, nullptr, dx, dy, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        rec->contentDx = dx;
+        rec->contentDy = dy;
+        rec->contentMoved = dx != 0 || dy != 0;
+    }
+}
+
 // A held taskbar at rest is cloaked: taken out of what the compositor draws.
 // Its region is meant to leave nothing showing, but on the primary a region
 // change is not always drawn at once, and the taskbar was left on screen half
@@ -1932,6 +1979,7 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
     if (cur.left != p.x || cur.top != p.y) {
         MoveBar(rec, p.x, p.y);
     }
+    MoveBarContent(rec, p.contentDx, p.contentDy);
 
     if (!p.clipped) {
         if (rec->clipped) {
@@ -1964,6 +2012,7 @@ void ReleaseBar(TaskbarRec* rec, bool shown) {
     rec->revealSent = 0;
     rec->revealStage = 0;
     CloakBar(rec, false);
+    MoveBarContent(rec, 0, 0);
     if (!rec->placed) {
         return;
     }
@@ -2167,6 +2216,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
             rec->clipped = false;
         }
         CloakBar(rec, false);
+        MoveBarContent(rec, 0, 0);
         rec->placed = false;
         rec->held = false;
         rec->display = {0, 0, 0, 0};
@@ -2636,6 +2686,10 @@ void RefreshRecords() {
             rec->region = {-1, -1, -1, -1};
             rec->cloaked = true;
             CloakBar(rec, false);
+            // ...and the content may have been left slid aside.
+            rec->contentMoved = true;
+            rec->contentDx = rec->contentDy = -1;
+            MoveBarContent(rec, 0, 0);
 
             // Never take one over more hidden than the mod itself would hide
             // it: a taskbar with nothing left on screen cannot be revealed.
@@ -3583,10 +3637,20 @@ void ReleaseBarsOnUnload() {
     // regions: an empty one makes it invisible for good. Removing a region
     // works from any thread.
     BOOL uncloak = FALSE;
+    auto contentHome = [](HWND bar) {
+        if (HWND content = FindWindowExW(
+                bar, nullptr,
+                L"Windows.UI.Composition.DesktopWindowContentBridge",
+                nullptr)) {
+            SetWindowPos(content, nullptr, 0, 0, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    };
     if (g_trayWnd) {
         SetWindowRgn(g_trayWnd, nullptr, TRUE);
         DwmSetWindowAttribute(g_trayWnd, DWMWA_CLOAK, &uncloak,
                               sizeof(uncloak));
+        contentHome(g_trayWnd);
     }
     const DWORD pid = GetCurrentProcessId();
     for (HWND w = nullptr;
@@ -3596,6 +3660,7 @@ void ReleaseBarsOnUnload() {
         if (owner == pid) {
             SetWindowRgn(w, nullptr, TRUE);
             DwmSetWindowAttribute(w, DWMWA_CLOAK, &uncloak, sizeof(uncloak));
+            contentHome(w);
         }
     }
     InterlockedExchange(&g_barsReleased, 1);

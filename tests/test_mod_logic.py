@@ -52,8 +52,8 @@ int main(int argc, char** argv) {
     if (!strcmp(cmd, "place")) {   // shownX shownY width height edge held hiddenPx
         BarPlacement p = PlaceBar({(LONG)a[0], (LONG)a[1]}, {(LONG)a[2], (LONG)a[3]}, (UINT)a[4],
                                   a[5] != 0, (int)a[6]);
-        printf("%%d %%d %%ld %%ld %%ld %%ld %%d\n", p.x, p.y, p.region.left, p.region.top,
-               p.region.right, p.region.bottom, p.clipped ? 1 : 0);
+        printf("%%d %%d %%ld %%ld %%ld %%ld %%d %%d %%d\n", p.x, p.y, p.region.left, p.region.top,
+               p.region.right, p.region.bottom, p.clipped ? 1 : 0, p.contentDx, p.contentDy);
         return 0;
     }
     if (!strcmp(cmd, "strip")) {   // display(4) bar(4) edge widthPx dpi
@@ -199,35 +199,38 @@ def test_beyond(logic):
     assert b((0, 0, 1920, 1080), 3, (1920, 0, 3840, 1080), (0, 1080, 1920, 2160)) == 1
 
 
-def test_place_held_bottom_matches_the_spike(logic):
+def test_place_held_window_stays_and_its_content_slides(logic):
+    # place shownX shownY width height edge held hiddenPx
+    #   -> x y  region(l t r b) clipped  contentDx contentDy
+    # A held taskbar's window never leaves its display. Its content, a child
+    # window, slides inside it toward the edge and is clipped by the window,
+    # and the region keeps only the band the content still covers.
     def place(hidden):
         return logic('place', 988, -60, 1440, 60, 3, 1, hidden)
-    assert place(0) == [988, -60, 0, 0, 0, 0, 0]                # shown, no region
-    # Held: the window travels in proportion, 28 px for the whole 60, so it is
-    # still moving on every step while what shows shrinks to nothing.
-    assert place(10) == [988, -56, 0, 6, 1440, 56, 1]           # travelled 4, 50 px showing
-    assert place(30) == [988, -46, 0, 16, 1440, 46, 1]          # travelled 14, 30 px showing
-    assert place(58) == [988, -33, 0, 31, 1440, 33, 1]          # travelled 27, 2 px showing
-    assert place(60) == [988, -32, 0, 32, 1440, 32, 1]          # travelled 28, nothing showing
+    assert place(0) == [988, -60, 0, 0, 0, 0, 0, 0, 0]              # shown: nothing changed
+    assert place(10) == [988, -60, 0, 10, 1440, 60, 1, 0, 10]       # content 10 px down, 50 showing
+    assert place(58) == [988, -60, 0, 58, 1440, 60, 1, 0, 58]
+    assert place(60) == [988, -60, 0, 60, 1440, 60, 1, 0, 60]       # all of it past the edge
 
 
-def test_place_not_held_slides_all_the_way(logic):
-    assert logic('place', 0, 1392, 3440, 48, 3, 0, 46) == [0, 1438, 0, 0, 3440, 2, 1]
+def test_place_not_held_slides_the_window_all_the_way(logic):
+    assert logic('place', 0, 1392, 3440, 48, 3, 0, 46) == [0, 1438, 0, 0, 3440, 2, 1, 0, 0]
 
 
-def test_place_on_each_edge(logic):
-    # 60 px thick, held, 58 hidden: the window has travelled 27 and 2 px stay, against the edge.
-    assert logic('place', 0, 0, 60, 1080, 0, 1, 58) == [-27, 0, 27, 0, 29, 1080, 1]        # left
-    assert logic('place', 0, 0, 1920, 60, 1, 1, 58) == [0, -27, 0, 27, 1920, 29, 1]        # top
-    assert logic('place', 1860, 0, 60, 1080, 2, 1, 58) == [1887, 0, 31, 0, 33, 1080, 1]    # right
+def test_place_held_on_each_edge(logic):
+    # 60 px thick, held, 20 hidden: window in place, content 20 px toward the edge.
+    assert logic('place', 0, 0, 60, 1080, 0, 1, 20) == [0, 0, 0, 0, 40, 1080, 1, -20, 0]          # left
+    assert logic('place', 0, 0, 1920, 60, 1, 1, 20) == [0, 0, 0, 0, 1920, 40, 1, 0, -20]          # top
+    assert logic('place', 1860, 0, 60, 1080, 2, 1, 20) == [1860, 0, 20, 0, 60, 1080, 1, 20, 0]    # right
+    assert logic('place', 0, 1020, 1920, 60, 3, 1, 20) == [0, 1020, 0, 20, 1920, 60, 1, 0, 20]    # bottom
 
 
-def test_held_window_is_never_mostly_off_its_display(logic):
+def test_held_window_never_leaves_its_display(logic):
     for edge, shown in ((0, (0, 0)), (1, (0, 0)), (2, (1860, 0)), (3, (0, 1020))):
         size = (60, 1080) if edge in (0, 2) else (1920, 60)
-        for hidden in (0, 1, 27, 28, 29, 30, 58, 60):
+        for hidden in (0, 1, 30, 59, 60):
             x, y, *_ = logic('place', *shown, *size, edge, 1, hidden)
-            assert abs(x - shown[0]) + abs(y - shown[1]) <= 28
+            assert (x, y) == shown
 
 
 def test_strip_scales_with_dpi(logic):
