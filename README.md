@@ -220,6 +220,10 @@ docked left, Windows auto-hide on -- active
 - **On the bottom edge Windows decides when a taskbar hides.** The mod can
   refuse a hide (for the hide delay, and while Quick Settings is open) but
   does not start one.
+- **With "Hide completely" off, a bottom taskbar with no display near its
+  hidden place is Windows' own.** Its slide is then Windows' loop, paced to the
+  frame rate setting but at Windows' durations (about 200 ms to show, 400 ms
+  to hide); the two duration settings do not reach it.
 - **Without symbols for a build, one function may be missing.** A flashing
   button is kept from re-showing a secondary taskbar through
   `CSecondaryTray::_Unhide`. The mod carries its address for the builds in the
