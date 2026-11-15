@@ -2792,6 +2792,27 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         Wh_Log(L"taskbar is changing edge (message %#x, wParam %#llx, lParam "
                L"%#llx): the mod stands back",
                uMsg, (unsigned long long)wParam, (unsigned long long)lParam);
+
+        // Off the bottom edge "hidden" is the mod's doing: it stored that
+        // state, and Windows only sees it through the mod's hook. Take it
+        // back before Windows moves the taskbar. Left in place, it becomes
+        // visible to Windows the moment the edge is the bottom, where
+        // GetAutoHideFlags is not masked, and Windows then has a taskbar it
+        // believes hidden that it never hid. (Seen: moving left to bottom,
+        // the taskbar stayed on the left with its content laid out for the
+        // bottom, and the edge went back to left.) TrayUI::Unhide with flags
+        // 3: no animation, no hide timer. It must run while the mod still
+        // answers GetAutoHideFlags, or it sees nothing to unhide.
+        if (g_trayUI && g_offsetsVerified && TrayUI_Unhide_Original) {
+            const UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+            const UINT stored =
+                *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
+            if (edge < ABE_BOTTOM && (stored & 3) == 3) {
+                g_inWatcherCall = true;
+                TrayUI_Unhide_Original(g_trayUI, 3, 7);
+                g_inWatcherCall = false;
+            }
+        }
         ReleaseAllBars();
         for (int i = 0; i < g_recCount; i++) {
             g_recs[i].display = {0, 0, 0, 0};
@@ -2805,9 +2826,15 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                               (LONG64)GetTickCount64() + EDGE_SETTLE_MS);
         InterlockedExchange(&g_inEdgeChange, 0);
         if (g_trayUI && g_offsetsVerified) {
-            InterlockedExchange(
-                &g_lastEdgeSeen,
-                (LONG) * (UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset));
+            const UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+            const UINT stored =
+                *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
+            RECT now{};
+            GetWindowRect(hWnd, &now);
+            Wh_Log(L"edge change handled: edge now %u, flags %#x, window at "
+                   L"(%d,%d,%d,%d)",
+                   edge, stored, now.left, now.top, now.right, now.bottom);
+            InterlockedExchange(&g_lastEdgeSeen, (LONG)edge);
         }
         return r;
     }
