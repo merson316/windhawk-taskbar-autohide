@@ -75,6 +75,16 @@ function Install {
         if ($null -ne $version) { throw 'a request is for a version or for settings, not both' }
         return Set-Settings $asked.settings
     }
+    # A request to switch the mod off or on, as the switch in Windhawk does:
+    #   request.json   {"disabled": 1}
+    if ($null -ne $asked.disabled) {
+        if ($null -ne $version) { throw 'a request is for a version or for the switch, not both' }
+        if ($asked.disabled -isnot [int] -or ($asked.disabled -ne 0 -and $asked.disabled -ne 1)) {
+            throw "'disabled' is 0 or 1"
+        }
+        New-ItemProperty -LiteralPath $RegKey -Name Disabled -Value ([int]$asked.disabled) -PropertyType DWord -Force | Out-Null
+        return "disabled $($asked.disabled)"
+    }
     $dll = NonEmpty 'mod.dll'
     $source = NonEmpty 'mod.wh.cpp'
     if ("$version" -notmatch '^\d+\.\d+\.\d+$') { throw "bad version '$version'" }

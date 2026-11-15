@@ -233,5 +233,28 @@ Test 'Settings request refuses a value that is not a whole number' {
     Assert ($null -eq (Get-ItemProperty "$key\Settings").hideFully) 'nothing written'
 }
 
+Test 'Disabled request switches the mod off and on and touches nothing else' {
+    param($t)
+    [IO.File]::WriteAllText("$($t.Staging)\request.json", '{"disabled": 0}')
+    $r = Run $t
+    Assert ($r.ok) "ok: $($r.error)"
+    $p = Get-ItemProperty $key
+    Assert ($p.Disabled -eq 0) 'Disabled cleared'
+    Assert ($p.Version -eq '1.18.0') 'Version unchanged'
+    Assert ($p.LibraryFileName -eq "${mod}_1.18.0_500841.dll") 'LibraryFileName unchanged'
+    [IO.File]::WriteAllText("$($t.Staging)\request.json", '{"disabled": 1}')
+    $r = Run $t
+    Assert ($r.ok) "ok: $($r.error)"
+    Assert ((Get-ItemProperty $key).Disabled -eq 1) 'Disabled set'
+}
+
+Test 'Disabled request refuses anything but 0 or 1' {
+    param($t)
+    [IO.File]::WriteAllText("$($t.Staging)\request.json", '{"disabled": 7}')
+    $r = Run $t
+    Assert (-not $r.ok) 'refused'
+    Assert ((Get-ItemProperty $key).Disabled -eq 1) 'Disabled unchanged'
+}
+
 if ($failed) { Write-Host "$failed failed"; exit 1 }
 Write-Host 'all passed'

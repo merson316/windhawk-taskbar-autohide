@@ -28,6 +28,11 @@
 #             is open and hides after it closes
 #   quick     Win+A opens Quick Settings inside a display and the taskbar
 #             stays up while it is open (issue #10)
+#   toggle    the mod switched off: every taskbar is back where Windows keeps
+#             it, with nothing of the mod's left on it; switched on again:
+#             they hide and come back as before
+#   restart   Explorer restarted: the taskbars hide again and come back
+#             (-Restart only: it closes your File Explorer windows)
 #   flash     a button flashing for about 15 s (a Notepad the run opens and
 #             closes): each taskbar comes up once and hides again while the
 #             flashing goes on (issue #9)
@@ -42,7 +47,8 @@ param(
     [string]$Edges = "",
     [string]$Only = "",
     [string]$Out = "",
-    [int]$SettleMs = 3000
+    [int]$SettleMs = 3000,
+    [switch]$Restart
 )
 
 Add-Type -ReferencedAssemblies System.Drawing @"
@@ -728,6 +734,100 @@ function Test-Edge($edge, $changed) {
     }
 
     if ($canHide -and (Wanted "flash")) { Test-Flash $edge }
+    if ($mod -and (Wanted "toggle")) { Test-Toggle $edge }
+    if ($Restart -and $mod -and (Wanted "restart")) { Test-Restart $edge }
+}
+
+# Asks the elevated install task for something only it may do (switching the
+# mod off or on). The task runs tools/install-mod.ps1 from its staging folder.
+function Ask-Elevated($request) {
+    $staging = Join-Path $env:LOCALAPPDATA 'taskbar-autohide\install'
+    New-Item -ItemType Directory -Force $staging | Out-Null
+    Remove-Item (Join-Path $staging 'result.json'), (Join-Path $staging 'request.json') -ErrorAction SilentlyContinue
+    Copy-Item (Join-Path $PSScriptRoot 'install-mod.ps1') (Join-Path $staging 'install-mod.ps1') -Force
+    [IO.File]::WriteAllText((Join-Path $staging 'request.json'), ($request | ConvertTo-Json -Compress))
+    & schtasks.exe /run /tn WindhawkTaskbarModInstall 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return "the WindhawkTaskbarModInstall task could not be started" }
+    for ($i = 0; $i -lt 150; $i++) {
+        Start-Sleep -Milliseconds 200
+        $path = Join-Path $staging 'result.json'
+        if (Test-Path $path) {
+            try { $r = Get-Content -Raw $path | ConvertFrom-Json } catch { continue }
+            if ($r.ok) { return $null }
+            return "refused: $($r.error)"
+        }
+    }
+    return "the install task did not answer"
+}
+
+function Wait-For([scriptblock]$cond, $ms) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.ElapsedMilliseconds -lt $ms) {
+        if (& $cond) { return [int]$sw.ElapsedMilliseconds }
+        Start-Sleep -Milliseconds 100
+    }
+    return -1
+}
+
+# Every taskbar hidden, then each one brought back by the pointer.
+function Check-Hides-And-Returns($label, $edge, $waitMs) {
+    $mons = [TaskbarDriver]::Monitors()
+    Park ($mons | Where-Object { $_.Primary })
+    $took = Wait-For { @([TaskbarDriver]::Bars() | Where-Object { $_.Home -eq "" -or $_.Showing -gt 2 }).Count -eq 0 } $waitMs
+    $bars = [TaskbarDriver]::Bars()
+    Check "$label/taskbars hide" ($took -ge 0) $(if ($took -ge 0) { "after $took ms" } else { ($bars | ForEach-Object { Describe $_ }) -join " | " })
+    if ($took -lt 0) { return }
+    foreach ($b in $bars) {
+        $m = Monitor-Named $b.Home
+        Touch-Edge $m $edge
+        $t = [TaskbarDriver]::Trace($b.Hwnd, $b.Thickness, 0, 300, 4000)
+        $shown = Bar-Named $b.Name
+        Check "$label/$($b.Name) comes back" ($shown -and $shown.Showing -eq $shown.Thickness -and $shown.ContentFills -and $shown.ContentVisible -and $shown.Dpi -eq $shown.HomeDpi) $(if ($shown) { Describe $shown } else { "gone" })
+        $away = $mons | Where-Object { $_.Device -ne $b.Home } | Select-Object -First 1
+        if (-not $away) { $away = $m }
+        Park $away
+        [void][TaskbarDriver]::Trace($b.Hwnd, 0, 2, 300, 6000 + (Hide-Delay))
+    }
+}
+
+# The mod switched off and on again.
+function Test-Toggle($edge) {
+    $en = $EdgeName[$edge]
+    $mons = [TaskbarDriver]::Monitors()
+    Park ($mons | Where-Object { $_.Primary })
+    Wait 2500
+    $err = Ask-Elevated @{ disabled = 1 }
+    if ($err) { Result 'SKIP' "$en/toggle" $err; return }
+    try {
+        $took = Wait-For { -not (Mod-Loaded) } 15000
+        Check "$en/toggle/off: the mod unloads" ($took -ge 0) "after $took ms"
+        Start-Sleep -Milliseconds 2500
+        foreach ($b in [TaskbarDriver]::Bars()) {
+            # Without the mod Windows hides a taskbar on the bottom edge only.
+            $asWindows = $b.Home -ne "" -and $b.ContentDx -eq 0 -and $b.ContentDy -eq 0 -and $b.Spill -eq 0 -and
+                ($(if ($edge -eq 3) { $b.Showing -le 2 -or $b.Showing -eq $b.Thickness } else { $b.Showing -eq $b.Thickness -and $b.ContentVisible -and -not $b.Region }))
+            Check "$en/toggle/off: $($b.Name) is as Windows keeps it" $asWindows (Describe $b)
+        }
+    } finally {
+        $err = Ask-Elevated @{ disabled = 0 }
+        if ($err) { Result 'FAIL' "$en/toggle/on" "the mod is still switched off: $err" }
+    }
+    $took = Wait-For { Mod-Loaded } 15000
+    Check "$en/toggle/on: the mod loads" ($took -ge 0) "after $took ms"
+    if ($took -ge 0) { Check-Hides-And-Returns "$en/toggle/on" $edge 12000 }
+}
+
+# Explorer restarted. Off the bottom edge Windows reports auto-hide off for
+# up to a minute or so after it starts, and the taskbars hide once it settles.
+function Test-Restart($edge) {
+    $en = $EdgeName[$edge]
+    Stop-Process -Name explorer -Force
+    $took = Wait-For { @([TaskbarDriver]::Bars()).Count -gt 0 -and (Mod-Loaded) } 40000
+    if ($took -lt 0 -and -not (Get-Process explorer -ErrorAction SilentlyContinue)) { Start-Process explorer }
+    Check "$en/restart/Explorer and the mod are back" ($took -ge 0) "after $took ms"
+    if ($took -lt 0) { return }
+    Start-Sleep -Milliseconds 3000
+    Check-Hides-And-Returns "$en/restart" $edge 120000
 }
 
 # A flashing button, for about 15 s. Counts how often each taskbar comes up
