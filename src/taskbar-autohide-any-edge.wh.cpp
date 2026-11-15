@@ -934,6 +934,33 @@ UINT CurrentStuckPlace(void* pThis) {
     return TrayUI_GetStuckPlace_Original(pThis);
 }
 
+// When the taskbar is moved to another edge, Windows goes through a sequence
+// of its own: it shows the taskbar at the new edge and tells the rest of the
+// shell where it now is. With the mod stepping in during that sequence (it
+// drops the "ensure shown" unhide and marks the taskbar hidden again), the
+// calendar, notification and other panels kept opening where the previous
+// edge called for, until Explorer was restarted. So for a moment after the
+// edge changes the mod leaves Windows to it, and hides nothing.
+#define EDGE_SETTLE_MS 2500
+volatile LONG g_lastEdgeSeen = -1;
+volatile LONG64 g_edgeSettleUntil = 0;
+
+// Note the edge a hook has just read, and say whether the mod should stand
+// back because the edge changed a moment ago.
+bool EdgeSettling(UINT edge) {
+    const LONG64 now = (LONG64)GetTickCount64();
+    if (edge <= ABE_BOTTOM) {
+        const LONG before = InterlockedExchange(&g_lastEdgeSeen, (LONG)edge);
+        if (before != -1 && before != (LONG)edge) {
+            InterlockedExchange64(&g_edgeSettleUntil, now + EDGE_SETTLE_MS);
+            Wh_Log(L"taskbar moved from edge %d to edge %u: standing back for "
+                   L"%d ms",
+                   (int)before, edge, EDGE_SETTLE_MS);
+        }
+    }
+    return now < InterlockedCompareExchange64(&g_edgeSettleUntil, 0, 0);
+}
+
 // ------------------------------------------------------------ pointer helper
 
 RECT g_monitorRect{};
@@ -1093,6 +1120,10 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     }
 
     UINT edge = CurrentStuckPlace(pThis);
+    if (EdgeSettling(edge)) {
+        TrayUI_SetAutoHideFlags_Original(pThis, flags);
+        return;
+    }
     UINT effective = flags;
 
     if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
@@ -1131,6 +1162,10 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     }
 
     UINT edge = CurrentStuckPlace(pThis);
+    if (EdgeSettling(edge)) {
+        TrayUI_Unhide_Original(pThis, flags, request);
+        return;
+    }
 
     if (request == UNHIDE_REQUEST_STATE_CHANGED && edge < ABE_BOTTOM &&
         EdgeEnabled(edge) && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
@@ -1519,6 +1554,10 @@ void WatcherTick() {
     UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
     UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
     PublishAutoHideState(edge, stored);
+
+    if (EdgeSettling(edge)) {
+        return;   // just moved to this edge: let Windows finish first
+    }
 
     if (edge >= ABE_BOTTOM || !EdgeEnabled(edge)) {
         return;
