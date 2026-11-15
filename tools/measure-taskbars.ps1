@@ -84,6 +84,8 @@ public class TaskbarMeasure {
         public List<Monitor> Monitors = new List<Monitor>();
         public List<Taskbar> Taskbars = new List<Taskbar>();
         public int CursorX, CursorY; public bool AutoHide;
+        // What Windows reports as the taskbar's edge and rectangle (ABM_GETTASKBARPOS).
+        public uint ReportedEdge; public int ReportedLeft, ReportedTop, ReportedRight, ReportedBottom;
     }
 
     static long Overlap(RECT a, Monitor m) {
@@ -149,6 +151,12 @@ public class TaskbarMeasure {
             APPBARDATA abd = new APPBARDATA();
             abd.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
             s.AutoHide = (SHAppBarMessage(4, ref abd).ToUInt64() & 1) != 0;   // ABM_GETSTATE, ABS_AUTOHIDE
+            APPBARDATA pos = new APPBARDATA();
+            pos.cbSize = Marshal.SizeOf(typeof(APPBARDATA));
+            SHAppBarMessage(5, ref pos);                                       // ABM_GETTASKBARPOS
+            s.ReportedEdge = pos.uEdge;
+            s.ReportedLeft = pos.rc.Left; s.ReportedTop = pos.rc.Top;
+            s.ReportedRight = pos.rc.Right; s.ReportedBottom = pos.rc.Bottom;
             return s;
         } finally {
             SetThreadDpiAwarenessContext(old);
@@ -187,6 +195,8 @@ $first = [TaskbarMeasure]::Take($Class)
 
 "taskbar.dll {0}   mod loaded in Explorer: {1}   auto-hide: {2}   taskbar on all displays: {3}" -f `
     $ctx.taskbarDll, $ctx.modLoaded, $first.AutoHide, ($ctx.allDisplays -eq 1)
+"Windows reports the taskbar on edge {0} (0 left, 1 top, 2 right, 3 bottom) at ({1},{2},{3},{4})" -f `
+    $first.ReportedEdge, $first.ReportedLeft, $first.ReportedTop, $first.ReportedRight, $first.ReportedBottom
 ""
 "Monitors:"
 foreach ($m in $first.Monitors) {

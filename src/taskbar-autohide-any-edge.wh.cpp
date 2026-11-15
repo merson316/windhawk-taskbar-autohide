@@ -1046,9 +1046,18 @@ void PublishAutoHideState(UINT edge, UINT stored) {
 
 // Returns the stored flags rather than the zero the original reports when the
 // taskbar is not docked to the bottom.
+// Set as the mod starts to unload. From then on Windows gets its own answer
+// about auto-hide, which off the bottom edge is "off", as it will once the
+// mod is gone. Without this, a secondary taskbar that Windows has just been
+// made to show is hidden again by Windows half a second later, while the
+// hooks are still in place, and then stays hidden. (This was taken out once,
+// on the suspicion that it made Windows save auto-hide as off. That turned
+// out to be Windows reporting "off" for a while after Explorer starts.)
+volatile LONG g_unloading = 0;
+
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
-    if (g_fatalReason || !pThis || !g_offsetsVerified) {
+    if (g_fatalReason || g_unloading || !pThis || !g_offsetsVerified) {
         return ret;
     }
 
@@ -2755,6 +2764,8 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (g_barRevealMsg && uMsg == g_barRevealMsg) {
+        InterlockedExchange(&g_unloading, 1);
+
         // Unloading, off the bottom edge: have Windows itself reveal every
         // hidden secondary taskbar while the mod can still ask it to. Moving
         // the window back is not enough: Windows goes on believing the
