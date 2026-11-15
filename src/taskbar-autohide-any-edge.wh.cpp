@@ -1021,13 +1021,9 @@ void PublishAutoHideState(UINT edge, UINT stored) {
 
 // Returns the stored flags rather than the zero the original reports when the
 // taskbar is not docked to the bottom.
-// Set as the mod unloads, once every taskbar has been given back: from then
-// on Windows gets its own answer about auto-hide, as it will without the mod.
-volatile LONG g_unloading = 0;
-
 UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     UINT ret = TrayUI_GetAutoHideFlags_Original(pThis);
-    if (g_fatalReason || g_unloading || !pThis || !g_offsetsVerified) {
+    if (g_fatalReason || !pThis || !g_offsetsVerified) {
         return ret;
     }
 
@@ -2648,10 +2644,6 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         // moves are not overruled, then leave every taskbar alone.
         ReleaseAllBars();
         InterlockedExchange(&g_barsReleased, 1);
-        // From here Windows hears its own answer about auto-hide, which off
-        // the bottom edge is "off": nothing it has just shown is hidden again
-        // in the moments before the hooks go.
-        InterlockedExchange(&g_unloading, 1);
         return 1;
     }
 
