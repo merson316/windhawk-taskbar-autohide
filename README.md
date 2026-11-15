@@ -74,7 +74,7 @@ Compile → Enable.
 | Setting | Default | Meaning |
 |---|---|---|
 | Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so it hides the taskbar completely. |
-| Skip edges facing another display | off | With a display beyond the taskbar's edge there is nowhere to hide into, so the mod keeps the taskbar on its own display: it slides part of the way and the rest is wiped. Turn this on to leave such an edge alone instead. The bottom edge is not affected. |
+| Leave edges facing another display alone | off | With a display beyond the taskbar's edge there is nowhere to hide into, so the mod keeps the taskbar on its own display: it slides part of the way and the rest is wiped. Turn this on to leave such an edge alone instead. The bottom edge is not affected. |
 | Animation frame rate | 90 | Frames per second for both slides. Higher is smoother and costs more CPU; range 30-240. Disable "Taskbar auto-hide speed" if you have it — both mods pace the same reveal. |
 | Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |

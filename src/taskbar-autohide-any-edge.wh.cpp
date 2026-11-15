@@ -89,8 +89,8 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
 // ==WindhawkModSettings==
 /*
-- skipAdjacentEdges: false
-  $name: Skip edges facing another display
+- leaveFacingEdges: false
+  $name: Leave edges facing another display alone
   $description: >-
     An edge with a display beyond it has nowhere to hide into, so the mod keeps
     such a taskbar on its own display: it slides part of the way and the rest
@@ -299,8 +299,12 @@ int ClampDuration(int ms) {
 }
 
 void LoadSettings() {
+    // Named skipAdjacentEdges, and on by default, until 2.0. The new name
+    // means a value saved under the old one does not carry over: the mod can
+    // now handle such an edge, and whoever had the old default should get the
+    // new behaviour without having to find the setting.
     g_settings.skipAdjacentEdges =
-        Wh_GetIntSetting(L"skipAdjacentEdges") != 0;
+        Wh_GetIntSetting(L"leaveFacingEdges") != 0;
     g_settings.hideFully = Wh_GetIntSetting(L"hideFully") != 0;
 
     g_settings.frameRate = Wh_GetIntSetting(L"frameRate");
