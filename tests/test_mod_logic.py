@@ -203,8 +203,12 @@ def test_place_held_bottom_matches_the_spike(logic):
     def place(hidden):
         return logic('place', 988, -60, 1440, 60, 3, 1, hidden)
     assert place(0) == [988, -60, 0, 0, 0, 0, 0]                # shown, no region
-    assert place(10) == [988, -50, 0, 0, 1440, 50, 1]           # sliding, overhang clipped
-    assert place(58) == [988, -32, 0, 30, 1440, 32, 1]          # travel 28, 2 px left
+    # Held: the window travels in proportion, 28 px for the whole 60, so it is
+    # still moving on every step while what shows shrinks to nothing.
+    assert place(10) == [988, -56, 0, 6, 1440, 56, 1]           # travelled 4, 50 px showing
+    assert place(30) == [988, -46, 0, 16, 1440, 46, 1]          # travelled 14, 30 px showing
+    assert place(58) == [988, -33, 0, 31, 1440, 33, 1]          # travelled 27, 2 px showing
+    assert place(60) == [988, -32, 0, 32, 1440, 32, 1]          # travelled 28, nothing showing
 
 
 def test_place_not_held_slides_all_the_way(logic):
@@ -212,10 +216,10 @@ def test_place_not_held_slides_all_the_way(logic):
 
 
 def test_place_on_each_edge(logic):
-    # 60 px thick, held, 58 hidden: the window travels 28 and 2 px stay, against the edge.
-    assert logic('place', 0, 0, 60, 1080, 0, 1, 58) == [-28, 0, 28, 0, 30, 1080, 1]        # left
-    assert logic('place', 0, 0, 1920, 60, 1, 1, 58) == [0, -28, 0, 28, 1920, 30, 1]        # top
-    assert logic('place', 1860, 0, 60, 1080, 2, 1, 58) == [1888, 0, 30, 0, 32, 1080, 1]    # right
+    # 60 px thick, held, 58 hidden: the window has travelled 27 and 2 px stay, against the edge.
+    assert logic('place', 0, 0, 60, 1080, 0, 1, 58) == [-27, 0, 27, 0, 29, 1080, 1]        # left
+    assert logic('place', 0, 0, 1920, 60, 1, 1, 58) == [0, -27, 0, 27, 1920, 29, 1]        # top
+    assert logic('place', 1860, 0, 60, 1080, 2, 1, 58) == [1887, 0, 31, 0, 33, 1080, 1]    # right
 
 
 def test_held_window_is_never_mostly_off_its_display(logic):

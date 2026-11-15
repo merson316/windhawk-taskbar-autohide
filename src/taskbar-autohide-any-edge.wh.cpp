@@ -523,8 +523,8 @@ struct BarPlacement {
 
 // Where a taskbar's window and region go with `hiddenPx` of its thickness
 // hidden. `shown` is its top-left when fully shown. A taskbar that is not held
-// travels the whole way; a held one stops at thickness / 2 - 2. Either way the
-// region leaves exactly the part Windows wanted on screen, against the edge.
+// travels the whole way; a held one travels thickness / 2 - 2 at most. Either
+// way the region leaves exactly thickness - hiddenPx showing, against the edge.
 BarPlacement PlaceBar(POINT shown, SIZE size, UINT edge, bool held,
                       int hiddenPx) {
     const bool vertical = edge == ABE_LEFT || edge == ABE_RIGHT;
@@ -532,11 +532,16 @@ BarPlacement PlaceBar(POINT shown, SIZE size, UINT edge, bool held,
     if (hiddenPx < 0) hiddenPx = 0;
     if (hiddenPx > thickness) hiddenPx = thickness;
 
+    // A held window may travel thickness / 2 - 2 in all. It travels in
+    // proportion to how much is hidden, so it is still moving on every step of
+    // a hide or reveal while the region takes what shows down to nothing: the
+    // taskbar is seen leaving, and there is no moment where it stops and is
+    // cut. (A region change is drawn reliably while the window also moves.)
     int move = hiddenPx;
     if (held) {
         int limit = thickness / 2 - 2;
         if (limit < 0) limit = 0;
-        if (move > limit) move = limit;
+        move = thickness > 0 ? hiddenPx * limit / thickness : 0;
     }
     const int visible = thickness - hiddenPx;
 
@@ -2062,20 +2067,7 @@ void TickBar(TaskbarRec* rec) {
     }
     const double e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
 
-    // A held taskbar can only slide as far as its window may travel. The
-    // whole duration goes on that slide, and what is still showing at the end
-    // of a hide is cut, by the region and the cloak. (Wiping the rest away
-    // with the region was not drawn reliably on the primary.)
-    int from = rec->from, to = rec->to;
-    if (rec->held) {
-        const int thickness =
-            (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT) ? rec->size.cx
-                                                              : rec->size.cy;
-        int limit = thickness / 2 - 2;
-        if (limit < 0) limit = 0;
-        if (from > limit) from = limit;
-        if (to > limit) to = limit;
-    }
+    const int from = rec->from, to = rec->to;
     const double pos = from + (to - from) * e;
     ApplyPlacement(rec, t >= 1.0 ? rec->to : (int)(pos + 0.5));
 
