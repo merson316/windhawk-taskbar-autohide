@@ -13,6 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 from conftest import FAKE  # noqa: E402
+import fake_gh  # noqa: E402
+from fake_gh import ACTIONS  # noqa: E402
 from test_watch import msdl, stage  # noqa: E402,F401  (msdl is a fixture)
 
 from matcher import reference  # noqa: E402
@@ -164,14 +166,27 @@ def test_failed_ci_toasts_once(world, ar):
 
 def test_ci_state_needs_both_required_checks(world, ar):
     sha = world.pr(5)
-    one = [{'name': 'Python tests', 'status': 'completed', 'conclusion': 'success'}]
+    one = [{'name': 'Python tests', 'status': 'completed', 'conclusion': 'success', 'app': ACTIONS}]
     world.gh(checks={sha: one})
     assert ar.ci_state(sha) == 'pending'
     world.gh(checks={sha: one + [{'name': "Compile with Windhawk's compiler", 'status': 'completed',
-                                  'conclusion': 'timed_out'}]})
+                                  'conclusion': 'timed_out', 'app': ACTIONS}]})
     assert ar.ci_state(sha) == 'failure'
-    world.gh(checks={sha: one + [{'name': 'lint', 'status': 'completed', 'conclusion': 'failure'}]})
+    world.gh(checks={sha: one + [{'name': 'lint', 'status': 'completed', 'conclusion': 'failure', 'app': ACTIONS}]})
     assert ar.ci_state(sha) == 'pending'
+
+
+def test_ci_state_counts_only_github_actions(world, ar):
+    """As the main: CI ruleset does (integration_id 15368): a check of the
+    same name from any other app neither passes nor fails a PR."""
+    sha = world.pr(5)
+    other = {'id': 999, 'slug': 'someone-else'}
+    fake = [{'name': n, 'status': 'completed', 'conclusion': 'success', 'app': other} for n in fake_gh.REQUIRED]
+    world.gh(checks={sha: fake})
+    assert ar.ci_state(sha) == 'pending'
+    world.gh(checks={sha: [dict(r, conclusion='failure') for r in fake]})
+    assert ar.ci_state(sha) == 'pending'
+    assert 'per_page=100' in world.log()
 
 
 def test_draft_never_released(world, ar):

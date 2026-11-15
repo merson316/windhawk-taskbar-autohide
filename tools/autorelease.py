@@ -35,6 +35,9 @@ import windhawk_install
 BuildPR = namedtuple('BuildPR', 'number branch sha created draft')
 REQUIRED = ('Python tests', "Compile with Windhawk's compiler")
 FAILED = ('failure', 'cancelled', 'timed_out')
+# The GitHub Actions app, as the main: CI ruleset pins it (integration_id): a
+# check of the same name from any other app must not count.
+ACTIONS_APP_ID = 15368
 
 
 class ReleaseRefused(Exception):
@@ -94,12 +97,14 @@ def pending_build_prs():
 
 
 def ci_state(sha):
-    """'success' once both required checks succeeded on sha, 'failure' once
-    either failed, else 'pending' (a missing check counts as pending)."""
-    runs = _gh_json('api', f'repos/{{owner}}/{{repo}}/commits/{sha}/check-runs')['check_runs']
+    """'success' once both required checks, run by GitHub Actions, succeeded
+    on sha, 'failure' once either failed, else 'pending' (a missing check
+    counts as pending)."""
+    runs = _gh_json('api', f'repos/{{owner}}/{{repo}}/commits/{sha}/check-runs?per_page=100')['check_runs']
     latest = {}
     for run in runs:   # a re-run adds a run with the same name and a larger id
-        if run['name'] in REQUIRED and run.get('id', 0) >= latest.get(run['name'], {}).get('id', 0):
+        if (run['name'] in REQUIRED and (run.get('app') or {}).get('id') == ACTIONS_APP_ID
+                and run.get('id', 0) >= latest.get(run['name'], {}).get('id', 0)):
             latest[run['name']] = run
     states = [latest.get(n) for n in REQUIRED]
     if any(r and r['status'] == 'completed' and r['conclusion'] in FAILED for r in states):
