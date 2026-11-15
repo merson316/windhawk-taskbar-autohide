@@ -2,13 +2,13 @@
 builds it covers."""
 import re
 
-from . import HOOKED
+from . import FIELDS, HOOKED, OPTIONAL
 
 _ENTRY = re.compile(
     r'\{L"(?P<version>[\d.]+)",\s*'
     r'\{0x(?P<d1>[0-9A-Fa-f]{1,8}),\s*0x(?P<d2>[0-9A-Fa-f]{1,4}),\s*0x(?P<d3>[0-9A-Fa-f]{1,4}),\s*'
     r'\{(?P<d4>(?:0x[0-9A-Fa-f]{1,2},\s*){7}0x[0-9A-Fa-f]{1,2})\}\},\s*(?P<age>\d+),\s*'
-    r'(?P<rvas>(?:0x[0-9A-Fa-f]+,\s*){6}0x[0-9A-Fa-f]+)\}')
+    r'(?P<rvas>(?:0x[0-9A-Fa-f]+,\s*){%d,%d}0x[0-9A-Fa-f]+)\}' % (len(HOOKED) - 1, len(FIELDS) - 1))
 _TABLE = re.compile(r'(const KnownBuild kKnownBuilds\[\] = \{\n)(?P<body>.*?)(^\};)', re.S | re.M)
 _VERSION = re.compile(r'^(// @version\s+)(\d+)\.(\d+)\.(\d+)$', re.M)
 _README_ROW = re.compile(r'^\| (10\.0\.\d+\.\d+) \| (10\.0\.\d+\.\d+) \|$', re.M)
@@ -22,13 +22,17 @@ def _table(text):
 
 
 def known_builds(src_path):
+    """The table's entries. A row may stop after the required addresses, as
+    every row did before the optional column existed: C++ zero-fills the rest
+    of the struct, so an optional address left out reads as 0, absent."""
     out = []
     for m in _ENTRY.finditer(_table(open(src_path).read()).group('body')):
         d4 = ''.join(f'{int(b, 16):02X}' for b in re.findall(r'0x([0-9A-Fa-f]+)', m['d4']))
         rvas = [int(v, 16) for v in re.findall(r'0x([0-9A-Fa-f]+)', m['rvas'])]
         entry = {'version': m['version'],
                  'pdb_key': f'{int(m["d1"], 16):08X}{int(m["d2"], 16):04X}{int(m["d3"], 16):04X}{d4}{int(m["age"]):X}'}
-        entry.update(zip(HOOKED, rvas))
+        entry.update(dict.fromkeys(OPTIONAL, 0))
+        entry.update(zip(FIELDS, rvas))
         out.append(entry)
     return out
 

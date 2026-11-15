@@ -226,12 +226,19 @@ fi
 .venv/bin/python tools/release_notes.py --version "$V" ${NOTES_ARGS[@]+"${NOTES_ARGS[@]}"} > "$WORK/notes.md"
 [ -n "$AUTO" ] || "${EDITOR:-nano}" "$WORK/notes.md"
 cp "$SRC" "$WORK/taskbar-autohide-any-edge.wh.cpp"
+# The same mod with its detailed log on, for whoever reports a problem. A
+# version from before the switch existed has no such build.
+ASSETS=("$WORK/taskbar-autohide-any-edge.wh.cpp")
+if grep -q '^// #define TASKBAR_AUTOHIDE_DEBUG\r\?$' "$SRC" && [ -f tools/make_debug_build.py ]; then
+  .venv/bin/python tools/make_debug_build.py "$SRC" "$WORK/taskbar-autohide-any-edge.debug.wh.cpp"
+  ASSETS+=("$WORK/taskbar-autohide-any-edge.debug.wh.cpp")
+fi
 
 if [ -z "$RESUME" ]; then
   git push -q origin refs/heads/main:refs/heads/main
   git tag -s "v$V" -m "v$V"
   git push -q origin "v$V"
 fi
-gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "$WORK/taskbar-autohide-any-edge.wh.cpp" ||
+gh release create "v$V" --title "v$V" --notes-file "$WORK/notes.md" "${ASSETS[@]}" ||
   { echo "v$V is tagged but not published; finish with: $FINISH" >&2; exit "$U"; }
 finish new || true

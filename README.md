@@ -32,19 +32,27 @@ the masked result — `GetDockedRect` returns the hidden rect only when
   the bottom edge does and what the hidden-rect test requires.
 - Drives reveal and hide from a watch thread, because Windows' own
   cursor-at-edge detection does not run off-bottom.
-- Leaves the bottom edge's auto-hide entirely untouched.
-- Keeps the taskbar above other windows when it reveals. Windows can lower it
-  out of the always-on-top band while hidden and does not raise it again, so
-  otherwise it slides up behind whatever covers that edge.
+- Handles every taskbar, on every display, at each display's own scaling and
+  refresh rate. See [More than one display](#more-than-one-display).
+- Animates the taskbar itself, on every edge it handles, so the slide is the
+  same everywhere and runs at the display's frame rate.
+- Keeps the taskbar above other windows when it reveals. Off the bottom edge
+  a revealed taskbar can otherwise come up behind whatever covers that edge.
 - Hides again a set time after a notification, which Windows otherwise refuses
   to do while a taskbar button is flashing. This applies on every edge and makes
   [Better Taskbar Autohide](https://windhawk.net/mods/taskbar-autohide-better)
   redundant -- run one or the other, since they hook the same function.
+- Keeps the taskbar up while Quick Settings is open, on every edge. On the
+  bottom edge Windows alone hides it under the open panel.
+- Brings the same to the bottom edge: no line of taskbar left on screen, the
+  hide delay, the reveal dwell and trigger width. Windows still decides there
+  when a taskbar hides; the mod carries it out.
 
 ## Requirements
 
-Windows 11 build 26200 or newer, x86-64. Developed and tested against
-10.0.26300.9278.
+Windows 11 build 26200 or newer, x86-64. Version 2.0.0 was tested with
+`tools/test-taskbars.ps1` on `taskbar.dll` 10.0.26100.10066: one display, two
+stacked and two side by side, at 100% to 200% scaling.
 
 The mod finds the taskbar's functions through Microsoft's debug symbols, which
 Windhawk downloads on first use. Microsoft sometimes publishes them days after a
@@ -73,16 +81,17 @@ Compile → Enable.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so it hides the taskbar completely. |
-| Skip edges facing another display | on | Leaves an edge alone when a monitor sits beyond it, since there is nowhere off-screen to hide into. The bottom edge is never touched, as Windows already handles it. |
-| Animation frame rate | 90 | Frames per second for both slides. Higher is smoother and costs more CPU; range 30-240. Disable "Taskbar auto-hide speed" if you have it — both mods pace the same reveal. |
+| Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so it hides every taskbar completely, on every edge. Turn this off to keep Windows' sliver; on the bottom edge, with no display below, that also hands the taskbar back to Windows' own slide. |
+| Leave edges facing another display alone | off | With a display beyond the taskbar's edge there is nowhere to hide into, so the mod keeps the taskbar's window where it is and slides its content out of it. Turn this on to leave such an edge alone instead. The bottom edge is not affected. |
+| Animation frame rate | 90 | The most frames per second for both slides; each taskbar steps at its own display's refresh rate up to this. Higher is smoother and costs more CPU; range 30-240. Disable "Taskbar auto-hide speed" if you have it — both mods pace the same reveal. |
 | Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
+| Hide delay | 0 ms | How long the taskbar stays up after the pointer leaves it, or after Start or a flyout closes, before it hides. The pointer coming back starts the wait again. Applies on every edge. Range 0-10000. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
-| Notifications - treat as one within | 5000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
+| Notifications - treat as one within | 10000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
 | Reveal dwell | 0 (off) | How long the pointer must rest in the trigger strip before the taskbar appears. Off by default; raise it if the taskbar appears when you were only crossing the edge. A pointer already over the taskbar never waits. |
 | Reveal trigger width | 8 px | How close to the screen edge the pointer must get to summon the taskbar. |
-| Keep the taskbar above other windows | on | Windows can drop the taskbar out of the always-on-top band while it is hidden, and the reveal does not put it back, so it slides up behind whatever sits over that edge. This puts it back as it appears. Left alone when a full-screen window is in front, where Windows lowers the taskbar deliberately. |
+| Keep the taskbar above other windows | on | Off the bottom edge a revealed taskbar can come up behind whatever sits over that edge. This puts it back in front as it appears. Left alone when a full-screen window is in front, where Windows lowers the taskbar deliberately. |
 
 ### Notification handling
 
@@ -90,7 +99,7 @@ When an app wants attention it flashes its taskbar button, and Windows then
 refuses to auto-hide the taskbar until the flashing stops. On a busy machine
 that can mean the taskbar simply stays on screen.
 
-With `Notifications - keep visible for` set above 0, the taskbar appears once,
+With `Notifications - keep visible for` set above 0, each taskbar appears once,
 stays for that long, then hides again and stays hidden for the rest of the
 flashing. Moving the pointer to the edge still reveals it at any time.
 
@@ -102,47 +111,74 @@ To disable it and get stock Windows behaviour back, set the value to 0.
 
 ### Keeping the taskbar on top
 
-Windows can lower the taskbar out of the always-on-top band while it is hidden,
-and `TrayUI::Unhide` does not raise it again, so on a side edge the taskbar
-slides up underneath any window covering that edge. The taskbar keeps
-`WS_EX_TOPMOST` throughout; what it loses is its position in the z-order.
+Off the bottom edge a revealed taskbar can come up underneath a window covering
+that edge. The taskbar keeps `WS_EX_TOPMOST` throughout; what it loses is its
+place in the z-order. What causes this is outside `taskbar.dll`: there the
+taskbar is only sent to the bottom for a full-screen window, and that clears
+the topmost style.
 
 The mod re-asserts `HWND_TOPMOST` before the reveal slide starts, while the
-taskbar is still off-screen, so the correction is not visible. It does not
-touch the auto-hide flags, which are how Windows makes this decision itself.
+taskbar is still off-screen, so the correction is not visible.
 
 It is skipped while a full-screen window is in front. Windows lowers the
 taskbar there deliberately, and overriding that would put the taskbar over
 full-screen games and video. Turn off "Keep the taskbar above other windows" to
 leave z-order entirely to Windows.
 
-### A note on the animation durations
+### More than one display
 
-The two durations behave differently, because the two directions are driven by
-different code.
+With "Show my taskbar on all displays" on, each display has a taskbar, and the
+mod handles each one by itself: its own display, scaling and refresh rate.
 
-The **hide** is animated by the mod on its own watch thread, so its duration
-does not block the shell. Windows rewrites intermediate positions in
-`WM_WINDOWPOSCHANGING`, forcing each step to the endpoint, which is why an
-unmodified vertical taskbar appears to vanish instantly; the mod restores the
-requested position after that clamp so the intermediate frames survive.
+A taskbar whose edge has another display beyond it has nowhere to hide into.
+Windows slides it onto the neighbouring display and clips it there; the hidden
+window then takes that display's scaling, which is why its icons can come back
+the wrong size when the two displays are scaled differently. The mod never
+moves such a taskbar's window. It slides the taskbar's content out of the
+window and keeps only the visible band, so nothing is ever drawn on the other
+display and the scaling never changes. This applies on every edge, the bottom
+included.
 
-The **reveal** still goes through Windows' own `SlideWindow`, a synchronous loop
-on the taskbar's thread. Its duration is therefore also how long the shell is
-blocked, so keep it short -- a few hundred milliseconds at most.
+Such a taskbar is revealed by resting the pointer on the edge of its own
+display for a moment (at least 150 ms, in a strip at least 12 px deep), since
+the pointer also crosses that edge on its way to the next display.
 
-Both are paced by the frame rate setting, by the same method applied two ways.
+Off the bottom edge the mod hides and reveals the secondary taskbars itself, as
+it does the primary. On the bottom edge Windows decides when each taskbar hides
+and the mod carries the movement out.
 
-The hide is the mod's own loop, so it times from `QueryPerformanceCounter` and
-sleeps the remainder of a frame budget on a high-resolution waitable timer.
-`GetTickCount64` advances in ~15.6 ms steps, so sampling it once per frame draws
-duplicate positions, and `Sleep` cannot resolve finer than the system timer,
-which would cap a requested 90 fps near 64.
+On the bottom edge, with "Hide completely" on, every taskbar is handled the way
+a held one is, whether or not a display lies below it: the window stays, the
+content slides, nothing is left on screen, and the pointer resting on the
+display's edge brings it back. That is what gives the bottom edge the reveal
+dwell and trigger width. The hide delay there is a refusal: Windows asks the
+taskbar whether it may hide, and the mod says no until the delay has passed.
 
-The reveal is Windows' loop, so the same is done from underneath it: `Sleep` and
-`GetTickCount` are hooked and take effect only on the thread currently inside
-`SlideWindow`, replacing the inter-frame sleep with a frame budget and reporting
-a clock fine enough to separate the frames it buys. This is the technique
+### How the animation works
+
+Windows rewrites every requested taskbar position in `WM_WINDOWPOSCHANGING`,
+forcing each step to the endpoint, which is why an unmodified vertical taskbar
+appears to vanish instantly. The mod moves the taskbar itself and puts the
+requested position back after that rewrite, so the frames in between survive.
+
+Each taskbar steps on a clock of its own: `QueryPerformanceCounter` for the
+time and a high-resolution waitable timer for the wait, once per refresh of its
+display up to the frame rate setting, easing into the end position. Two
+taskbars on a 60 Hz and a 240 Hz display each keep their own pace.
+
+On the bottom edge Windows asks for a hide or a reveal through
+`TrayUI::SlideWindow` and, right after a hide, clips the taskbar and makes its
+content invisible. There the mod runs its slide inside that call, which is
+where Windows' own blocking slide loop would have run, so the taskbar is still
+drawn while it moves.
+
+When the mod leaves a bottom-edge taskbar to Windows ("Hide completely" off
+and no display below it), the slide is Windows' own loop, and the mod only
+paces it:
+`Sleep` and `GetTickCount` are hooked and take effect only on the thread
+currently inside `SlideWindow`, replacing the inter-frame sleep with a frame
+budget and reporting a clock fine enough to separate the frames it buys. This
+is the technique
 [Taskbar auto-hide speed](https://github.com/ramensoftware/windhawk-mods) uses;
 run one mod or the other, not both, or they will fight over the same loop.
 
@@ -151,45 +187,53 @@ run one mod or the other, not both, or they will fight over the same loop.
 In the order these actually turn out to be the cause:
 
 1. **Auto-hide is not enabled in Windows.** Settings → Personalisation → Taskbar
-   → Taskbar behaviours. On a non-bottom edge that toggle can read back as *off*
-   even when the registry has it on -- that is the masked `GetAutoHideFlags`
-   read this mod exists to fix, so a toggle that turns itself off means the mod
-   is not running. A session with the mod inert can leave the setting written
-   back off, so an install that failed once can fail the same way again. The
-   mod raises a dialog when auto-hide is off.
-2. **The taskbar is on the bottom edge.** Windows already handles auto-hide
-   there and the mod leaves it alone.
-3. **The edge faces another display**, so the mod skips it deliberately and that
-   edge behaves as it does with the mod uninstalled.
+   → Taskbar behaviours. Windows greys that option out when the taskbar is not
+   at the bottom, so set it with the taskbar at the bottom and then move it.
+   The mod raises a dialog when auto-hide has stayed off for two minutes.
+   (Windows reports it off for about a minute after Explorer starts with the
+   taskbar off the bottom edge; that settles by itself.)
+2. **The taskbar is on the bottom edge, with "Hide completely" off and no
+   display below it.** Windows already handles auto-hide there and the mod
+   leaves it to Windows.
+3. **"Leave edges facing another display alone" is on** and the edge faces
+   another display, so that edge behaves as it does with the mod uninstalled.
 
 Cases 2 and 3 are the mod working correctly while appearing to do nothing. It
-writes which one applies to the Windhawk log once per session, so the answer
-does not need a diagnostic build:
+writes which one applies to the Windhawk log once per session, with a line for
+each taskbar it found:
 
 ```
-docked right, Windows auto-hide on -- a display sits beyond this edge, so it is skipped
+taskbar 00000000000F0600 (primary) at (0,0,48,1440): display (0,0,3440,1440) at 240 Hz, edge 0, not held
+docked left, Windows auto-hide on -- active
 ```
 
 ## Known limitations
 
-- **The hide is a linear slide, not the eased Windows curve.** Windows clamps
-  every intermediate position to the endpoint, which is why an unmodified
-  vertical taskbar appears to vanish instantly; the mod animates the hide itself
-  instead. The reveal still uses Windows' own slide. Both durations are
-  configurable.
-- **Primary taskbar only.** Secondary taskbars use a separate `CSecondaryTray`
-  class and are not handled.
 - **Tied to `Taskbar.dll` internals.** The two member offsets are read out of
   `GetAutoHideFlags` at load, by finding the instruction sequence that encodes
   them rather than requiring it at a fixed offset. A recompiled prologue or a
   moved struct member is therefore survivable; a rewritten function is not, and
   the mod goes inert and warns rather than trusting offsets it cannot confirm.
-- **An edge with another display beyond it cannot hide.** The hidden position
-  is real screen space on the neighbouring monitor, so the taskbar would slide
-  into view there instead of out of sight. Detected automatically and skipped:
-  that edge then behaves as it does with the mod uninstalled. Controlled by
-  "Skip edges facing another display". `docs/ROADMAP.md` records why two fixes
-  were attempted and abandoned.
+  The mod also relies on three window messages of the taskbar (to follow a
+  change of edge and to unhide a secondary taskbar) and on the class of the
+  window that draws it. `tools/test-taskbars.ps1` checks those on a running
+  taskbar.
+- **On the bottom edge Windows decides when a taskbar hides.** The mod can
+  refuse a hide (for the hide delay, and while Quick Settings is open) but
+  does not start one.
+- **With "Hide completely" off, a bottom taskbar with no display near its
+  hidden place is Windows' own.** Its slide is then Windows' loop, paced to the
+  frame rate setting but at Windows' durations (about 200 ms to show, 400 ms
+  to hide); the two duration settings do not reach it.
+- **Without symbols for a build, one function may be missing.** A flashing
+  button is kept from re-showing a secondary taskbar through
+  `CSecondaryTray::_Unhide`. The mod carries its address for the builds in the
+  table above where it could be matched with certainty; where it could not,
+  a secondary taskbar on the bottom edge comes up again for each flash.
+- **Tested layouts.** Two displays stacked, at the same and at different
+  scaling, on all four edges. Displays side by side, three or more displays,
+  and displays that only partly share an edge follow the same rules but have
+  not all been run.
 
 ## If it does not work
 
@@ -249,6 +293,27 @@ crash and a silent no-op.
 exact arguments Windhawk uses, so build errors surface before pasting into the
 editor. CI runs the same script on every push and pull request.
 
+`tools/test-taskbars.ps1` drives the taskbars on a real desktop and checks what
+they do, in place of testing by hand. It moves the pointer, presses Win and
+Win+A, flashes a button and, with `-Edges 3,0,1,2`, moves the taskbar to each
+edge in turn, then puts the pointer and the edge back. At about 1 ms intervals
+it measures each taskbar's window (how much is in view on its own display, how
+much on another, its scaling, where its content is) and looks at the strip of
+screen where the taskbar shows, so a slide that jumps, steps back, shows on
+the neighbouring display or is not drawn fails. Run it with the mod disabled
+to see what Windows does by itself. `-Snapshot` only looks. Moving the mouse
+stops a run.
+
+The shipped mod logs what it found and what stopped it, a line each. A debug
+build also logs every request Windows makes of a taskbar and every slide. It is
+the same source with one line changed (`tools/make_debug_build.py`), and each
+release carries it as `taskbar-autohide-any-edge.debug.wh.cpp`, for reporting a
+problem.
+
+`tools/install-dev-build.py` installs the working copy in Windhawk through the
+same elevated task a release uses, as the installed version with its last
+number raised by one.
+
 `.github/rulesets/` holds the rules for `main`. `main: history` blocks
 force-pushes and deletion and requires signed commits, with no exceptions.
 `main: CI` requires both CI jobs to pass, but admins can bypass it, because
@@ -285,6 +350,11 @@ build again and opens a new ready PR.
 The watcher only releases a same-repo `build/*` PR signed with this PC's key
 that adds one `kKnownBuilds` entry, bumps the version and adds one README row
 (`tools/check_build_pr.py`).
+
+The matcher answers for the functions the mod hooks: seven it must find, and
+`CSecondaryTray::_Unhide`, which it adds when it can match it with the same
+certainty and leaves out otherwise. What it cannot answer for is checked on a
+running taskbar by `tools/test-taskbars.ps1`; the new-build PR lists that run.
 
 The install runs as an elevated scheduled task, `WindhawkTaskbarModInstall`,
 which runs `tools/install-mod.ps1` from the staging folder

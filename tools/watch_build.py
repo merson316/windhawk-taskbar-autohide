@@ -38,9 +38,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # autorelease imports this module by name: let it find this copy when run as a script.
 sys.modules.setdefault('watch_build', sys.modules[__name__])
 
-from matcher import HOOKED, reference  # noqa: E402
+from matcher import FIELDS, reference, reference_rvas  # noqa: E402
 from matcher.apply import apply_entry, known_builds  # noqa: E402
-from matcher.buildcheck import accepted_layouts, check_build  # noqa: E402
+from matcher.buildcheck import accepted_layouts, check_build, reads_durations  # noqa: E402
 from matcher.match import evidence_table, format_entry, match_build  # noqa: E402
 from matcher.pdb import publics  # noqa: E402
 from matcher.pe import PE  # noqa: E402
@@ -180,7 +180,7 @@ def staged_build(current):
     return newest
 
 
-def check_published(pe, key, layouts, staged):
+def check_published(pe, key, layouts, staged, durations_needed=True):
     """Symbols are out, so the mod resolves this build itself; what remains is
     whether its load checks pass on it."""
     version = pe.file_version()
@@ -199,7 +199,7 @@ def check_published(pe, key, layouts, staged):
         problems.append('its symbols lack a function the mod hooks')
     if r['layout'] not in layouts:
         problems.append('GetAutoHideFlags changed shape, so ScanForOffsets will refuse it')
-    if not r['durations']:
+    if durations_needed and not r['durations']:
         problems.append('SlideWindow no longer loads the slide durations where the mod reads them')
     if not problems:
         print(f'symbols published, mod checks pass: {version}')
@@ -240,12 +240,14 @@ def check_builds(builds, dry_run):
     codes and the numbers of the PRs opened."""
     fetch_when_reachable()
     known = known_on_main()
-    layouts = accepted_layouts(git('show', f'origin/main:{SRC}').stdout)
-    results = [check(pe, is_staged, known, layouts, dry_run) for pe, is_staged in builds]
+    source = git('show', f'origin/main:{SRC}').stdout
+    layouts = accepted_layouts(source)
+    durations_needed = reads_durations(source)
+    results = [check(pe, is_staged, known, layouts, dry_run, durations_needed) for pe, is_staged in builds]
     return [code for code, _ in results], {pr for _, pr in results if pr is not None}
 
 
-def check(pe, staged, known, layouts, dry_run):
+def check(pe, staged, known, layouts, dry_run, durations_needed=True):
     """Return (exit code, number of the PR opened or None)."""
     version, key = pe.file_version(), pe.pdb_key()
     if any(e['pdb_key'] == key for e in known):
@@ -257,7 +259,7 @@ def check(pe, staged, known, layouts, dry_run):
         print(f'symbol server unreachable: {e}')
         return 5, None
     if published:
-        return check_published(pe, key, layouts, staged), None
+        return check_published(pe, key, layouts, staged, durations_needed), None
     if status != 404:
         # A 503 or 429 says nothing about the build; try again next sign-in.
         print(f'symbol server answered {status}; trying again next time')
@@ -268,11 +270,11 @@ def check(pe, staged, known, layouts, dry_run):
         return 0, None
 
     ref, ref_pdb = auto_reference(pe)
-    found = publics(ref_pdb, list(HOOKED.values()))
-    missing = [f for f, n in HOOKED.items() if n not in found]
-    if missing:
-        raise RuntimeError(f'reference {ref.file_version()} PDB lacks {", ".join(missing)}')
-    result = match_build(pe, ref, {f: found[n] for f, n in HOOKED.items()})
+    try:
+        ref_rvas = reference_rvas(publics(ref_pdb, list(FIELDS.values())))
+    except LookupError as e:
+        raise RuntimeError(f'reference {ref.file_version()} {e}')
+    result = match_build(pe, ref, ref_rvas)
     evidence = evidence_table(result)
     print(f'new {version}, reference {ref.file_version()}\n{evidence}')
     if result.rvas is None:

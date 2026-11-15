@@ -82,9 +82,9 @@ def get_stuck_place(pe):
 
 
 def slide_window(pe):
-    """Functions the mod's own ScanForDurationLoads accepts: ones that load
-    both slide durations from this. Other functions read those members too,
-    so match.py still has to tell which candidate is SlideWindow."""
+    """Functions that load both slide durations from this (scan.scan_for_durations).
+    Other functions read those members too, so match.py still has to tell
+    which candidate is SlideWindow."""
     show = struct.pack('<I', scan.SHOW_DURATION_OFFSET)
     sites = [r - 2 for r in find_bytes(pe, show)
              if pe.read(r - 2, 1) == b'\x8B' and pe.read(r - 1, 1)[0] & 0xC7 == 0x83]
@@ -95,3 +95,9 @@ def slide_window(pe):
 def permit_auto_hide(pe):
     return sorted(set(_starts(pe, find_bytes(pe, PERMIT_FIELDS))) &
                   set(_starts(pe, find_bytes(pe, PERMIT_LIST))))
+
+
+def secondary_tray_unhide(pe):
+    """CSecondaryTray::_Unhide logs under the same name as TrayUI::Unhide, so
+    both refer to that string; match.py tells them apart."""
+    return string_referrers(pe, 'AutoHideOnTaskbarShow')

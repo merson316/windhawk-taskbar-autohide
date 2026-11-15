@@ -16,7 +16,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from matcher.apply import known_builds  # noqa: E402
-from matcher.buildcheck import accepted_layouts, os_builds  # noqa: E402
+from matcher.buildcheck import accepted_layouts, os_builds, reads_durations  # noqa: E402
+from make_debug_build import has_switch  # noqa: E402
 from matcher.pe import PE  # noqa: E402
 from matcher.reference import pdb_published  # noqa: E402
 
@@ -31,15 +32,17 @@ SUPPORT = {'built-in': 'Built-in addresses (Microsoft has not published symbols)
 SHOWN = 5
 INSTALL = ('Download `taskbar-autohide-any-edge.wh.cpp` below, then in Windhawk: '
            'Create a new mod → replace the contents → Compile → Enable.')
+DEBUG_BUILD = ('`taskbar-autohide-any-edge.debug.wh.cpp` is the same mod with a detailed log. '
+               'Use it only to report a problem.')
 
 
-def should_work_for(layouts, builds, tested_taskbars, known=(), published=()):
+def should_work_for(layouts, builds, tested_taskbars, known=(), published=(), durations_needed=True):
     """Builds this version should handle, newest first: symbols published and
     resolving with code passing this version's load-time checks, plus the
     builds its kKnownBuilds table carries. Builds already tested are left out.
     A table build whose PDB key is in `published` is resolved from symbols
     now, so it is labelled that way, and listed once."""
-    ok = [b for b in builds if b['symbols'] and b['resolved'] and b['durations']
+    ok = [b for b in builds if b['symbols'] and b['resolved'] and (b['durations'] or not durations_needed)
           and b['layout'] in layouts and b['taskbar'] not in tested_taskbars]
     listed = {b['taskbar'] for b in ok}
     ok += [{'taskbar': k['version'], 'built_in': k['pdb_key'] not in published} for k in known
@@ -56,7 +59,7 @@ def _build_rows(builds, how):
          f'{"Built-in addresses" if b.get("built_in") else SUPPORT["symbols"]} |' for b in builds]
 
 
-def render(version, compat, changes, should_work=()):
+def render(version, compat, changes, should_work=(), debug_build=False):
     out = ['## Works with', '']
     tested = [c for c in compat if version in c['tested_with']]
     if tested:
@@ -78,6 +81,8 @@ def render(version, compat, changes, should_work=()):
     out += [OTHER_BUILDS, '', WINVER_TIP, '', '## Changes', '']
     out += [f'- {c}' for c in changes]
     out += ['', '## Install', '', INSTALL, '']
+    if debug_build:
+        out += [DEBUG_BUILD, '']
     return '\n'.join(out)
 
 
@@ -145,8 +150,10 @@ def main():
     tested = {c['taskbar'] for c in compat if args.version in c['tested_with']}
     known = known_at(args.version)
     published = {k['pdb_key'] for k in known if pdb_published(k['pdb_key'])[0]}
-    should_work = should_work_for(accepted_layouts(source_at(args.version)), builds, tested, known, published)
-    print(render(args.version, compat, changes, should_work))
+    source = source_at(args.version)
+    should_work = should_work_for(accepted_layouts(source), builds, tested, known, published,
+                                  durations_needed=reads_durations(source))
+    print(render(args.version, compat, changes, should_work, debug_build=has_switch(source)))
 
 
 if __name__ == '__main__':

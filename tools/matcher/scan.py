@@ -45,11 +45,15 @@ HIDE_DURATION_OFFSET = 0x168
 
 
 def scan_for_durations(fn):
-    """A line-for-line port of the mod's ScanForDurationLoads: True if the
-    first 0x200 bytes of `fn` load this+0x16C and this+0x168 exactly once
-    each, as `mov r32,[rbx+disp32]`, into the same register, before the
-    padding that ends the function. Where the loads sit and which register
-    takes them differ between builds."""
+    """True if the first 0x200 bytes of `fn` load this+0x16C and this+0x168
+    exactly once each, as `mov r32,[rbx+disp32]`, into the same register,
+    before the padding that ends the function. Where the loads sit and which
+    register takes them differ between builds.
+
+    These are the two slide durations TrayUI::SlideWindow reads, and the shape
+    is how the matcher recognises SlideWindow in a build without symbols. The
+    mod had the same check until 2.0, when it began running the slide itself
+    and stopped writing those members."""
     length = min(len(fn), SLIDE_SCAN_LENGTH)
     for i in range(length - 3):
         if fn[i:i + 4] == b'\xCC\xCC\xCC\xCC':

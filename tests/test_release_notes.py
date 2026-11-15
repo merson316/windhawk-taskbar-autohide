@@ -101,3 +101,17 @@ def test_built_in_build_listed_once_when_winbindex_has_it_too():
                         'durations': True, 'layout': 'inverted'}]
     sw = should_work_for({'old', 'inverted'}, listed, set(), KNOWN, published={KNOWN[0]['pdb_key']})
     assert [b['taskbar'] for b in sw].count('10.0.26100.9807') == 1
+
+
+def test_should_work_for_a_version_that_reads_no_durations():
+    builds = [{'taskbar': '10.0.26100.9807', 'symbols': True, 'resolved': True, 'layout': 'old',
+               'durations': False}]
+    assert should_work_for({'old'}, builds, set()) == []
+    assert [b['taskbar'] for b in should_work_for({'old'}, builds, set(), durations_needed=False)] == [
+        '10.0.26100.9807']
+
+
+def test_notes_name_the_debug_build_only_when_there_is_one():
+    assert 'debug.wh.cpp' not in render('1.18.0', COMPAT, ['x'])
+    with_it = render('2.0.0', COMPAT, ['x'], debug_build=True)
+    assert 'taskbar-autohide-any-edge.debug.wh.cpp' in with_it

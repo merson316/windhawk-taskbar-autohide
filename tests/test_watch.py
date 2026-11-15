@@ -231,16 +231,28 @@ def test_watch_checks_a_build_staged_for_the_restart(checkout, tmp_path, dll_954
     assert 'would open PR "taskbar.dll 10.0.26100.9807' in p.stdout
 
 
-def test_watch_warns_once_when_a_published_build_breaks_the_mod(checkout, tmp_path, dll_9549, pdb_9549,
-                                                                   symbol_server):
-    # Symbols are published, but SlideWindow no longer loads the durations
-    # where the mod reads them: it would refuse to load after the restart.
+def _without_duration_loads(tmp_path, dll_9549, pdb_9549):
     pe = PE(dll_9549)
     slide = publics(pdb_9549, [HOOKED['slideWindow']])[HOOKED['slideWindow']]
     name, va, _, ptr, _, _ = next(s for s in pe.sections if s[1] <= slide + 0xA6 < s[1] + s[2])
     data = bytearray(open(dll_9549, 'rb').read())
     off = ptr + slide + 0xA6 - va
     data[off:off + 7] = b'\x90' * 7
+    broken = tmp_path / 'no-durations.dll'
+    broken.write_bytes(data)
+    return pe, broken
+
+
+def test_watch_warns_once_when_a_published_build_breaks_the_mod(checkout, tmp_path, dll_9549, pdb_9549,
+                                                                   symbol_server):
+    # Symbols are published, but GetAutoHideFlags no longer has a shape the
+    # mod's ScanForOffsets accepts: it would refuse to load after the restart.
+    pe = PE(dll_9549)
+    flags = publics(pdb_9549, [HOOKED['getAutoHideFlags']])[HOOKED['getAutoHideFlags']]
+    name, va, _, ptr, _, _ = next(s for s in pe.sections if s[1] <= flags < s[1] + s[2])
+    data = bytearray(open(dll_9549, 'rb').read())
+    off = ptr + flags - va
+    data[off:off + 0x40] = b'\x90' * 0x40
     broken = tmp_path / 'broken.dll'
     broken.write_bytes(data)
     symbol_server.published[pe.pdb_key()] = pdb_9549
@@ -248,10 +260,22 @@ def test_watch_warns_once_when_a_published_build_breaks_the_mod(checkout, tmp_pa
     p, notes = run(checkout, str(broken), symbol_server.url)
     assert p.returncode == 7, p.stdout + p.stderr
     assert 'Taskbar 10.0.26100.9549 will break auto-hide' in notes
-    assert 'SlideWindow' in notes
+    assert 'GetAutoHideFlags' in notes
     p2, notes2 = run(checkout, str(broken), symbol_server.url)
     assert p2.returncode == 7
     assert notes2 == notes, 'warned again on the next run'
+
+
+def test_watch_does_not_ask_for_duration_loads_the_mod_no_longer_reads(checkout, tmp_path, dll_9549,
+                                                                         pdb_9549, symbol_server):
+    # The mod on main animates by itself and reads no slide durations out of
+    # SlideWindow, so a build that loads them elsewhere is not a broken one.
+    pe, changed = _without_duration_loads(tmp_path, dll_9549, pdb_9549)
+    symbol_server.published[pe.pdb_key()] = pdb_9549
+    p, notes = run(checkout, str(changed), symbol_server.url)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert 'symbols published, mod checks pass: 10.0.26100.9549' in p.stdout
+    assert notes == ''
 
 
 def test_watch_waits_for_github_rather_than_a_fixed_time(tmp_path, dll_9807, msdl):

@@ -1,0 +1,107 @@
+# Audit: the mod's assumptions against taskbar.dll 10.0.26100.9974
+
+Mod: `src/taskbar-autohide-any-edge.wh.cpp` on branch `multimonitor-experiment` (3897 lines).
+Reference: `docs/taskbar-internals.md`. RVAs are for 9974. Build 10066 was not read.
+"Earlier dig" = taken from the ledger's REA report and not read again.
+Nothing here was run in Explorer. Every proposed change needs the owner's check.
+
+## Changes to make first
+
+1. **Fix the dropped moves in `BarPosChanging` (line 2275).** Test `SWP_NOMOVE` on the flags saved before `DefSubclassProc`, and clear it when putting an own move back; about 6 lines changed. It removes the cause of the primary resting 2 px short and of the take-over leaving a held taskbar at Windows' parked rect.
+2. **Narrow the `PermitAutoHide` hook (lines 1302-1312).** Today it answers TRUE whenever no hold is pending, which also cancels Windows' veto for an open task-list flyout or jump list on the bottom edge; override only while a request-0x11 burst is in progress; about 5 lines.
+3. **Apply the burst rule to request 0x11 only (lines 396-413, 1199-1219, 2661-2683).** A flashing button is the only source of 0x11, so no other request needs the rule; `BurstDecide` loses its `request` state and cannot drop a repeated Start or pointer unhide; about 15 lines simpler.
+4. **Spike: lift Windows' two edge tests with one hook** on the feature check both use (RVA 0xbb674, found from the first `call` in `GetAutoHideFlags`). Windows' own timer, checks and `_Hide` then run on every edge; it would delete the hide half of `WatcherTick`, the `SetAutoHideFlags` hook, the request-9 drop, `PointerOverShellSurface` and the primary-only helpers, about 170 lines, and possibly the mod-driven secondaries, about 170 more.
+5. **If 4 is not taken: remove the `SetAutoHideFlags` hook (lines 1133-1165).** The watcher already stores the hidden state itself; move the one `RaiseTaskbarIfDemoted` call into the `Unhide` hook; about 30 lines.
+6. **Unload: call `TrayUI::Unhide(3, 5)` on the taskbar's thread instead of `RestoreTaskbarIfHidden` (lines 3736-3766).** Windows then clears the hidden bit, moves the window and reports to the content window itself; about 30 lines out, 8 in.
+7. **Remove the `Sleep` and `GetTickCount` hooks (lines 1373-1406, 1437-1473, 3660-3677)** or limit them to the animated loop. They change the clock for every handler that runs on the taskbar's thread during Windows' slide; about 75 lines.
+8. **Remove `ScanForDurationLoads` from the mod (lines 1232-1285, 3679-3684).** The offsets are right but nothing in the mod uses them; the matcher keeps its own port; 60 lines.
+9. **Stop hooking `GetDockedRect` (lines 1167-1172).** The hook only captures a pointer that the `GetAutoHideFlags` hook also captures; resolve the address without a hook; about 8 lines and one patched function fewer.
+10. **Correct the comments that state Windows' behaviour wrongly** (lines 268-271, 246-250, 1178-1179, 1289-1293, 1477-1481, 1548-1551, 1808) and point them at `docs/taskbar-internals.md`; about 40 comment lines shorter.
+
+## Table
+
+| # | Mod line | Assumption | Verdict | Evidence (function, RVA) | Proposed change | Risk if changed |
+|---|---|---|---|---|---|---|
+| 1 | 2272-2286 | A request the taskbar's handler has seen still shows whether a move was asked (`wp->flags & SWP_NOMOVE` tested after `DefSubclassProc`) | wrong | `TrayUI::_HandleWindowPosChanging` 0x41ca4 adds `SWP_NOMOVE\|SWP_NOSIZE` when the window already sits on `GetDockedRect`. Windows' hidden rect is thickness-2, so once a hide step puts the window at 46 of 48 px hidden, every later step is dropped. Same for the first move at take-over of a parked taskbar | fix: test the saved flags; clear `SWP_NOMOVE` for an own move | Low. Check the last hide step and the take-over by measurement |
+| 2 | 1289-1312 | `CTaskListWnd::PermitAutoHide` is the flashing veto | wrong (incomplete) | `CTaskListWnd::PermitAutoHide` 0x35c40 also answers FALSE for three open task-list flyouts and for the jump-view byte. The hook answers TRUE whenever `now >= g_holdVisibleUntil`, which is always when no hold is pending | fix: override only during a request-0x11 burst after its hold | Low. Check flashing on the bottom edge again |
+| 3 | 374-413 | A flashing button repeats one request kind; any kind can open a burst | confirmed, and narrower than assumed | `CTaskBand::UnhideTray` 0x5e620 and `CSecondaryTaskBand::UnhideTray` 0xa8a80 always pass 0x11. No other caller uses 0x11 | simplify: burst rule for 0x11 only | Low. Unit tests change |
+| 4 | 21-26, 1094-1131 | `GetAutoHideFlags` masks the flags off the bottom edge; everything downstream is gated on it | confirmed for the mask; "everything" is wrong | `TrayUI::GetAutoHideFlags` 0x41f70 under `Feature_61970341`. `TrayUI::_Hide` 0x5e344 has a second edge test under the same feature. The check function 0xbb674 has only these two callers | simplify (spike): hook 0xbb674 to answer false; or keep | High. Windows' own hide has never run off the bottom edge; needs every edge re-checked |
+| 5 | 1548-1551, 1558-1692 | Windows' pointer detection does not run off the bottom edge and nothing is called while the taskbar is idle | wrong once the flags are unmasked | With the flags hook, timer 2 (500 ms) runs `_ShouldAutoHideTray` 0x4ba7c and calls `_Hide` on every edge; `WM_NCHITTEST` -> `SetUnhideTimer` 0x41bc0 -> timer 3 -> `Unhide(0,0xf)` has no edge test. Only `_Hide` stops | remove the hide half with #4; keep the reveal half for "Hide completely", the strip width and the dwell | High, same as #4 |
+| 6 | 1679-1681 | Nothing asks for the hidden position off the bottom edge | confirmed | `_Hide` returns at its edge test before `SetAutoHideFlags(3)` and `SlideWindow` | remove with #4, else keep | - |
+| 7 | 836-872 | The taskbar must stay up while the pointer is over a tool window of Explorer (thumbnail preview) | undetermined as a rule; Windows uses a different test | `PermitAutoHide` reasons 1, 4, 5 (flyout open) and `_IsActive` 0x91208 (flyout count) | remove with #4, else keep | Medium. Thumbnail previews must be re-checked |
+| 8 | 796-834, 874-900 | Start, Search and shell flyouts are known by their host process holding the foreground | undetermined from taskbar.dll | Windows knows Start by `GetLauncherVisibleMonitor` 0xa0ea0 and flyouts by message 0x5d1 (member +0x218). The sender of 0x5d1 is outside | keep (also feeds the burst rule) | - |
+| 9 | 415-422, 902-917 | Quick Settings is the window class `ControlCenterWindow`, open when visible, not cloaked and on a display | undetermined | The class name is not in taskbar.dll | keep | - |
+| 10 | 1133-1165 | Windows adds the hidden bit itself on the bottom edge only, so the mod must add it | confirmed; the hook is now redundant | Value 3 is stored only by `_Hide` and `_KickStartAutohide` 0xd9a94. The watcher (line 1689) stores it too | remove (move the raise to the `Unhide` hook) | Medium. Check turning auto-hide on with the pointer away, and Explorer start |
+| 11 | 1174-1197 | Request 9 is `InvisibleUnhide` and would undo the hide | confirmed | `TrayUI::InvisibleUnhide` 0x5e14c: begin = `Unhide(1,9)`, end = `_Hide()`, which the edge test stops | remove with #4, else keep | - |
+| 12 | 1178-1179 | Request 1 is Start or a flyout; 5, 7, 8, 0xf, 0x11 as listed | partly wrong | Start is flags 1 request 2 (`OnLauncherVisibilityChange` 0x8e830); a tray flyout is flags 3 request 4; 0x12 is message 0x5d1; no caller uses 1. The rest are right | fix the comment | None |
+| 13 | 3736-3766 | Clearing the hidden bit in memory and moving the window restores the taskbar | confirmed as far as it goes; incomplete | `TrayUI::Unhide` 0x5e670 also reports to the content window, clears the accessibility off-screen state and runs `SlideWindow`'s tail. `SetAutoHideState(0)` would switch the setting off and must not be used | simplify: `Unhide(3,5)` from the reveal message handler, with `g_inWatcherCall` set, before `g_unloading` | Medium. Check disable on each edge with the taskbar hidden |
+| 14 | 3739 | Calling TrayUI methods from another thread crashes the shell | undetermined | No locking seen in the functions read | keep the rule; #13 keeps the call on the taskbar's thread | - |
+| 15 | 3765 | `WM_SETTINGCHANGE(SPI_SETWORKAREA)` makes the taskbar settle after the restore | wrong | `TrayUI::_OnSettingChange` 0x67c74: it only refreshes the per-monitor work-area collection | remove with #13 | Low |
+| 16 | 1400-1473 | The `Sleep` and `GetTickCount` hooks re-pace only Windows' slide | wrong (wider) | `TrayUI::SlideWindow` 0x41260 loop calls `GetTickCount`, `Sleep(20-e)`, `_SlideStep` (`SetWindowPos`), `UpdateWindow` and `SendMessageTimeout(0x45d)`. Every handler that runs on the thread inside those calls, and `AutoHideChangedOnMonitor` at the tail, gets the fake tick and the replaced sleep | remove, or set the thread id only while `animate` is true and clear it before the tail | Medium. The bottom edge with one display loses the frame-rate setting; the owner must decide |
+| 17 | 1232-1285, 1241-1242 | `SlideWindow` reads its durations at B+0x168 (hide) and B+0x16c (show) | confirmed | `SlideWindow` 0x41306 and 0x41383 | remove the scan from the mod; keep the matcher's | Low. Update tools/tests that expect the log line |
+| 18 | 1167-1172 | `GetDockedRect` must be hooked to learn the TrayUI pointer | wrong (not needed) | The `GetAutoHideFlags` hook captures the same pointer; `_HandleWindowPosChanging` calls both | simplify: resolve the address only | Low |
+| 19 | 1957-1961 | Off the bottom edge Windows hides a secondary only after a pointer visit, so the mod drives it | confirmed (earlier dig) | `CSecondaryTray::_OnTimer` 0x344c8, `_Unhide` 0xbae8c; flags loaded only at creation, `RefreshSettings`, `SyncDisplayChange`. `_AutoHide` 0x161368 has no edge test | keep; revisit after #4 | High if removed without #4 |
+| 20 | 268-271, 50-53 | The Settings toggle reads back through the masked `GetAutoHideFlags` | wrong | `TaskbarSettings::get_HideTaskbar` 0x141110 sends 0x5ca setting 3, which returns member +0x68. `SetAutoHideFlags` 0x3cc90 rewrites +0x68 as `flags & 1` on every call | fix the comment and the readme | None |
+| 21 | 246-250 | Windows reports auto-hide off for about a minute after Explorer starts | confirmed as an effect; cause now known in part | `TrayUI::_KickStartAutohide` 0xd9a94 stores 0 when `GetAutoHideFlags()` is 0, which clears the flags and the setting bit. What sets it again later is outside taskbar.dll | fix the comment; keep the 120 s wait | None |
+| 22 | ledger line 91 | TrayUI+0x68 always holds the saved setting | wrong | Written by `SetAutoHideFlags` on every call, by setting 4 and by `_GetSaveStateAndInitRects` 0x5ee40 | fix the ledger note; do not build on it | None |
+| 23 | 220-228, 3293-3365 | `ScanForOffsets` finds the edge and the flags | confirmed | `GetAutoHideFlags` 0x41f70: `cmp [rbx+0x118],3`, `mov eax,[rbx+0x44]`; B = this+8 | keep | - |
+| 24 | (new) | The setting bit can be found by the same scan | wrong; other ways exist | Not referenced in `GetAutoHideFlags`. It is flags-4 (`SetAutoHideFlags` writes [B+0x3c] then [B+0x38]); `TrayUI::GetDesktopModeAutoHide` 0x95a50 returns it; `SendMessage(Shell_TrayWnd, 0x5ca, 3, 0)` returns it with no pointer | keep unused; if needed use message 0x5ca | Low |
+| 25 | 1112-1119 | `GetAutoHideFlags` is reached on a base 8 below the others | confirmed | Thunk 0xf4690: `sub rcx,8; jmp 0x41f70` | keep | - |
+| 26 | 1477-1481, 75-78 | Windows can lower the taskbar while it is hidden; it keeps `WS_EX_TOPMOST` | partly wrong, partly undetermined | `TrayUI::_ResetZorder` 0x266c0 lowers to `HWND_BOTTOM` only for a full-screen window with the taskbar inactive. That is not tied to the hidden state and clears the style. A taskbar that keeps the style and sits behind is not produced by this code | fix the comment; keep the function | None |
+| 27 | 1478 | `TrayUI::Unhide` does not raise the taskbar | confirmed | No call to `_ResetZorder` in `Unhide`, `_UnhideNow`, `_Hide`, `SlideWindow` | keep | - |
+| 28 | 1513-1529 | Windows lowers the taskbar on purpose while a full-screen window is in front | confirmed | `_ResetZorder`, host slot 0x48; `RudenessChanged` 0x26b70 | keep the mod's own test; Windows' state is not readable without offsets | - |
+| 29 | 1531-1544 | Re-asserting `HWND_TOPMOST` is safe | confirmed | Helper 0x93100 makes the same `SetWindowPos` call, plus `SWP_NOOWNERZORDER` | keep; optionally add `SWP_NOOWNERZORDER` | Low |
+| 30 | (new) | Windows has a call that restores the z-order | confirmed, with a limit | `_ResetZorder(force)`; message 0x5c5 runs `_ResetZorder(0)`. With force 0 it does nothing when the style already says topmost | keep the mod's own raise | - |
+| 31 | 937-954, 2557 | Edge change is setting 6 and runs the listed sequence | confirmed (earlier dig, re-read) | `_HandleTrayPrivateSettingMessage` 0x103584 | keep | - |
+| 32 | 955 | 2500 ms is enough for the edge announcement to be delivered | undetermined | The consumer of 0x5c3 is outside. Windows' own re-render wait is 1000 ms by default (`GetStuckPlaceChangeRerenderTimeoutMs` 0x1362d8) | keep | - |
+| 33 | 966-982 | Seeing a new edge in a hook is a usable fallback | confirmed | `GetStuckPlace` 0x65250 returns the moving edge or the stored edge | keep | - |
+| 34 | 1316-1326 | The taskbar forces every requested position to the endpoint its flags imply | confirmed, with an exception | `_HandleWindowPosChanging` 0x41ca4; not while member +0x54 is set by `_Hide` or `_UnhideNow` | keep | - |
+| 35 | 1414-1435 | Calling `SlideWindow` with animate false is safe and keeps its side effects | confirmed (earlier dig, re-read) | `SlideWindow` 0x41260: one `_SlideStep`, then `AutoHideChangedOnMonitor`. It returns at once for an invisible window | keep | - |
+| 36 | 1421-1425 | Windows' slide is a loop on the taskbar's thread; secondaries slide through it too | confirmed | `SlideWindow`; `CSecondaryTray::_AutoHide` 0x161368 and `_Unhide` call slot 0x158 | keep | - |
+| 37 | 1446-1450 | `SlideWindow` derives each position from `GetTickCount` | confirmed | Loop at 0x41421-0x414dd | - | - |
+| 38 | 625-631 | Windows leaves a 2 px sliver | confirmed by measurement; the code gives metric/2 | `TrayUI::_ComputeHiddenRect` 0x41fa8 | keep; the constant 2 is not proven for every scale | Low |
+| 39 | 1940-1946 | A taskbar wholly off its display cannot be revealed by Windows | confirmed | Timer 3 in `TrayUI::OnTimer` 0x9c580 needs the real pointer inside `GetWindowRect` | keep | - |
+| 40 | 2357-2381 | A hit test sent to the window makes Windows reveal it about 60 ms later | confirmed | Primary: `WM_NCHITTEST` -> `SetUnhideTimer` -> timer 3 (50 ms). Secondary: `_OnNCHitTest` 0x9c180 (earlier dig) | keep | - |
+| 41 | 1962-1969, 2447-2454 | `CSecondaryTray::_Unhide` flags and request | confirmed (earlier dig) | `_Unhide` 0xbae8c | keep | - |
+| 42 | 2589-2593 | The public `Unhide` is a thunk into `_Unhide` with flags 0; one hook sees every request | confirmed | `CSecondaryTray::Unhide` 0xa8ac0 | keep | - |
+| 43 | 2589 | A flashing button asks every taskbar to show | undetermined | `CTaskListWnd::RedrawTask` 0x2cf40 asks its own band's tray. Whether every task list redraws was not read | keep | - |
+| 44 | 2909-2911 | Request 5 is what Windows uses when auto-hide is switched off | confirmed | Setting 4 of 0x5ca with value 0 calls `Unhide(0,5)` | keep | - |
+| 45 | 3810-3813, 1096-1103 | Windows hides a shown secondary again after half a second | confirmed | Timer 2 at 500 ms in `CSecondaryTray::_AutoHide(false)` | keep | - |
+| 46 | 1808 | Windows keeps one edge for all taskbars | undetermined | `CSecondaryTray` has its own edge member and `SetStuckPlace` 0x160ba0; `GetMultimonStuckPlace` 0xf98a0 exists | fix the comment to "the mod assumes" | None |
+| 47 | 1563-1570 | `SWP_FRAMECHANGED` makes Windows call a hooked function; `WM_SETTINGCHANGE` did not | confirmed | `WM_WINDOWPOSCHANGING` -> `_HandleWindowPosChanging` -> `GetDockedRect` -> `GetAutoHideFlags` | keep | - |
+| 48 | 1999-2008, 3835 | The content is the child window of class `Windows.UI.Composition.DesktopWindowContentBridge` | undetermined | The name is not in taskbar.dll. `TaskbarHost::SetAutoHide` 0xac840 sets `IsVisible` on the XAML host child | keep | - |
+| 49 | 1421-1435, 2337-2347 | The mod can start its slide after Windows' unanimated `SlideWindow` | undetermined | `_Hide` and `_AutoHide` call `TaskbarHost::SetAutoHide` right after `SlideWindow` returns, so the content is told to become invisible at the start of the mod's slide. When that shows on screen is outside taskbar.dll | check by recording on the bottom edge with a held taskbar | - |
+| 50 | 2026-2040 | The mod may cloak a taskbar at rest | confirmed with a side effect | `TrayUI::UpdateCloakState` 0x102068 and `CSecondaryTray::_UpdateCloakState` 0x161cd0 write the same `DWMWA_CLOAK`; either side can undo the other (gaming full screen, taskbar size change, edge change) | keep; re-read the real state instead of caching `rec->cloaked` | Low |
+| 51 | 2026-2029 | A region change on the primary is not always drawn at once | undetermined | Not in taskbar.dll | keep | - |
+| 52 | 437-443 | A window hidden past an edge with a display beyond takes that display's DPI | undetermined | Decided by user32 | keep | - |
+| 53 | 1045-1049 | Hidden, the rect Windows reports lies mostly on the display past the edge | confirmed | `GetDockedRect` 0x41ed0 -> `_ComputeHiddenRect` | keep | - |
+| 54 | 1155-1158 | A reveal Windows drives starts by clearing the hidden bit | confirmed | `Unhide`: `SetAutoHideFlags(1)` before `_UnhideNow` | keep, or move to the `Unhide` hook with #10 | - |
+| 55 | 1221-1223, 1597-1598 | An unhide that reaches Windows asks for the shown position | confirmed | `_UnhideNow` 0x5e508 -> `SlideWindow(stuckRect[edge])`, only when the flags are 3 | keep | - |
+| 56 | 1631 | `Unhide(2, 1)` reveals and does not restart Windows' hide timer | confirmed | `Unhide`: `_SetAutoHideTimer` skipped when flags bit 1 is set | keep; request 0xf would match Windows' own pointer unhide | None |
+| 57 | 17-19 | The setting is accepted and reports success off the bottom edge | confirmed | `SetAutoHideState` 0xa6720 returns 0x10001 | keep | - |
+| 58 | 35-38, 154-156 | Windows refuses to hide while a button flashes | confirmed | `PermitAutoHide` reason 3, `CTaskBtnGroup::IsFlashing` 0x36d60 | keep | - |
+| 59 | 2128-2129, 696-698 | Off the bottom edge Windows hides nothing without the mod; the bottom works natively | confirmed | The two edge tests | keep | - |
+| 60 | 753-760 | The hooked functions' signatures | confirmed | `GetDockedRect` returns the edge; `SlideWindow` takes (hwnd, rect, monitor, show, animate) | keep | - |
+| 61 | 3397-3399 | The 9974 addresses in `kKnownBuilds` | confirmed | 0x65250, 0x41f70, 0x3cc90, 0x41ed0, 0x5e670, 0x41260, 0x35c40 match the PDB | keep | - |
+| 62 | 3429-3435 | The exact bytes of `GetStuckPlace` | confirmed | 0x65250: `[rcx+0x11c]`, else `[rcx+0x110]` | keep | - |
+| 63 | 230-234 | `WM_TIMER` is starved by pointer messages | undetermined from taskbar.dll | An OS rule. Windows' own hide and unhide use `WM_TIMER` (timers 2 and 3) | keep | - |
+| 64 | 234 | A 40 ms tick is needed | mod's own choice | Windows polls the hide every 500 ms and the pointer 50 ms after a hit test | keep; with #4 the tick is needed only while hidden | - |
+| 65 | 275 | Two ticks away (80 ms) means the pointer left | mod's own choice | Windows waits up to 500 ms | keep | - |
+| 66 | 162-173 | Flashes arrive closer together than 10 s | undetermined | The flash rate is set outside taskbar.dll | keep | - |
+| 67 | 243-245 | Warning delays of 5, 15 and 30 s | mod's own choice | - | keep | - |
+| 68 | 2958-2962 | `Shell_TrayWnd` does not exist yet when the mod loads | undetermined | Created by Explorer | keep | - |
+| 69 | 992, 2767, 3849 | Window classes `Shell_TrayWnd` and `Shell_SecondaryTrayWnd` | confirmed | Strings at 0x1fb0b8 and 0x1d6c18 | keep | - |
+| 70 | 64-68 | Readme: the hide is linear, the reveal is Windows' own, primary only | wrong (stale text about the mod) | The mod eases both and handles secondaries | fix in Task 17 | None |
+| 71 | 1037-1056 | The pointer over the hidden rect should reveal | confirmed as Windows' rule too | Timer 3 tests the window rect | keep | - |
+| 72 | (new) | Closing Start hides the taskbar through the same checks as the timer | wrong | `OnLauncherVisibilityChange` 0x8e830 calls `_Hide` directly | note for #4: the pointer may be over the taskbar when this fires | - |
+
+## Ledger items marked as guesses
+
+| Ledger item | Result |
+|---|---|
+| The primary rests 2 px short with "Hide completely" | Explained: row 1. Not yet confirmed by measurement after a fix |
+| The first-load take-over leaves the window at Windows' hidden rect | Explained: row 1, same cause |
+| Whether the mod's cloak has side effects elsewhere | Row 50: shared with Windows' own cloak state; effects outside taskbar.dll not determinable |
+| "Auto-hide off for a minute after start"; trigger of the late set | Row 21: the clearing is `_KickStartAutohide`; the later set is outside taskbar.dll |
+| The hit-test prompt as a guess at what starts Windows' timer (run 4) | Refuted by code as well as by the run: the secondary's hit test only starts the unhide timer, and only when its flags are 3 (earlier dig) |
+| Unload posts `WM_SETTINGCHANGE` | Row 15: no effect on the hidden state |

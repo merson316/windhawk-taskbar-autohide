@@ -80,12 +80,18 @@ jobs:
           ls "$WINDHAWK_DIR"
           ls "$WINDHAWK_DIR"/Compiler/bin/clang++.exe "$WINDHAWK_DIR"/Engine/*/64/windhawk.lib
       - run: tools/compile-mod.sh
+      # The debug build is the same source with its detailed log on: it must
+      # compile too.
+      - run: |
+          python tools/make_debug_build.py src/taskbar-autohide-any-edge.wh.cpp "$RUNNER_TEMP/debug.wh.cpp"
+          tools/compile-mod.sh "$RUNNER_TEMP/debug.wh.cpp"
       # The elevated half of the install, against a temp folder and HKCU.
       - run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install-mod.Tests.ps1
         shell: pwsh
       - run: python -m pip install -q -r tools/requirements.txt
       # The mod's check on its built-in addresses, compiled and run against the
-      # real taskbar.dll each entry was matched for.
-      - run: python -m pytest tests/test_mod_guard.py -q -rs
+      # real taskbar.dll each entry was matched for, and the mod's pure logic,
+      # compiled on its own.
+      - run: python -m pytest tests/test_mod_guard.py tests/test_mod_logic.py tests/test_debug_build.py -q -rs
         env:
           TASKBAR_FIXTURES: required

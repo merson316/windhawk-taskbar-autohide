@@ -41,11 +41,50 @@ function NonEmpty($name) {
     return $path
 }
 
+# A request to change the mod's settings and nothing else:
+#   request.json   {"settings": {"hideDelayMs": 800, "hideFully": 0}}
+# The mod's settings are whole numbers. Each is written to the Settings subkey
+# as Windhawk writes it, and SettingsChangeTime is set, which is how Windhawk
+# tells a running mod to read its settings again. Names are checked so that a
+# request can reach nothing but a value of that subkey.
+function Set-Settings($settings) {
+    $pairs = @($settings.PSObject.Properties)
+    if ($pairs.Count -eq 0) { throw 'no settings given' }
+    foreach ($p in $pairs) {
+        if ($p.Name -notmatch '^[A-Za-z][A-Za-z0-9]{0,63}$') { throw "'$($p.Name)' is not a setting name" }
+        if ($p.Value -isnot [int] -and $p.Value -isnot [long]) { throw "'$($p.Name)' is not a whole number" }
+        if ($p.Value -lt 0 -or $p.Value -gt 1000000) { throw "'$($p.Name)' is not a whole number in range" }
+    }
+    $key = Join-Path $RegKey 'Settings'
+    if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force | Out-Null }
+    foreach ($p in $pairs) {
+        New-ItemProperty -LiteralPath $key -Name $p.Name -Value ([int]$p.Value) -PropertyType DWord -Force | Out-Null
+    }
+    $now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    New-ItemProperty -LiteralPath $RegKey -Name SettingsChangeTime -Value $now -PropertyType DWord -Force | Out-Null
+    return "$($pairs.Count) setting(s)"
+}
+
 function Install {
     $request = NonEmpty 'request.json'
-    $version = (Get-Content -Raw -LiteralPath $request | ConvertFrom-Json).version
+    $asked = Get-Content -Raw -LiteralPath $request | ConvertFrom-Json
+    $version = $asked.version
     # Read once: a second run of the task without a new request refuses.
     Remove-Item -LiteralPath $request
+    if ($null -ne $asked.settings) {
+        if ($null -ne $version) { throw 'a request is for a version or for settings, not both' }
+        return Set-Settings $asked.settings
+    }
+    # A request to switch the mod off or on, as the switch in Windhawk does:
+    #   request.json   {"disabled": 1}
+    if ($null -ne $asked.disabled) {
+        if ($null -ne $version) { throw 'a request is for a version or for the switch, not both' }
+        if ($asked.disabled -isnot [int] -or ($asked.disabled -ne 0 -and $asked.disabled -ne 1)) {
+            throw "'disabled' is 0 or 1"
+        }
+        New-ItemProperty -LiteralPath $RegKey -Name Disabled -Value ([int]$asked.disabled) -PropertyType DWord -Force | Out-Null
+        return "disabled $($asked.disabled)"
+    }
     $dll = NonEmpty 'mod.dll'
     $source = NonEmpty 'mod.wh.cpp'
     if ("$version" -notmatch '^\d+\.\d+\.\d+$') { throw "bad version '$version'" }
