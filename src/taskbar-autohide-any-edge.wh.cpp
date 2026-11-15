@@ -970,6 +970,15 @@ bool CursorOverTaskbar(void* pThis) {
     }
     RECT r{};
     TrayUI_GetDockedRect_Original(pThis, &r, 0);
+    // Only the part on the taskbar's own display. Hidden on an edge with a
+    // display past it, the rect Windows reports lies mostly on that display,
+    // and a pointer resting there, near the seam, is not over the taskbar. It
+    // was taken to be, the watcher revealed the taskbar on every tick, the
+    // flags hook hid it again each time, and Start opened only half the time.
+    RECT m{};
+    if (TrayMonitorRect(&m) && !IntersectRect(&r, &r, &m)) {
+        return false;
+    }
     POINT pt;
     return GetCursorPos(&pt) && PtInRect(&r, pt);
 }
@@ -1057,7 +1066,7 @@ void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
     UINT effective = flags;
 
     if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-        !g_inUnhide && !CursorAtRevealStrip(edge)) {
+        !g_inUnhide && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
         effective = flags | ABS_ALWAYSONTOP;
     }
 
@@ -2576,6 +2585,12 @@ void RefreshRecords() {
                 Wh_Log(L"taskbar %p taken over while hidden: dpi now %u",
                        rec->hwnd, GetDpiForWindow(rec->hwnd));
             }
+            // A region may be left on the window by an instance of the mod
+            // that did not get to clean up. Treat it as unknown, so the
+            // placement below sets the right one or removes it.
+            rec->clipped = true;
+            rec->region = {-1, -1, -1, -1};
+
             // Never take one over more hidden than the mod itself would hide
             // it: a taskbar with nothing left on screen cannot be revealed.
             const int most = HiddenTargetFor(rec);
@@ -3491,17 +3506,47 @@ void ReleaseBarsOnUnload() {
     if (g_trayWnd && g_subclassed && g_barReleaseMsg &&
         !InterlockedCompareExchange(&g_barsReleased, 0, 0)) {
         DWORD_PTR asked = 0, done = 0;
-        if (g_barRevealMsg &&
-            SendMessageTimeoutW(g_trayWnd, g_barRevealMsg, 0, 0,
-                                SMTO_ABORTIFHUNG, 2000, &asked) &&
-            asked) {
+        const LRESULT revealSent =
+            g_barRevealMsg
+                ? SendMessageTimeoutW(g_trayWnd, g_barRevealMsg, 0, 0,
+                                      SMTO_ABORTIFHUNG, 2000, &asked)
+                : 0;
+        Wh_Log(L"unload: reveal message %s (error %u), %d secondaries asked",
+               revealSent ? L"delivered" : L"NOT delivered",
+               revealSent ? 0 : GetLastError(), (int)asked);
+        if (revealSent && asked) {
             // Windows answers the hit test about 60 ms later, on the
             // taskbar's thread. Give it time, but less than the half second
             // after which it would hide the taskbar again.
             Sleep(250);
         }
-        SendMessageTimeoutW(g_trayWnd, g_barReleaseMsg, 0, 0, SMTO_ABORTIFHUNG,
-                            2000, &done);
+        const LRESULT releaseSent =
+            SendMessageTimeoutW(g_trayWnd, g_barReleaseMsg, 0, 0,
+                                SMTO_ABORTIFHUNG, 2000, &done);
+        Wh_Log(L"unload: release message %s (error %u)",
+               releaseSent && done ? L"handled" : L"NOT handled",
+               releaseSent ? 0 : GetLastError());
+    } else {
+        Wh_Log(L"unload: nothing to release (window %p, subclassed %d, "
+               L"released %d)",
+               g_trayWnd, g_subclassed,
+               (int)InterlockedCompareExchange(&g_barsReleased, 0, 0));
+    }
+
+    // Whatever happened above, no taskbar may be left with one of the mod's
+    // regions: an empty one makes it invisible for good. Removing a region
+    // works from any thread.
+    if (g_trayWnd) {
+        SetWindowRgn(g_trayWnd, nullptr, TRUE);
+    }
+    const DWORD pid = GetCurrentProcessId();
+    for (HWND w = nullptr;
+         (w = FindWindowExW(nullptr, w, L"Shell_SecondaryTrayWnd", nullptr));) {
+        DWORD owner = 0;
+        GetWindowThreadProcessId(w, &owner);
+        if (owner == pid) {
+            SetWindowRgn(w, nullptr, TRUE);
+        }
     }
     InterlockedExchange(&g_barsReleased, 1);
 }
