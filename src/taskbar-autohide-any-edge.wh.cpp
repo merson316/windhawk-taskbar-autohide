@@ -1245,63 +1245,6 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     g_inUnhide = prev;
 }
 
-// -------------------------------------------------- slide animation duration
-
-// Windows' SlideWindow animates with a synchronous timed loop, taking its
-// duration from this+0x168 when hiding and this+0x16c when showing (400 ms and
-// 200 ms by default). The mod used to write those two members to apply the
-// duration settings. It now runs the hide and reveal itself wherever the
-// settings apply, and writes nothing there.
-//
-// What remains is the check that SlideWindow still reads them, logged at load:
-// the build matcher finds SlideWindow by exactly this shape, so a build that
-// changes it is worth knowing about.
-#define SLIDE_HIDE_DURATION_OFFSET 0x168
-#define SLIDE_SHOW_DURATION_OFFSET 0x16c
-
-// True if the start of SlideWindow loads both durations from this, each
-// exactly once, as mov r32,[rbx+disp32] into one register. Where the two loads
-// sit and which register takes them is the compiler's choice: up to 9974 they
-// were at +0xA6 and +0x123 into r14d, in 10066 at +0xFF and +0x108 into r15d.
-// The scan stops at the padding after the function, so a shorter function is
-// never credited with its neighbour's loads. tools/matcher/scan.py ports this
-// line for line.
-bool ScanForDurationLoads(const BYTE* fn) {
-    size_t length = 0x200;
-    for (size_t i = 0; i + 3 < 0x200; i++) {
-        if (fn[i] == 0xCC && fn[i + 1] == 0xCC && fn[i + 2] == 0xCC &&
-            fn[i + 3] == 0xCC) {
-            length = i;
-            break;
-        }
-    }
-
-    int show = -1, hide = -1;
-    int shows = 0, hides = 0;
-    for (size_t i = 0; i + 5 < length; i++) {
-        // 8B /r with mod=10, rm=011: mov r32,[rbx+disp32].
-        if (fn[i] != 0x8B || (fn[i + 1] & 0xC7) != 0x83) {
-            continue;
-        }
-        DWORD disp;
-        memcpy(&disp, fn + i + 2, sizeof(disp));
-        int reg = (fn[i + 1] >> 3) & 7;
-        if (i > 0 && fn[i - 1] == 0x44) {  // REX.R: r8d-r15d
-            reg += 8;
-        }
-        if (disp == SLIDE_SHOW_DURATION_OFFSET) {
-            show = reg;
-            shows++;
-        } else if (disp == SLIDE_HIDE_DURATION_OFFSET) {
-            hide = reg;
-            hides++;
-        }
-    }
-    return shows == 1 && hides == 1 && show == hide;
-}
-
-bool g_durationOffsetsVerified = false;
-
 // ------------------------------------------------- notification auto-hide
 
 // Windows refuses to auto-hide while an app flashes its taskbar button, and
@@ -1740,7 +1683,6 @@ struct TaskbarRec {
     int lastAskedOff;  // what Windows last asked for, for the log
     bool clipped;
     RECT region;       // the window region in force, when clipped
-    bool cloaked;      // hidden from the compositor while held and at rest
     HWND content;      // the child window that draws the taskbar
     int contentDx, contentDy;   // where the mod last put it
     bool contentMoved;
@@ -1836,7 +1778,6 @@ UINT DockedEdge() {
 }
 
 void ReleaseBar(TaskbarRec* rec, bool shown = false);
-void CloakBar(TaskbarRec* rec, bool cloak);
 void MoveBarContent(TaskbarRec* rec, int dx, int dy);
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget);
 
@@ -1868,7 +1809,6 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
                     SetWindowRgn(rec->hwnd, nullptr, TRUE);
                     rec->clipped = false;
                 }
-                CloakBar(rec, false);
                 MoveBarContent(rec, 0, 0);
                 rec->placed = false;
                 rec->held = false;
@@ -2017,6 +1957,14 @@ void HideModBar(TaskbarRec* rec) {
     }
 }
 
+// No cloaking. The mod once cloaked a held taskbar at rest, when hiding it
+// depended on a window region that was not always drawn in time. Windows has
+// one switch for cloaking a taskbar (ImmersiveTray::SetCloakWithAnimation) and
+// uses it itself for a full-screen game, assigned access and the moment after
+// an edge change, without keeping a record of who set it, so the two undid
+// each other. With the content slid out of a window that stays put there is
+// nothing left to cloak.
+
 // The child window that draws a taskbar: its XAML content. Moving it inside the
 // taskbar's window is how a held taskbar slides.
 HWND BarContent(TaskbarRec* rec) {
@@ -2041,22 +1989,6 @@ void MoveBarContent(TaskbarRec* rec, int dx, int dy) {
         rec->contentDx = dx;
         rec->contentDy = dy;
         rec->contentMoved = dx != 0 || dy != 0;
-    }
-}
-
-// A held taskbar at rest is cloaked: taken out of what the compositor draws.
-// Its region is meant to leave nothing showing, but on the primary a region
-// change is not always drawn at once, and the taskbar was left on screen half
-// slid away, or vanished late. Cloaking is immediate. It is only ever on while
-// the taskbar is fully hidden and still.
-void CloakBar(TaskbarRec* rec, bool cloak) {
-    if (rec->cloaked == cloak) {
-        return;
-    }
-    BOOL value = cloak;
-    if (SUCCEEDED(DwmSetWindowAttribute(rec->hwnd, DWMWA_CLOAK, &value,
-                                        sizeof(value)))) {
-        rec->cloaked = cloak;
     }
 }
 
@@ -2122,7 +2054,6 @@ void ReleaseBar(TaskbarRec* rec, bool shown) {
     rec->dwellStart = 0;
     rec->revealSent = 0;
     rec->revealStage = 0;
-    CloakBar(rec, false);
     MoveBarContent(rec, 0, 0);
     if (!rec->placed) {
         return;
@@ -2187,7 +2118,6 @@ void HidePrimaryBar(const RECT& docked, UINT edge) {
 }
 
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget) {
-    CloakBar(rec, false);
     rec->from = rec->hiddenNow;
     rec->to = hiddenTarget;
     rec->startMs = NowMs();
@@ -2242,9 +2172,6 @@ void TickBar(TaskbarRec* rec) {
 
     if (t >= 1.0) {
         rec->animating = false;
-        if (rec->held && rec->to > 0) {
-            CloakBar(rec, true);
-        }
         Wh_Log(L"taskbar %p %s %d->%d px in %d ms at %d fps: %d steps, gap "
                L"%d..%d us, %d late, dpi %u",
                rec->hwnd, rec->to > rec->from ? L"hide" : L"reveal", rec->from,
@@ -2338,7 +2265,6 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
             SetWindowRgn(rec->hwnd, nullptr, TRUE);
             rec->clipped = false;
         }
-        CloakBar(rec, false);
         MoveBarContent(rec, 0, 0);
         rec->placed = false;
         rec->held = false;
@@ -2893,8 +2819,6 @@ void RefreshRecords() {
             // placement below sets the right one or removes it.
             rec->clipped = true;
             rec->region = {-1, -1, -1, -1};
-            rec->cloaked = true;
-            CloakBar(rec, false);
             // ...and the content may have been left slid aside.
             rec->contentMoved = true;
             rec->contentDx = rec->contentDy = -1;
@@ -2907,9 +2831,6 @@ void RefreshRecords() {
                 rec->hiddenNow = rec->hiddenAsked = most;
             }
             ApplyPlacement(rec, rec->hiddenNow);
-            if (rec->held && rec->hiddenNow > 0) {
-                CloakBar(rec, true);
-            }
         }
     }
 }
@@ -3727,13 +3648,6 @@ PCWSTR SetUpHooks() {
         }
     }
 
-    g_durationOffsetsVerified =
-        ScanForDurationLoads((const BYTE*)TrayUI_SlideWindow_Address);
-    if (!g_durationOffsetsVerified) {
-        Wh_Log(L"SlideWindow no longer reads its durations where the build "
-               L"matcher expects; the mod itself does not depend on it");
-    }
-
     return nullptr;
 }
 
@@ -3879,7 +3793,6 @@ void ReleaseBarsOnUnload() {
     // Whatever happened above, no taskbar may be left with one of the mod's
     // regions: an empty one makes it invisible for good. Removing a region
     // works from any thread.
-    BOOL uncloak = FALSE;
     auto contentHome = [](HWND bar) {
         if (HWND content = FindWindowExW(
                 bar, nullptr,
@@ -3891,8 +3804,6 @@ void ReleaseBarsOnUnload() {
     };
     if (g_trayWnd) {
         SetWindowRgn(g_trayWnd, nullptr, TRUE);
-        DwmSetWindowAttribute(g_trayWnd, DWMWA_CLOAK, &uncloak,
-                              sizeof(uncloak));
         contentHome(g_trayWnd);
     }
     const DWORD pid = GetCurrentProcessId();
@@ -3902,7 +3813,6 @@ void ReleaseBarsOnUnload() {
         GetWindowThreadProcessId(w, &owner);
         if (owner == pid) {
             SetWindowRgn(w, nullptr, TRUE);
-            DwmSetWindowAttribute(w, DWMWA_CLOAK, &uncloak, sizeof(uncloak));
             contentHome(w);
         }
     }
