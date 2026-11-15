@@ -258,7 +258,9 @@ setting's description says so.
 4. Held taskbars on the left, top and right edges, and "Skip edges facing
    another display" off by default.
 
-Each step is releasable. A release with code changes uses the manual
+The owner has since decided that all four steps ship as one release, tested
+on every edge before it goes out. The steps remain the order of work, and
+each still leaves the mod working. A release with code changes uses the manual
 `tools/release.sh` flow and takes the next minor version; an open build PR is
 closed and reopened by the watcher, as the README describes.
 

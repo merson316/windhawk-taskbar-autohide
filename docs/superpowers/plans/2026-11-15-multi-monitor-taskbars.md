@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fix issues #9, #10 and #12, then hold every hidden taskbar on its own display on the bottom edge (#11), with the mod running the hide and reveal itself.
+**Goal:** Fix issues #9, #10 and #12, then hold every hidden taskbar on its own display on every edge (#11), with the mod running the hide and reveal itself.
 
 **Architecture:** Decisions move into a block of pure functions inside the mod, compiled and tested on their own with Windhawk's compiler. The Windows-facing code keeps one record per taskbar window and asks those functions what to do. One pacing thread drives every animation; each step runs on the taskbar's thread.
 
@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-15-multi-monitor-taskbars-design.md`. Read it first, with `research/spike-secondary-park.wh.cpp`, which is the working reference for Tasks 7 to 10.
 
-**Scope:** the spec's delivery steps 2 and 3. Step 1 (`slidewindow-10066`) is already written and is Task 0. Step 4 (held taskbars on the left, top and right edges, "Skip edges" off by default, and retiring the `Sleep`/`GetTickCount` hooks and the duration members) gets its own plan after Task 12's measurements. Until then the mod's existing off-bottom code is left as it is.
+**Scope:** all four of the spec's delivery steps. Step 1 (`slidewindow-10066`) is already written and is Task 0. Tasks 1 to 5 are the small fixes, Tasks 6 to 11 the bottom edge, and Tasks 12 to 15 the left, top and right edges (the owner's decision: one release, tested on every edge before it ships). Only the bottom edge was spiked. Task 12 is therefore a measurement with a stop-and-report gate, and Tasks 13 to 15 are written against its expected result.
 
 ## Global Constraints
 
@@ -22,6 +22,7 @@
 - `hideDelayMs`: range 0 to 10000, default 0. `notificationBurstGapMs`: default 10000.
 - New symbol hooks are set from symbols only, are optional, and never join `kKnownBuilds`. Without them the mod logs one line and everything else works.
 - Every setting needs its header block entry (description ending "Default: X."), its `Settings` field, its clamp in `LoadSettings`, and its README table row.
+- "Skip edges facing another display" defaults to off from Task 15. While it is on, the mod stands down on left, top and right edges that face a display, as it does today.
 - All commits signed. Never disable signing. No pushes without the owner's word. Work on `multimonitor-experiment`.
 - A release with code changes uses `tools/release.sh` by hand, only when the owner asks.
 
@@ -285,7 +286,7 @@ def test_records_follow_windows(logic):
 ```
 
 - [ ] **Step 2:** Run it. Expected: FAIL, unknown command `diff`.
-- [ ] **Step 3:** Implement `DiffWindows`, the record table (8 entries), the refresh, and `SecondaryProc` (for now it only drops the record on `WM_NCDESTROY`). `held` is always false when the docked edge is not the bottom: this plan holds on the bottom edge only.
+- [ ] **Step 3:** Implement `DiffWindows`, the record table (8 entries), the refresh, and `SecondaryProc` (for now it only drops the record on `WM_NCDESTROY`). `held` is always false when the docked edge is not the bottom, until Task 15.
 - [ ] **Step 4:** Log one line per record when it is made or its facts change: class, rectangle, display, Hz, edge, held.
 - [ ] **Step 5: Manual check with the owner.** Stacked layout: the log shows two records, the upper one held. Turn "show my taskbar on all displays" off and on: the secondary's record goes and comes back without reloading the mod. One display, taskbar at the bottom: one record, not held, and `tools/measure-taskbars.ps1 -Watch 20` shows the same rectangles as with the mod disabled.
 - [ ] **Step 6:** Commit: `feat: one record per taskbar window`.
@@ -301,7 +302,7 @@ def test_records_follow_windows(logic):
 
 Behaviour, all taken from the spike (versions 0.3 to 0.5):
 
-- The mod **handles** a taskbar when the docked edge is the bottom and `AnyHeld()`. Otherwise nothing in this task runs.
+- The mod **handles** a taskbar when the docked edge is the bottom and `AnyHeld()`. Otherwise nothing in this task runs. Tasks 13 to 15 widen this to the other edges.
 - `TrayUI_SlideWindow_Hook`: for a handled window, call the original with `animate = false`. Existing behaviour for other windows is unchanged.
 - `WM_WINDOWPOSCHANGING` on a handled window, not the mod's own move: work out how many pixels Windows wants hidden; if that differs from `hiddenAsked`, call `StartBarAnimation`; then replace `x`, `y` with `PlaceBar(...)` for `hiddenNow`.
 - The mod's own moves: remember the requested `x`, `y` before `DefSubclassProc` and put them back after it. The primary's handler replaces them otherwise.
@@ -360,15 +361,89 @@ Behaviour, all taken from the spike (versions 0.3 to 0.5):
 - [ ] **Step 5: Manual check with the owner.** Two displays, a button flashing with a long count: each taskbar shows once. **Review Focus 4:** rename Windhawk's cached symbols for the running build so the lookup fails, reload: the one log line appears, the primary behaves as before, Explorer does not crash. Restore the cache.
 - [ ] **Step 6:** Commit: `fix: a flashing button shows each secondary taskbar once (#9)`.
 
-### Task 12: Measurements, documents and the pre-release
+### Task 12: Measure the left, top and right edges
+
+**Files:**
+- Modify: `docs/superpowers/specs/2026-11-15-multi-monitor-taskbars-design.md` ("What was measured")
+
+Nothing below the bottom edge has been tried with more than one taskbar. `docs/ROADMAP.md` section 3 lists what is unknown.
+
+- [ ] **Step 1: With the owner, mod disabled, auto-hide and "show on all displays" on.** For the taskbar on the left, then the top, then the right, in a layout where the secondary's docked edge faces the primary and one where it does not, run `tools/measure-taskbars.ps1 -Watch 30`. Record for each: does the secondary hide at all; where it parks; its DPI when parked; whether Windows reveals it.
+- [ ] **Step 2: Same with the released mod enabled** and "Skip edges facing another display" off. Record what the primary and the secondary each do.
+- [ ] **Step 3: Read `CSecondaryTray`.** From a published build's PDB and disassembly, record in `research/symbol-map.tsv` whether it has its own `GetAutoHideFlags`, `SetAutoHideFlags`, `GetStuckPlace` and `GetDockedRect`, their signatures, and whether its `GetAutoHideFlags` masks the flags off the bottom edge as `TrayUI`'s does.
+- [ ] **Step 4: Write the results into the spec and report to the owner.** Then take one branch:
+  - **A. The secondary hides on these edges without help.** Go on to Task 13; Task 14 only holds it.
+  - **B. It does not hide.** Go on to Task 13; Task 14 makes the mod hide it by its window.
+  - **C. Something else** (it hides but cannot be revealed, Explorer misbehaves, the layout is not stable). Stop and bring it to the owner before Task 13.
+- [ ] **Step 5:** Commit: `docs: how secondary taskbars behave off the bottom edge`.
+
+### Task 13: The primary's off-bottom hide and reveal go through the same animation
+
+**Files:**
+- Modify: `src/taskbar-autohide-any-edge.wh.cpp`
+- Test: `tests/test_mod_logic.py`
+
+**Interfaces:**
+- Consumes: `TaskbarRec`, `StartBarAnimation`, `PlaceBar`, `g_barTickMsg`.
+- Produces: `int HiddenTarget(int thickness, bool hideFully, bool held)` (PureLogic): `thickness` when `hideFully` and not held, else `thickness - 2`. Removes: `Sleep_Hook`, `GetTickCount_Hook`, the frame timer that served them, `ApplyDurationOverrides`, `g_durationOffsetsVerified`, and the watch thread's own slide (`g_animRequested`, `g_animFrom`, `g_animTo`, `g_animOverride`).
+
+Today, off the bottom edge, the watch thread slides the primary out itself and Windows' own loop slides it back in, re-paced by the `Sleep` and `GetTickCount` hooks. After this task both directions are `StartBarAnimation` on the primary's record, on every edge the mod handles.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+def test_hidden_target(logic):
+    assert logic('target', 48, 1, 0) == [48]   # hide completely, nothing beyond
+    assert logic('target', 48, 0, 0) == [46]   # leave Windows' 2 px sliver
+    assert logic('target', 60, 1, 1) == [58]   # held: the sliver stays for the reveal
+```
+
+- [ ] **Step 2:** Run it. Expected: FAIL, unknown command `target`.
+- [ ] **Step 3:** Implement `HiddenTarget`. In `WatcherTick`, replace the hide slide request with `StartBarAnimation(rec, HiddenTarget(...))`; keep everything before it (the flag changes, `g_inWatcherCall`). In `TrayUI_SlideWindow_Hook`, every window the mod handles gets `animate = false`. The off-screen pin (`g_clipHold`, `g_clipRect`) becomes the record's `hiddenNow`: the `WM_WINDOWPOSCHANGING` replacement from Task 8 already holds the window there.
+- [ ] **Step 4:** Delete the hooks and globals listed above and their set-up in `SetUpHooks`. `ScanForDurationLoads` stays in the mod only if something still calls it; `tools/matcher/scan.py` keeps its port, which the matcher's anchor uses, and `tools/matcher/buildcheck.py`'s `durations` result stops being a reason the mod "will not work": update `tools/watch_build.py:check_published`, `tools/release_notes.py` and their tests to match.
+- [ ] **Step 5:** Run `.venv/bin/pytest tests -q -rs` and `tools/compile-mod.sh`. Expected: PASS.
+- [ ] **Step 6: Manual check with the owner, one display's worth of behaviour first.** Primary on the left, top and right with no display beyond that edge: hide, reveal by pointer, reveal by Win key, a flashing button, Start and Quick Settings, "Hide completely" on and off, both duration settings, frame rate 30, 90 and 240. Each behaves as the released mod does, and `-Watch` shows the same end rectangles.
+- [ ] **Step 7:** Commit: `refactor: one animation for every edge, without the Sleep and GetTickCount hooks`.
+
+### Task 14: Secondary taskbars on the left, top and right edges
+
+**Files:**
+- Modify: `src/taskbar-autohide-any-edge.wh.cpp`
+
+**Interfaces:**
+- Consumes: `TaskbarRec`, `StartBarAnimation`, `HiddenTarget`, `RevealStrip`, `HideDelayElapsed`, Task 12's results.
+- Produces: `void WatchSecondary(TaskbarRec* rec, POINT pointer, LONG64 now)`, called from the watch tick for each secondary record off the bottom edge.
+
+- [ ] **Step 1 (branch A, the secondary hides without help):** nothing to add here; Task 15 makes these records held.
+- [ ] **Step 1 (branch B, it does not hide):** implement `WatchSecondary` as the per-record form of what `WatcherTick` does for the primary, without touching any `CSecondaryTray` member: the taskbar stays up while the pointer is over it or its strip, a shell surface is in front, Quick Settings is open, its notification hold runs, or the hide delay has not elapsed; otherwise `StartBarAnimation(rec, HiddenTarget(...))`. It is revealed by `StartBarAnimation(rec, 0)` when the pointer rests in its strip or Windows asks for it (`CSecondaryTray_Unhide_Hook` from Task 11, where symbols allow). Windows does not know this taskbar is hidden, so the `WM_WINDOWPOSCHANGING` replacement is what keeps it there.
+- [ ] **Step 2:** Run `tools/compile-mod.sh`. Expected: compiles.
+- [ ] **Step 3: Manual check with the owner**, taskbar on the left, top and right, secondary's edge not facing another display: the secondary hides, is revealed from its own edge, stays up under the pointer and with Start open, and `-Watch` shows its DPI never changing. Maximise a window on that display: note whether the space the taskbar occupied is given to the window, and bring the answer to the owner if it is not.
+- [ ] **Step 4:** Commit: `feat: secondary taskbars auto-hide on the left, top and right edges`.
+
+### Task 15: Held taskbars on every edge, and "Skip edges" off by default
+
+**Files:**
+- Modify: `src/taskbar-autohide-any-edge.wh.cpp` (`held` in the record refresh; `EdgeEnabled`; `DisplayBeyondEdge` and `EdgeFacesDisplay`, which the records replace; the header block and `Settings` default for `skipAdjacentEdges`), `README.md`
+
+**Interfaces:**
+- Consumes: `DisplayBeyond`, `PlaceBar`, `RevealStrip`, `HeldDwellMs`, `RevealHeld`.
+
+- [ ] **Step 1:** Compute `held` from `DisplayBeyond` on every edge, not only the bottom. `EdgeEnabled(edge)` returns false for a left, top or right edge only when `skipAdjacentEdges` is on and the primary's record says a display lies beyond it. Remove `DisplayBeyondEdge`, `EdgeFacesDisplay` and their cache.
+- [ ] **Step 2:** `skipAdjacentEdges` defaults to false in the struct and the header block. Its description says it is a way out: on, the mod leaves an edge that faces another display alone.
+- [ ] **Step 3:** Run `.venv/bin/pytest tests -q -rs` and `tools/compile-mod.sh`. Expected: PASS. Task 6's `test_held_window_is_never_mostly_off_its_display` already covers the four edges.
+- [ ] **Step 4: Manual check with the owner.** For the taskbar on the left, top and right, in a layout where the primary's edge faces the other display and one where the secondary's does: each held taskbar half-slides, keeps its DPI in `-Watch`, is revealed only from its own display, and does not appear when the pointer crosses to the other display without resting.
+- [ ] **Step 5:** With `skipAdjacentEdges` turned on: the mod stands down on a facing edge exactly as the released mod does.
+- [ ] **Step 6:** Commit: `feat: held taskbars on every edge; "Skip edges facing another display" off by default`.
+
+### Task 16: The layout matrix, documents and the pre-release
 
 **Files:**
 - Modify: `tools/measure-taskbars.ps1`, `README.md`, the mod's header block and readme, `docs/ROADMAP.md`
 
 - [ ] **Step 1:** Add `-Assert` to `tools/measure-taskbars.ps1`: with `-Watch`, exit 1 and name the taskbar if any taskbar's DPI changes, or if a taskbar that is not fully shown has more pixels on another display than on its own.
-- [ ] **Step 2: Layout matrix with the owner.** For each of: stacked with the 125% display above; stacked with it below; side by side; stacked and offset so the edges only partly face: run `-Watch 30 -Assert` while hiding and revealing every taskbar. Expected: exit 0 each time. Record the results in the spec.
-- [ ] **Step 3: Measure for the next plan.** With the taskbar on the left, then the top, then the right, in a layout where a secondary's edge faces another display and the mod disabled: record with `-Watch` whether the secondary auto-hides at all, and where it parks. Add the results to the spec.
-- [ ] **Step 4:** README: the settings table (hide delay; frame rate as a cap; the gap's new default), the notification section, and "Primary taskbar only" replaced by what now holds. ROADMAP sections 2b and 3: say what this supersedes.
+- [ ] **Step 2: Layout matrix with the owner.** Four layouts (stacked with the 125% display above; stacked with it below; side by side; stacked and offset so the edges only partly face) times four edges. For each of the sixteen, run `-Watch 30 -Assert` while hiding and revealing every taskbar. Expected: exit 0 each time. Record the table in the spec; any failure goes to the owner before the release.
+- [ ] **Step 3:** One display, taskbar at the bottom: `-Watch 20` gives the same rectangles as with the mod disabled, and the log has no animation lines.
+- [ ] **Step 4:** README: the settings table (hide delay; frame rate as a cap; the gap's new default; "Skip edges" off by default), the notification section, the note on the animation durations, and "Primary taskbar only" replaced by what now holds. ROADMAP sections 2b and 3: say what this supersedes.
 - [ ] **Step 5:** Run `.venv/bin/pytest tests -q -rs` and `tools/compile-mod.sh`. Expected: PASS.
 - [ ] **Step 6:** Commit: `docs: taskbars on every display`.
 - [ ] **Step 7:** Tell the owner the branch is ready for a pre-release build to go to the reporter of #11, and wait. Drafting replies on the four issues, opening a PR and releasing all need the owner's word.
