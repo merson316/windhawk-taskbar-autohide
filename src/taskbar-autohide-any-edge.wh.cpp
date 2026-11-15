@@ -3101,6 +3101,12 @@ void RefreshRecords() {
             if (rec->hiddenNow > most) {
                 rec->hiddenNow = rec->hiddenAsked = most;
             }
+            // ...and one hidden where Windows hides it, with its 2 px sliver,
+            // goes to where the mod hides it: with "Hide completely" that
+            // sliver would otherwise stay on screen until the next reveal.
+            if (rec->hiddenNow > 0 && rec->hiddenNow >= most - 2) {
+                rec->hiddenNow = rec->hiddenAsked = most;
+            }
             ApplyPlacement(rec, rec->hiddenNow);
         }
     }
