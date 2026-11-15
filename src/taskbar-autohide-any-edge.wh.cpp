@@ -1778,6 +1778,9 @@ struct TaskbarRec {
     LONG64 lastKeptUp;      // last moment something was keeping it up
     int leaveTicks;
 
+    // When no display last claimed this taskbar's window; 0 while one does.
+    ULONGLONG lostSince;
+
     // The mod is setting this window's region (see BarPosChanging).
     bool ownRegion;
     // Put the placement on again at the next tick: Windows replaced the
@@ -1855,6 +1858,8 @@ void ReleaseBar(TaskbarRec* rec, bool shown = false);
 void MoveBarContent(TaskbarRec* rec, int dx, int dy);
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget);
 
+void UnhideThroughWindows(HWND secondary);
+
 // Fill in what depends on the display layout. Returns false when no display
 // claims the window, which happens for a moment while the layout changes.
 bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
@@ -1886,11 +1891,34 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
                 MoveBarContent(rec, 0, 0);
                 rec->placed = false;
                 rec->held = false;
-        rec->inPlace = false;
+                rec->inPlace = false;
                 rec->display = {0, 0, 0, 0};
+            }
+            // No display claims it, and Windows moves a taskbar only when it
+            // hides or shows it, which it will not do for one it believes is
+            // where it should be. Left like that it stays lost. After two
+            // seconds, and every five after that, have Windows show it: that
+            // puts it on its display's edge, and from there the mod finds it.
+            const ULONGLONG tick = GetTickCount64();
+            if (!rec->lostSince) {
+                rec->lostSince = tick;
+            } else if (tick - rec->lostSince >= 2000) {
+                rec->lostSince = tick + 3000;
+                DLog(L"taskbar %p at (%d,%d,%d,%d) has been on no display's "
+                     L"edge for a while: asking Windows to show it",
+                     rec->hwnd, bar.left, bar.top, bar.right, bar.bottom);
+                if (rec->primary) {
+                    // TrayUI answers any request with the rect it believes in.
+                    SetWindowPos(rec->hwnd, nullptr, 0, 0, 0, 0,
+                                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                                     SWP_NOACTIVATE);
+                } else {
+                    UnhideThroughWindows(rec->hwnd);
+                }
             }
             return false;
         }
+        rec->lostSince = 0;
 
         RECT others[MAX_TASKBARS];
         int nOthers = 0;
@@ -2549,7 +2577,13 @@ void RevealHeld(TaskbarRec* rec, POINT pointer) {
 // too, which keeps what Windows believes in step with what is on screen.
 void SlideHint(HWND hwnd, bool show) {
     TaskbarRec* rec = RecFor(hwnd);
-    if (!rec || !ModDriven(rec)) {
+    // Not while the mod does not know which display the taskbar is on: the
+    // displays were just rearranged, and what the record holds is the old
+    // place. Animating from it carried the window back there after Windows
+    // had moved it to its new display, and there it stayed, on no display's
+    // edge, where the mod could not find its display again (seen after
+    // moving a display from beside the primary to above it).
+    if (!rec || !ModDriven(rec) || IsRectEmpty(&rec->display)) {
         return;
     }
     if (show) {
