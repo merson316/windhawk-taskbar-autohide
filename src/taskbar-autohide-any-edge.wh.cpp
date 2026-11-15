@@ -1148,53 +1148,22 @@ UINT WINAPI TrayUI_GetAutoHideFlags_Hook(void* pThis) {
     return stored;
 }
 
-// GetDockedRect returns the hidden rect only when both ABS_AUTOHIDE and
-// ABS_ALWAYSONTOP are set. Windows adds the second bit itself on the bottom
-// edge but not elsewhere, so add it here. Not while unhiding, where a bare
-// ABS_AUTOHIDE means "show".
-void WINAPI TrayUI_SetAutoHideFlags_Hook(void* pThis, UINT flags) {
-    if (g_fatalReason) {
-        TrayUI_SetAutoHideFlags_Original(pThis, flags);
-        return;
-    }
-
-    UINT edge = CurrentStuckPlace(pThis);
-    if (EdgeSettling(edge)) {
-        TrayUI_SetAutoHideFlags_Original(pThis, flags);
-        return;
-    }
-    UINT effective = flags;
-
-    if ((flags & ABS_AUTOHIDE) && edge < ABE_BOTTOM && EdgeEnabled(edge) &&
-        !g_inUnhide && !g_inWatcherCall && !CursorAtRevealStrip(edge)) {
-        effective = flags | ABS_ALWAYSONTOP;
-    }
-
-    // Reveals that Windows drives itself -- the Windows key, a notification --
-    // start here, by clearing the hidden bit, and never pass through the
-    // watcher's reveal. Raise the taskbar now, while it is still off-screen, so
-    // it does not visibly slide up behind a window and then jump in front.
-    if ((effective & ABS_AUTOHIDE) && !(effective & ABS_ALWAYSONTOP) &&
-        edge < ABE_BOTTOM && EdgeEnabled(edge)) {
-        RaiseTaskbarIfDemoted();
-    }
-
-    TrayUI_SetAutoHideFlags_Original(pThis, effective);
-}
-
-UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
-    if (!g_fatalReason) {
-        g_trayUI = pThis;
-    }
-    return TrayUI_GetDockedRect_Original(pThis, rect, arg);
-}
+// TrayUI::SetAutoHideFlags and TrayUI::GetDockedRect are called, not hooked.
+// The mod used to hook the first to add the hidden bit whenever Windows set
+// auto-hide off the bottom edge; the watcher stores that state itself when it
+// hides the taskbar, and Windows stores it nowhere else there (only _Hide and
+// _KickStartAutohide write it, and _Hide stops at its edge test). The second
+// was hooked only to capture the TrayUI pointer, which the GetAutoHideFlags
+// hook captures too.
 
 // Request 9 is TrayUI::InvisibleUnhide: the unhide Windows does around layout
 // work (SizeWindows, VerifySize, sizing, a theme change). It follows the
 // hidden state being set and would undo the hide, so drop it unless the
 // pointer is actually at the edge. The request number is otherwise only
-// telemetry: 1 Start or a flyout, 5 auto-hide switched off, 7 an edge change,
-// 8 activation, 0xf the pointer, 0x11 a flashing button.
+// telemetry. By caller: 2 Start (with flags 1), 4 a tray flyout, 5 auto-hide
+// switched off, 7 an edge change, 8 activation, 0xf the pointer, 0x11 a
+// flashing button, 0x12 a flyout reported by message 0x5d1. Nothing in
+// Windows uses 1, which is what the mod passes for its own reveal.
 #define UNHIDE_REQUEST_STATE_CHANGED 9
 
 void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
@@ -1239,6 +1208,14 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     // Any unhide that reaches Windows means the taskbar is to become visible:
     // Windows then asks for the shown position, and the mod's animation turns
     // round from wherever it is.
+    // A reveal Windows drives itself (the Windows key, a notification) never
+    // passes through the watcher. Raise the taskbar now, while it is still
+    // out of sight, so it does not come in behind a window and then jump in
+    // front.
+    if (edge < ABE_BOTTOM && EdgeEnabled(edge)) {
+        RaiseTaskbarIfDemoted();
+    }
+
     bool prev = g_inUnhide;
     g_inUnhide = true;
     TrayUI_Unhide_Original(pThis, flags, request);
@@ -1768,7 +1745,8 @@ BOOL CALLBACK CollectDisplay(HMONITOR monitor, HDC, LPRECT, LPARAM data) {
     return TRUE;
 }
 
-// The edge every taskbar is docked to. Windows keeps one for all of them.
+// The edge the primary is docked to. The mod assumes every taskbar shares it;
+// CSecondaryTray has a SetStuckPlace of its own, so Windows may not require it.
 UINT DockedEdge() {
     if (g_trayUI && g_offsetsVerified) {
         return *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
@@ -2899,6 +2877,24 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         // moves are not overruled, then leave every taskbar alone.
         ReleaseAllBars();
         InterlockedExchange(&g_barsReleased, 1);
+
+        // Off the bottom edge the primary is "hidden" only because the mod
+        // said so. Have Windows unhide it itself: TrayUI::Unhide clears the
+        // hidden state, moves the window, tells the content window it is
+        // showing and clears the accessibility off-screen state, which
+        // writing the flags and moving the window by hand does not. Flags 3:
+        // no animation, and do not start the hide timer. This must run on
+        // the taskbar's thread, which is where this message is handled.
+        // RestoreTaskbarIfHidden remains for when this message could not be
+        // delivered, and does nothing once the taskbar is no longer hidden.
+        if (g_trayUI && g_offsetsVerified && TrayUI_Unhide_Original) {
+            const UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+            if (edge < ABE_BOTTOM) {
+                g_inWatcherCall = true;
+                TrayUI_Unhide_Original(g_trayUI, 3, 5);
+                g_inWatcherCall = false;
+            }
+        }
         return 1;
     }
 
@@ -3433,18 +3429,15 @@ bool HookKnownBuild(HMODULE taskbar, const KnownBuild& b) {
 
     TrayUI_GetStuckPlace_Original =
         (TrayUI_GetStuckPlace_t)at(b.getStuckPlace);
+    TrayUI_SetAutoHideFlags_Original =
+        (TrayUI_SetAutoHideFlags_t)at(b.setAutoHideFlags);
+    TrayUI_GetDockedRect_Original =
+        (TrayUI_GetDockedRect_t)at(b.getDockedRect);
 
     return WindhawkUtils::SetFunctionHook(
                (TrayUI_GetAutoHideFlags_t)at(b.getAutoHideFlags),
                TrayUI_GetAutoHideFlags_Hook,
                &TrayUI_GetAutoHideFlags_Original) &&
-           WindhawkUtils::SetFunctionHook(
-               (TrayUI_SetAutoHideFlags_t)at(b.setAutoHideFlags),
-               TrayUI_SetAutoHideFlags_Hook,
-               &TrayUI_SetAutoHideFlags_Original) &&
-           WindhawkUtils::SetFunctionHook(
-               (TrayUI_GetDockedRect_t)at(b.getDockedRect),
-               TrayUI_GetDockedRect_Hook, &TrayUI_GetDockedRect_Original) &&
            WindhawkUtils::SetFunctionHook((TrayUI_Unhide_t)at(b.unhide),
                                           TrayUI_Unhide_Hook,
                                           &TrayUI_Unhide_Original) &&
@@ -3540,11 +3533,11 @@ PCWSTR SetUpHooks() {
 
         {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))",
           LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int) )"},
-         &TrayUI_SetAutoHideFlags_Original, TrayUI_SetAutoHideFlags_Hook, true},
+         &TrayUI_SetAutoHideFlags_Original, nullptr, true},
 
         {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int))",
           LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int) )"},
-         &TrayUI_GetDockedRect_Original, TrayUI_GetDockedRect_Hook, true},
+         &TrayUI_GetDockedRect_Original, nullptr, true},
 
         {{LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
           LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
