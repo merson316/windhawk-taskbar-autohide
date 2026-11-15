@@ -1,5 +1,14 @@
 """Decides, for each hooked function, which anchor candidate in the new build
-is the reference build's function, and fails closed when that is not certain."""
+is the reference build's function, and fails closed when that is not certain.
+
+A candidate is accepted the strict way when its code is close to the
+reference's, with the same imports and member offsets. Microsoft sometimes
+rewrites a function, and then nothing is close. For TrayUI's virtual functions
+there is a second way: the function keeps its vtable slot, so a candidate that
+sits in the reference function's slot, measured from at least two functions
+already matched the strict way, and still calls the same imports, is accepted
+as that function."""
+import struct
 from dataclasses import dataclass, field
 
 from . import HOOKED, anchors
@@ -7,6 +16,12 @@ from .code import Function, similarity
 
 EXACT = 0.999   # getStuckPlace: an 18-byte leaf that must not change at all
 CLOSE = 0.85    # observed 9549 -> 9807 minimum for a true match was 0.908
+
+# TrayUI's own virtual functions: these share one vtable. GetAutoHideFlags is
+# reached through a base class's vtable and PermitAutoHide is CTaskListWnd's.
+TRAYUI_VTABLE = ('getStuckPlace', 'setAutoHideFlags', 'getDockedRect', 'unhide', 'slideWindow')
+SLOT_ANCHORS = 2        # strict matches a slot must be measured from
+VTABLE_SPAN = 0x1000    # two entries further apart are not one vtable
 
 
 @dataclass
@@ -40,8 +55,46 @@ def _accept(fieldname, cand, ref):
     return ok, sim, imports, offsets
 
 
+def _pointers(pe, rva):
+    """RVAs of every aligned 8-byte slot outside code that holds this
+    function's address, as stored on disk (preferred base, before relocation)."""
+    needle = struct.pack('<Q', pe.image_base + rva)
+    out = []
+    for _, va, _, ptr, raw_size, chars in pe.sections:
+        if chars & 0x20000000:
+            continue
+        blob = pe.data[ptr:ptr + raw_size]
+        i = blob.find(needle)
+        while i >= 0:
+            if i % 8 == 0:
+                out.append(va + i)
+            i = blob.find(needle, i + 1)
+    return out
+
+
+def _slot_distances(pe, rva, anchor_rva):
+    return {s - a for s in _pointers(pe, rva) for a in _pointers(pe, anchor_rva)
+            if abs(s - a) < VTABLE_SPAN}
+
+
+def same_slot(new, ref, cand, ref_rva, pairs):
+    """True if cand sits in the new build's vtable where ref_rva sits in the
+    reference's, measured from each (reference, new) pair of functions already
+    matched, with at least SLOT_ANCHORS of them to measure from and none
+    disagreeing."""
+    agree = 0
+    for ref_anchor, new_anchor in pairs:
+        want = _slot_distances(ref, ref_rva, ref_anchor)
+        if not want:
+            continue   # not in one vtable with this anchor in the reference
+        if _slot_distances(new, cand, new_anchor) != want:
+            return False
+        agree += 1
+    return agree >= SLOT_ANCHORS
+
+
 def match_build(new, ref, ref_rvas):
-    found, rows = {}, []
+    found, rows, turned_down = {}, [], {}
     order = ['getAutoHideFlags', 'getStuckPlace', 'setAutoHideFlags', 'unhide',
              'getDockedRect', 'slideWindow', 'permitAutoHide']
     sources = {
@@ -74,7 +127,9 @@ def match_build(new, ref, ref_rvas):
             ok, sim, imp, off = _accept(name, fn, ref_fn)
             if ok:
                 accepted.append((c, fn, sim, imp, off))
-            elif sim > row.similarity:
+                continue
+            turned_down.setdefault(name, []).append((c, fn, sim, imp, off))
+            if sim > row.similarity:
                 row.rva, row.size, row.similarity, row.imports_equal, row.offsets_equal = c, fn.size, sim, imp, off
                 row.verdict = 'rejected'
         if len(accepted) == 1:
@@ -85,7 +140,20 @@ def match_build(new, ref, ref_rvas):
         elif len(accepted) > 1:
             row.verdict = f'ambiguous: {", ".join(hex(a[0]) for a in accepted)}'
         rows.append(row)
-    failed = [r for r in rows if r.verdict != 'ok']
+
+    # Second way, for a reworked TrayUI virtual: its vtable slot.
+    pairs = [(ref_rvas[f], found[f]) for f in TRAYUI_VTABLE if f in found]
+    for row in rows:
+        if row.field in found or row.field not in TRAYUI_VTABLE:
+            continue
+        in_slot = [t for t in turned_down.get(row.field, [])
+                   if t[3] and same_slot(new, ref, t[0], ref_rvas[row.field], pairs)]
+        if len(in_slot) == 1:
+            c, fn, sim, imp, off = in_slot[0]
+            row.rva, row.size, row.similarity, row.imports_equal, row.offsets_equal = c, fn.size, sim, imp, off
+            row.verdict = 'ok (vtable slot)'
+            found[row.field] = c
+    failed = [r for r in rows if r.field not in found]
     if failed:
         return MatchResult(None, rows, '; '.join(f'{r.field}: {r.verdict}' for r in failed))
     return MatchResult({f: found[f] for f in HOOKED}, rows)
