@@ -2642,6 +2642,34 @@ LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
 
+    // For some seconds after an edge change, record what is asked of a
+    // secondary taskbar's window, before and after Windows has had its say.
+    if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
+        (LONG64)GetTickCount64() <
+            InterlockedCompareExchange64(&g_edgeSettleUntil, 0, 0) + 6000) {
+        const WINDOWPOS before = *(const WINDOWPOS*)lParam;
+        TaskbarRec* rec = RecFor(hWnd);
+        const bool own = rec && rec->ownMove;
+        RECT cur{};
+        GetWindowRect(hWnd, &cur);
+        LRESULT r;
+        if (BarsHandled() && rec && !IsRectEmpty(&rec->display)) {
+            WINDOWPOS* wp = (WINDOWPOS*)lParam;
+            r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            BarPosChanging(rec, wp, before.x, before.y, before.flags);
+        } else {
+            r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        }
+        const WINDOWPOS* after = (const WINDOWPOS*)lParam;
+        Wh_Log(L"edge change: secondary %p at (%d,%d,%d,%d) asked (%d,%d) "
+               L"%dx%d flags %#x%s -> (%d,%d) %dx%d flags %#x",
+               hWnd, cur.left, cur.top, cur.right, cur.bottom, before.x,
+               before.y, before.cx, before.cy, before.flags,
+               own ? L" by the mod" : L"", after->x, after->y, after->cx,
+               after->cy, after->flags);
+        return r;
+    }
+
     if (uMsg == WM_WINDOWPOSCHANGING && lParam && BarsHandled()) {
         TaskbarRec* rec = RecFor(hWnd);
         if (rec && !IsRectEmpty(&rec->display)) {

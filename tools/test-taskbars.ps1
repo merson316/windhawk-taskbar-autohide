@@ -36,7 +36,7 @@
 
 param(
     [switch]$Snapshot,
-    [int[]]$Edges = @(),
+    [string]$Edges = "",
     [string]$Only = "",
     [string]$Out = "",
     [int]$SettleMs = 3000
@@ -94,6 +94,8 @@ public class TaskbarDriver {
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr hMonitor, int type, out uint x, out uint y);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out int value, int size);
     [DllImport("shell32.dll")] static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA data);
+    [DllImport("winmm.dll")] static extern uint timeBeginPeriod(uint ms);
+    [DllImport("winmm.dll")] static extern uint timeEndPeriod(uint ms);
 
     public class Monitor {
         public string Device; public bool Primary; public uint Dpi;
@@ -257,6 +259,8 @@ public class TaskbarDriver {
             List<Sample> list = new List<Sample>();
             Stopwatch sw = Stopwatch.StartNew();
             double reached = -1;
+            timeBeginPeriod(1);     // or Sleep(1) lasts 15 ms and steps are missed
+            try {
             while (sw.Elapsed.TotalMilliseconds < maxMs) {
                 Bar b = Measure(h, "", edge, mons);
                 double now = sw.Elapsed.TotalMilliseconds;
@@ -276,6 +280,7 @@ public class TaskbarDriver {
                 } else reached = -1;
                 Thread.Sleep(1);
             }
+            } finally { timeEndPeriod(1); }
             return list;
         } finally { Unaware(old); }
     }
@@ -353,6 +358,9 @@ public class TaskbarDriver {
 "@
 
 $EdgeName = @('left', 'top', 'right', 'bottom')
+# A string, split here: powershell -File hands "3,0,1,2" over as one value.
+$EdgeList = @($Edges -split '[ ,]+' | Where-Object { $_ -ne '' } | ForEach-Object { [int]$_ })
+if ($EdgeList | Where-Object { $_ -lt 0 -or $_ -gt 3 }) { Write-Host "-Edges takes 0 to 3" -ForegroundColor Red; exit 2 }
 $results = New-Object System.Collections.ArrayList
 $traces = New-Object System.Collections.ArrayList
 
@@ -377,6 +385,16 @@ function Result($status, $name, $detail) {
     if ($detail) { Write-Host ("  -- " + $detail) } else { Write-Host "" }
 }
 function Check($name, $ok, $detail) { Result $(if ($ok) { 'PASS' } else { 'FAIL' }) $name $detail }
+# Changes the edge the way Settings does: the stored value first (the Settings
+# handler in every process watches it and repeats it to the taskbar whenever
+# anything under that key changes), then the message itself. Sending only the
+# message leaves the stored value behind, and the next repeat moves the
+# taskbar back.
+function Set-Edge($e) {
+    Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name TaskbarLocation -Value ([int]$e) -Type DWord
+    return [TaskbarDriver]::SetEdge([uint32]$e)
+}
+
 function Wanted($name) { -not $Only -or $name -match $Only }
 
 function Guard {
@@ -567,14 +585,14 @@ if (-not [TaskbarDriver]::AutoHide()) {
 $pointer0 = [TaskbarDriver]::Pointer()
 $stopped = $null
 try {
-    if ($Edges.Count -eq 0) {
+    if ($EdgeList.Count -eq 0) {
         Test-Edge $edge0 $false
     } else {
-        foreach ($e in $Edges) {
+        foreach ($e in $EdgeList) {
             Guard
             $changed = [TaskbarDriver]::Edge() -ne $e
             if ($changed) {
-                if (-not [TaskbarDriver]::SetEdge([uint32]$e)) { Result 'FAIL' "$($EdgeName[$e])/edge/asked" "the taskbar did not answer"; continue }
+                if (-not (Set-Edge $e)) { Result 'FAIL' "$($EdgeName[$e])/edge/asked" "the taskbar did not answer"; continue }
                 Wait $SettleMs
             }
             Test-Edge $e $changed
@@ -585,7 +603,7 @@ try {
     Write-Host "Stopped: $stopped" -ForegroundColor Red
 } finally {
     if ([TaskbarDriver]::Edge() -ne $edge0) {
-        [void][TaskbarDriver]::SetEdge([uint32]$edge0)
+        [void](Set-Edge $edge0)
         Start-Sleep -Milliseconds 1500
         "edge put back to {0}: Windows reports {1}" -f $EdgeName[$edge0], $EdgeName[[TaskbarDriver]::Edge()]
     }
