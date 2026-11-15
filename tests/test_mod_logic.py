@@ -308,5 +308,7 @@ def test_hidden_target(logic):
     # target thickness hideFully held -> pixels of thickness to hide
     assert logic('target', 48, 1, 0) == [48]   # hide completely, nothing beyond the edge
     assert logic('target', 48, 0, 0) == [46]   # leave Windows' 2 px sliver
-    assert logic('target', 60, 1, 1) == [58]   # held: the sliver stays, whatever the setting
-    assert logic('target', 60, 0, 1) == [58]
+    # Held: nothing is left showing, whatever the setting. A held taskbar's
+    # sliver would be rows from its middle, which show as a line of icon tops.
+    assert logic('target', 60, 1, 1) == [60]
+    assert logic('target', 60, 0, 1) == [60]

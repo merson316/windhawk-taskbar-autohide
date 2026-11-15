@@ -596,11 +596,13 @@ int HeldStripPx(int settingPx) {
 }
 
 // How many pixels of its thickness a taskbar hides. Windows leaves a 2 px
-// sliver for the pointer to find. "Hide completely" takes that away too, but
-// never from a held taskbar, whose sliver is all that is left of it on the
-// edge it must be revealed from.
+// sliver for the pointer to find, and "Hide completely" takes that away. A
+// held taskbar always hides all of itself: its window stops half way, so what
+// would be left showing is two rows from its middle, a line of icon tops
+// across the edge. It is revealed from the strip on its display, not from a
+// sliver.
 int HiddenTarget(int thickness, bool hideFully, bool held) {
-    return hideFully && !held ? thickness : thickness - 2;
+    return hideFully || held ? thickness : thickness - 2;
 }
 
 // A taskbar steps once per refresh of its own display, up to the cap.
@@ -1815,10 +1817,11 @@ volatile LONG g_barStop = 0;
 
 // How much of this taskbar the mod hides. "Hide completely" is for the
 // primary off the bottom edge only: the mod reveals that one itself, from the
-// pointer's position. Every other taskbar is revealed by Windows noticing the
-// pointer on what is left of the window, or by the mod sending it the hit test
-// a pointer there would cause, and both need the sliver to exist. (Tried
-// without it on the left edge: the secondary could not be brought back.)
+// pointer's position. Any other taskbar that is not held keeps Windows' sliver,
+// where Windows notices the pointer. (Without it on the left edge, a secondary
+// could not be brought back: its window was then wholly off its display.) A
+// held taskbar hides completely and is revealed by RevealHeld, which works
+// because part of its window is still on its display.
 int HiddenTargetFor(const TaskbarRec* rec) {
     const int thickness = (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT)
                               ? rec->size.cx
@@ -2167,14 +2170,16 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
 void RevealHeld(TaskbarRec* rec, POINT pointer) {
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
-    // A point inside the part of the window that is still there, level with
-    // the pointer.
-    POINT in{cur.left + (rec->region.left + rec->region.right) / 2,
-             cur.top + (rec->region.top + rec->region.bottom) / 2};
-    if (rec->edge == ABE_TOP || rec->edge == ABE_BOTTOM) {
-        in.x = pointer.x;
-    } else {
-        in.y = pointer.y;
+    // The pixel of its own display nearest the docked edge, level with the
+    // pointer. A sliver is there if the taskbar has one, and a held taskbar's
+    // window still covers it even when its region shows nothing.
+    const RECT& m = rec->display;
+    POINT in = pointer;
+    switch (rec->edge) {
+        case ABE_LEFT:   in.x = m.left;       break;
+        case ABE_TOP:    in.y = m.top;        break;
+        case ABE_RIGHT:  in.x = m.right - 1;  break;
+        default:         in.y = m.bottom - 1; break;
     }
 
     rec->revealSent = GetTickCount64();
@@ -2248,9 +2253,7 @@ void WatchSecondaries() {
             }
             // If Windows believes this taskbar hidden too, the hit test makes
             // it show it; if not, it does nothing. Either way the mod reveals.
-            if (rec->clipped) {
-                RevealHeld(rec, pt);
-            }
+            RevealHeld(rec, pt);
             RevealModBar(rec);
             continue;
         }
