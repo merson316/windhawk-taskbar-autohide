@@ -2875,7 +2875,9 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         // believes hidden that it never hid. (Seen: moving left to bottom,
         // the taskbar stayed on the left with its content laid out for the
         // bottom, and the edge went back to left.) TrayUI::Unhide with flags
-        // 3: no animation, no hide timer. It must run while the mod still
+        // 1: no animation, and the hide timer started, as after any unhide.
+        // Without the timer a taskbar moved to the bottom stayed up until
+        // the pointer next visited it. It must run while the mod still
         // answers GetAutoHideFlags, or it sees nothing to unhide.
         if (g_trayUI && g_offsetsVerified && TrayUI_Unhide_Original) {
             const UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
@@ -2883,7 +2885,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                 *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
             if (edge < ABE_BOTTOM && (stored & 3) == 3) {
                 g_inWatcherCall = true;
-                TrayUI_Unhide_Original(g_trayUI, 3, 7);
+                TrayUI_Unhide_Original(g_trayUI, 1, 7);
                 g_inWatcherCall = false;
             }
         }
