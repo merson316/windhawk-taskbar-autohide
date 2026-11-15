@@ -577,6 +577,13 @@ int HeldDwellMs(int settingMs) {
     return settingMs > 150 ? settingMs : 150;
 }
 
+// ...and the strip is never thinner than this, at 100% scaling: the pointer
+// reaches a held edge on its way to the next display, and the 8 px default
+// proved too thin to come to rest in.
+int HeldStripPx(int settingPx) {
+    return settingPx > 12 ? settingPx : 12;
+}
+
 // A taskbar steps once per refresh of its own display, up to the cap.
 int StepsPerSecond(int displayHz, int capFps) {
     if (displayHz <= 1) {
@@ -1776,7 +1783,7 @@ struct TaskbarRec {
     // Revealing a held taskbar from the strip on its own display.
     ULONGLONG dwellStart;   // when the pointer came to rest in the strip
     ULONGLONG revealSent;   // when Windows was last asked to reveal it
-    int revealStage;        // 0 idle, 1 hit test sent, 2 mouse move sent
+    int revealStage;        // 0 idle, 1 hit test sent
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -1862,6 +1869,22 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
             }
         }
         if (own < 0) {
+            if (rec->placed) {
+                // The mod is holding it somewhere no display claims: the
+                // layout changed without Windows moving it first. Stop
+                // holding it; Windows places it at its next move.
+                Wh_Log(L"taskbar %p at (%d,%d,%d,%d) is on no display's "
+                       L"edge: letting go",
+                       rec->hwnd, bar.left, bar.top, bar.right, bar.bottom);
+                rec->animating = false;
+                if (rec->clipped) {
+                    SetWindowRgn(rec->hwnd, nullptr, TRUE);
+                    rec->clipped = false;
+                }
+                rec->placed = false;
+                rec->held = false;
+                rec->display = {0, 0, 0, 0};
+            }
             return false;
         }
 
@@ -2113,6 +2136,29 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
     const int h = (wp->flags & SWP_NOSIZE) ? rec->size.cy : wp->cy;
     const RECT asked{wp->x, wp->y, wp->x + w, wp->y + h};
     const RECT& m = rec->display;
+
+    if (!BarBelongsTo(m, asked, rec->edge)) {
+        // Not a position on the display this record knows: the display
+        // moved, changed size or scaling, or the taskbar changed edge. What
+        // the record holds is out of date, and replacing this position from
+        // it would pin the taskbar where its display used to be. Let Windows
+        // have its way, forget the display, and read the facts again.
+        Wh_Log(L"taskbar %p asked to (%d,%d,%d,%d), off the display it was "
+               L"on: letting go until the layout is read again",
+               rec->hwnd, asked.left, asked.top, asked.right, asked.bottom);
+        rec->animating = false;
+        if (rec->clipped) {
+            SetWindowRgn(rec->hwnd, nullptr, TRUE);
+            rec->clipped = false;
+        }
+        rec->placed = false;
+        rec->held = false;
+        rec->display = {0, 0, 0, 0};
+        rec->dwellStart = rec->revealSent = 0;
+        rec->revealStage = 0;
+        InterlockedExchange(&g_recsStale, 1);
+        return;
+    }
     const int dx = asked.left < m.left     ? m.left - asked.left
                    : asked.right > m.right ? m.right - asked.right
                                            : 0;
@@ -2124,11 +2170,6 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
     rec->shown = {asked.left + dx, asked.top + dy};
     rec->size = {w, h};
     if (off != rec->hiddenAsked || !rec->placed) {
-        if (off == 0 && rec->revealStage) {
-            Wh_Log(L"taskbar %p revealed %d ms after reveal stage %d",
-                   rec->hwnd, (int)(GetTickCount64() - rec->revealSent),
-                   rec->revealStage);
-        }
         rec->hiddenAsked = off;
         rec->dwellStart = 0;
         rec->revealSent = 0;
@@ -2147,8 +2188,9 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
 // Ask Windows to reveal a held taskbar. Windows reveals a hidden taskbar when
 // the pointer reaches what is left of its window, and a held taskbar leaves
 // only a sliver, on an edge the pointer carries straight on past. So the mod
-// watches a deeper strip and then tells the window what a hover there would
-// have: first a hit test, and if that alone does nothing, a mouse move.
+// watches a deeper strip and then gives the window the hit test a pointer on
+// the sliver would have caused. Measured on 26100.9974: that alone reveals it,
+// about 60 ms later.
 void RevealHeld(TaskbarRec* rec, POINT pointer) {
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
@@ -2163,14 +2205,8 @@ void RevealHeld(TaskbarRec* rec, POINT pointer) {
     }
 
     rec->revealSent = GetTickCount64();
-    if (rec->revealStage == 0) {
-        rec->revealStage = 1;
-        SendMessageW(rec->hwnd, WM_NCHITTEST, 0, MAKELPARAM(in.x, in.y));
-    } else {
-        rec->revealStage = 2;
-        PostMessageW(rec->hwnd, WM_MOUSEMOVE, 0,
-                     MAKELPARAM(in.x - cur.left, in.y - cur.top));
-    }
+    rec->revealStage = 1;
+    SendMessageW(rec->hwnd, WM_NCHITTEST, 0, MAKELPARAM(in.x, in.y));
 }
 
 // From the watch tick: reveal any held, hidden taskbar whose strip the
@@ -2191,9 +2227,9 @@ void WatchHeldReveals() {
         }
         const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
                        rec->shown.y + rec->size.cy};
-        const RECT strip =
-            RevealStrip(rec->display, bar, rec->edge,
-                        g_settings.revealTolerance, GetDpiForWindow(rec->hwnd));
+        const RECT strip = RevealStrip(rec->display, bar, rec->edge,
+                                       HeldStripPx(g_settings.revealTolerance),
+                                       GetDpiForWindow(rec->hwnd));
         if (!PtInRect(&strip, pt)) {
             rec->dwellStart = 0;
             rec->revealSent = 0;
@@ -2208,12 +2244,11 @@ void WatchHeldReveals() {
             (ULONGLONG)HeldDwellMs(g_settings.revealDwellMs)) {
             continue;
         }
-        if (rec->revealStage == 0 ||
-            (rec->revealStage == 1 && now - rec->revealSent >= 300)) {
+        if (rec->revealStage == 0) {
             RevealHeld(rec, pt);
-        } else if (rec->revealStage == 2 && now - rec->revealSent >= 1000) {
-            Wh_Log(L"taskbar %p still hidden a second after both reveal "
-                   L"messages; trying again",
+        } else if (now - rec->revealSent >= 1000) {
+            Wh_Log(L"taskbar %p still hidden a second after the reveal hit "
+                   L"test; trying again",
                    rec->hwnd);
             rec->revealStage = 0;
         }
@@ -2274,7 +2309,8 @@ LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_WINDOWPOSCHANGING && lParam && BarsHandled()) {
-        if (TaskbarRec* rec = RecFor(hWnd)) {
+        TaskbarRec* rec = RecFor(hWnd);
+        if (rec && !IsRectEmpty(&rec->display)) {
             WINDOWPOS* wp = (WINDOWPOS*)lParam;
             const int reqX = wp->x, reqY = wp->y;
             LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
@@ -2407,7 +2443,8 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (uMsg == WM_WINDOWPOSCHANGING && lParam && BarsHandled()) {
-        if (TaskbarRec* rec = RecFor(hWnd)) {
+        TaskbarRec* rec = RecFor(hWnd);
+        if (rec && !IsRectEmpty(&rec->display)) {
             WINDOWPOS* wp = (WINDOWPOS*)lParam;
             const int reqX = wp->x, reqY = wp->y;
             LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);

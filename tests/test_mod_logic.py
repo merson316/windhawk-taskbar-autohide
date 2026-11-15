@@ -94,6 +94,10 @@ int main(int argc, char** argv) {
                                      (UINT)a[8]) ? 1 : 0);
         return 0;
     }
+    if (!strcmp(cmd, "heldstrip")) {
+        printf("%%d\n", HeldStripPx((int)a[0]));
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -269,3 +273,16 @@ def test_a_completely_hidden_taskbar_still_belongs_to_its_display(logic):
     assert logic('belongs', 0, 0, 3440, 1440, 0, 1440, 3440, 1488, 3) == [1]      # bottom
     # ...and not to the display it is parked on.
     assert logic('belongs', 3440, 0, 5360, 1440, 3440, 0, 3488, 1440, 2) == [0]
+
+
+def test_held_strip_is_at_least_twelve_pixels(logic):
+    # The pointer crosses a held edge at speed; 8 px was too thin to rest in.
+    assert [logic('heldstrip', v)[0] for v in (1, 8, 12, 30)] == [12, 12, 12, 30]
+
+
+def test_a_position_on_another_display_is_not_this_taskbars(logic):
+    # After the upper display moved 28 px left, Windows asks for the taskbar
+    # at its new place. That is not a position on the display the record knows.
+    old_display, new_bar = (988, -2560, 2428, 0), (960, -2, 2400, 58)
+    assert logic('belongs', *old_display, *new_bar, 3) == [0]
+    assert logic('belongs', 960, -2560, 2400, 0, *new_bar, 3) == [1]
