@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work with the taskbar docked to the top, left or right
-// @version         1.19.0
+// @version         1.20.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
@@ -2152,6 +2152,10 @@ const KnownBuild kKnownBuilds[] = {
     {L"10.0.26100.9974",
      {0x63C1425A, 0x7856, 0xE31E, {0x2D, 0x8C, 0x1B, 0xCE, 0xE4, 0x38, 0xEF, 0x9E}},
      1, 0x65250, 0x41F70, 0x3CC90, 0x41ED0, 0x5E670, 0x41260, 0x35C40},
+    // Matched against 10.0.26100.9974 by tools/match-build.py.
+    {L"10.0.26100.10066",
+     {0x16BF9C30, 0x8191, 0xA000, {0x05, 0xC1, 0x90, 0x39, 0xE9, 0x6A, 0x9D, 0xF7}},
+     1, 0x27F20, 0x45020, 0xB0810, 0x44F80, 0x1A2B0, 0xB08B0, 0x7F5D0},
 };
 
 const KnownBuild* FindKnownBuild(HMODULE module) {
