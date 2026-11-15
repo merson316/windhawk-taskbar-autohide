@@ -1618,6 +1618,9 @@ struct TaskbarRec {
     ULONGLONG dwellStart;   // when the pointer came to rest in the strip
     ULONGLONG revealSent;   // when Windows was last asked to reveal it
     int revealStage;        // 0 idle, 1 hit test sent
+
+    // A secondary off the bottom edge has been prompted to start hiding.
+    bool prompted;
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -2436,11 +2439,41 @@ void RefreshRecords() {
     }
 }
 
+// Off the bottom edge Windows hides a secondary taskbar only after something
+// has happened to it: the pointer came and went, or it was asked to show. One
+// that was already showing when the mod became active, or was created since,
+// just sits there while the primary hides. The hit test the mod uses to reveal
+// a taskbar makes Windows run that same "show, then hide when the pointer is
+// away" sequence, so each such taskbar gets it once.
+void PromptSecondariesToHide() {
+    if (!BarsHandled() || !g_trayUI || !g_offsetsVerified) {
+        return;
+    }
+    const UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
+    for (int i = 0; i < g_recCount; i++) {
+        TaskbarRec* rec = &g_recs[i];
+        if (rec->primary || rec->prompted || rec->edge >= ABE_BOTTOM ||
+            IsRectEmpty(&rec->display) || !(stored & ABS_AUTOHIDE)) {
+            continue;
+        }
+        rec->prompted = true;
+        if (rec->hiddenAsked > 0) {
+            continue;   // already hidden
+        }
+        RECT cur{};
+        GetWindowRect(rec->hwnd, &cur);
+        const POINT in{(cur.left + cur.right) / 2, (cur.top + cur.bottom) / 2};
+        Wh_Log(L"taskbar %p: prompting Windows to start hiding it", rec->hwnd);
+        SendMessageW(rec->hwnd, WM_NCHITTEST, 0, MAKELPARAM(in.x, in.y));
+    }
+}
+
 void MaybeRefreshRecords() {
     const ULONGLONG now = GetTickCount64();
     if (InterlockedExchange(&g_recsStale, 0) || now - g_recsRefreshed >= 1000) {
         g_recsRefreshed = now;
         RefreshRecords();
+        PromptSecondariesToHide();
     }
 }
 
