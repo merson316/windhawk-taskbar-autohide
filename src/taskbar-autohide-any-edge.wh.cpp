@@ -89,15 +89,15 @@ reason instead of failing silently. The taskbar is left alone in that state.
 
 // ==WindhawkModSettings==
 /*
-- skipAdjacentEdges: true
+- skipAdjacentEdges: false
   $name: Skip edges facing another display
   $description: >-
-    An edge with a monitor beyond it has nowhere to hide into: the hidden
-    position is occupied screen space on the neighbour, so the taskbar would
-    slide into view there rather than out of sight. Such an edge is left to
-    behave as it does without this mod.
+    An edge with a display beyond it has nowhere to hide into, so the mod keeps
+    such a taskbar on its own display: it slides part of the way and the rest
+    is wiped. Turn this on to leave such an edge alone instead, as it behaves
+    without this mod. The bottom edge is not affected.
 
-    Default: on.
+    Default: off.
 - hideFully: true
   $name: Hide completely
   $description: >-
@@ -272,7 +272,7 @@ volatile LONG g_warned = 0;
 // ------------------------------------------------------------------ settings
 
 struct Settings {
-    bool skipAdjacentEdges = true;
+    bool skipAdjacentEdges = false;
     bool hideFully = true;
     int frameRate = 90;
     int revealTolerance = 8;
@@ -589,6 +589,14 @@ int HeldDwellMs(int settingMs) {
 // proved too thin to come to rest in.
 int HeldStripPx(int settingPx) {
     return settingPx > 12 ? settingPx : 12;
+}
+
+// How many pixels of its thickness a taskbar hides. Windows leaves a 2 px
+// sliver for the pointer to find. "Hide completely" takes that away too, but
+// never from a held taskbar, whose sliver is all that is left of it on the
+// edge it must be revealed from.
+int HiddenTarget(int thickness, bool hideFully, bool held) {
+    return hideFully && !held ? thickness : thickness - 2;
 }
 
 // A taskbar steps once per refresh of its own display, up to the cap.
@@ -1062,10 +1070,6 @@ UINT WINAPI TrayUI_GetDockedRect_Hook(void* pThis, RECT* rect, int arg) {
     return TrayUI_GetDockedRect_Original(pThis, rect, arg);
 }
 
-// Defined with the animation state below; the unhide hook has to reach both.
-extern volatile LONG g_clipHold;
-extern volatile LONG g_animAbort;
-
 // Request 9 is Windows' "auto-hide state changed, ensure shown" reflex. It
 // fires as soon as the hidden state is set and would undo the hide, so drop it
 // unless the pointer is actually at the edge.
@@ -1106,15 +1110,9 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
         }
     }
 
-    // Any unhide that reaches Windows means the taskbar is to become visible.
-    // Release the off-screen pin first: it is cleared on the mod's own reveal
-    // path, but Windows reveals the taskbar too -- for Start, for a
-    // notification -- and the clamp would otherwise drag it straight back out
-    // of sight, so it could never return. Abandon any hide still sliding, for
-    // the same reason.
-    InterlockedExchange(&g_animAbort, 1);
-    InterlockedExchange(&g_clipHold, 0);
-
+    // Any unhide that reaches Windows means the taskbar is to become visible:
+    // Windows then asks for the shown position, and the mod's animation turns
+    // round from wherever it is.
     bool prev = g_inUnhide;
     g_inUnhide = true;
     TrayUI_Unhide_Original(pThis, flags, request);
@@ -1123,16 +1121,15 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
 
 // -------------------------------------------------- slide animation duration
 
-// SlideWindow animates with a synchronous timed loop, taking its duration from
-// this+0x168 when hiding and this+0x16c when showing (400 ms and 200 ms by
-// default). The animation itself works correctly off-bottom -- measured step
-// counts, spacing and flags match the bottom edge exactly -- but a vertical
-// taskbar sweeps far less screen area for the same travel, so it reads as much
-// faster. These offsets let that be tuned.
+// Windows' SlideWindow animates with a synchronous timed loop, taking its
+// duration from this+0x168 when hiding and this+0x16c when showing (400 ms and
+// 200 ms by default). The mod used to write those two members to apply the
+// duration settings. It now runs the hide and reveal itself wherever the
+// settings apply, and writes nothing there.
 //
-// Verified against the two load instructions inside SlideWindow, which encode
-// both offsets, so a changed function disables the feature rather than writing
-// to arbitrary memory.
+// What remains is the check that SlideWindow still reads them, logged at load:
+// the build matcher finds SlideWindow by exactly this shape, so a build that
+// changes it is worth knowing about.
 #define SLIDE_HIDE_DURATION_OFFSET 0x168
 #define SLIDE_SHOW_DURATION_OFFSET 0x16c
 
@@ -1179,33 +1176,6 @@ bool ScanForDurationLoads(const BYTE* fn) {
 
 bool g_durationOffsetsVerified = false;
 
-// Captured before the first override so the Windows defaults can be put back
-// when a setting returns to 0. Without this the member keeps the last value
-// written and no setting can clear it.
-bool g_defaultDurationsCaptured = false;
-int g_defaultHideDuration = 0;
-int g_defaultShowDuration = 0;
-
-void ApplyDurationOverrides(void* pThis) {
-    if (!g_durationOffsetsVerified || !pThis) {
-        return;
-    }
-
-    int* hide = (int*)((BYTE*)pThis + SLIDE_HIDE_DURATION_OFFSET);
-    int* show = (int*)((BYTE*)pThis + SLIDE_SHOW_DURATION_OFFSET);
-
-    if (!g_defaultDurationsCaptured) {
-        g_defaultHideDuration = *hide;
-        g_defaultShowDuration = *show;
-        g_defaultDurationsCaptured = true;
-    }
-
-    *hide = g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs
-                                          : g_defaultHideDuration;
-    *show = g_settings.showDurationMs > 0 ? g_settings.showDurationMs
-                                          : g_defaultShowDuration;
-}
-
 // ------------------------------------------------- notification auto-hide
 
 // Windows refuses to auto-hide while an app flashes its taskbar button, and
@@ -1241,57 +1211,11 @@ int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
 // hidden rect on the first step of the slide and never occupied the positions
 // in between.
 //
-// Animating here means two things: move the window from the watch thread rather
-// than through SlideWindow, which runs its loop on the taskbar's UI thread and
-// blocks the repaint; and restore the requested position after the clamp, so
-// intermediate frames survive.
-
-volatile LONG g_animRequested = 0;
-volatile LONG g_animOverride = 0;
-
-// A reveal arriving mid-hide would otherwise take turns with the slide over the
-// window position until the slide ran out, which shows up as the taskbar
-// stuttering when the Windows key is pressed repeatedly. The reveal wins: it is
-// the newer intent.
-volatile LONG g_animAbort = 0;
-RECT g_animFrom{}, g_animTo{};
-int g_animDurationMs = 400;
-UINT g_animEdge = ABE_LEFT;
-
-// True when another display occupies the space the taskbar would hide into.
-// Sliding a right-docked taskbar off a 3440-wide primary puts it at x >= 3440,
-// which is the next monitor, so it would hide onto that screen rather than out
-// of sight. Tested by asking which monitor the far edge lands on.
-bool HiddenRectSpillsOntoAnotherDisplay(const RECT& hidden, UINT edge) {
-    if (!g_trayWnd) {
-        return false;
-    }
-
-    HMONITOR own = MonitorFromWindow(g_trayWnd, MONITOR_DEFAULTTOPRIMARY);
-    POINT probe{};
-    const LONG midX = (hidden.left + hidden.right) / 2;
-    const LONG midY = (hidden.top + hidden.bottom) / 2;
-    switch (edge) {
-        case ABE_LEFT:  probe.x = hidden.left;      probe.y = midY; break;
-        case ABE_RIGHT: probe.x = hidden.right - 1; probe.y = midY; break;
-        case ABE_TOP:   probe.x = midX; probe.y = hidden.top;        break;
-        default:        probe.x = midX; probe.y = hidden.bottom - 1; break;
-    }
-
-    HMONITOR there = MonitorFromPoint(probe, MONITOR_DEFAULTTONULL);
-    return there != nullptr && there != own;
-}
-
-// Set while the taskbar is parked fully off-screen ("Hide completely"), so its
-// position can be held against Windows moving it back to its own hidden rect,
-// which leaves a sliver on screen.
-volatile LONG g_clipHold = 0;
-RECT g_clipRect{};
-
-// Set when the taskbar was hidden with ShowWindow because there was no
-// off-screen space to slide into.
-volatile LONG g_windowHidden = 0;
-RECT g_dockedBeforeHide{};
+// Animating therefore means two things: step the window on the mod's own
+// clock, not through SlideWindow, whose loop blocks the taskbar's thread; and
+// put the requested position back after the taskbar's handler has replaced it,
+// so the frames in between survive. Both are in "the mod's own hide and
+// reveal" further down.
 
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
@@ -1302,7 +1226,6 @@ RECT g_dockedBeforeHide{};
 // duplicate positions. QueryPerformanceCounter is what makes a frame rate mean
 // anything.
 double g_qpcPeriodMs = 0.0;
-HANDLE g_hideTimer = nullptr;    // watch thread, driving RunHideAnimation
 HANDLE g_slideTimer = nullptr;   // taskbar thread, inside SlideWindow
 
 double NowMs() {
@@ -1328,7 +1251,7 @@ void FrameTimerInit() {
     // requested 90 fps would silently cap near 64. A high-resolution timer is
     // not bound by it, and unlike timeBeginPeriod it costs the rest of the
     // process nothing.
-    for (HANDLE* h : {&g_hideTimer, &g_slideTimer}) {
+    for (HANDLE* h : {&g_slideTimer}) {
         *h = CreateWaitableTimerExW(nullptr, nullptr,
                                     CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                     TIMER_MODIFY_STATE | SYNCHRONIZE);
@@ -1366,11 +1289,10 @@ void FrameWait(HANDLE timer, double ms) {
     }
 }
 
-// The reveal is Windows' own loop, so there is nothing here to pace. What can
-// be reached is the Sleep between its frames: record the thread inside
-// SlideWindow, and replace that sleep with a frame budget while on it. Only the
-// frame rate is taken this way -- the durations are set directly on the TrayUI
-// members by ApplyDurationOverrides.
+// Where the mod does not move the taskbars itself (the bottom edge with
+// nothing held), the slide is Windows' own loop and there is nothing here to
+// pace. What can be reached is the Sleep between its frames: record the thread
+// inside SlideWindow, and replace that sleep with a frame budget while on it.
 volatile LONG g_slideThreadId = 0;
 double g_slideStartMs = 0.0;
 double g_slideFrameStart = 0.0;
@@ -1432,87 +1354,6 @@ void WINAPI Sleep_Hook(DWORD ms) {
     FrameWait(g_slideTimer,
               1000.0 / g_settings.frameRate - (NowMs() - g_slideFrameStart));
     g_slideFrameStart = NowMs();
-}
-
-void RunHideAnimation() {
-    const RECT from = g_animFrom, to = g_animTo;
-    const int ms = g_animDurationMs > 0 ? g_animDurationMs : 400;
-
-    InterlockedExchange(&g_animAbort, 0);
-    InterlockedExchange(&g_animOverride, 1);
-
-    // Reachable only with "Skip edges facing another display" turned off: the
-    // hiding direction runs into another display, so there is nowhere to slide.
-    RECT mon{};
-    const bool clip = TrayMonitorRect(&mon) &&
-                      HiddenRectSpillsOntoAnotherDisplay(to, g_animEdge);
-
-    if (clip) {
-        // Every position beyond this edge is on the neighbouring display, and
-        // the taskbar's content renders past any clip applied to it, so
-        // animating would play the slide over there. Hide it outright instead.
-        InterlockedExchange(&g_clipHold, 0);
-        InterlockedExchange(&g_windowHidden, 1);
-        ShowWindow(g_trayWnd, SW_HIDE);
-        InterlockedExchange(&g_animOverride, 0);
-        return;
-    }
-
-    const double start = NowMs();
-    const double frameBudgetMs = 1000.0 / g_settings.frameRate;
-    double frameStart = start;
-
-    for (;;) {
-        // Abandon the slide if the mod is unloading: this runs on the watch
-        // thread, and a full-length animation would outlast the join in
-        // StopWatchThread, leaving the thread inside a module being unloaded.
-        if (InterlockedCompareExchange(&g_watchStop, 0, 0) ||
-            InterlockedCompareExchange(&g_animAbort, 0, 0)) {
-            break;
-        }
-
-        const double elapsed = NowMs() - start;
-        if (elapsed >= (double)ms) {
-            break;
-        }
-        const double t = elapsed / ms;
-        LONG x = from.left + (LONG)((to.left - from.left) * t);
-        LONG y = from.top + (LONG)((to.top - from.top) * t);
-
-        SetWindowPos(g_trayWnd, nullptr, x, y, 0, 0,
-                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-        // Sleep what is left of the frame, not a fixed amount after the work.
-        FrameWait(g_hideTimer, frameBudgetMs - (NowMs() - frameStart));
-        frameStart = NowMs();
-    }
-
-    // Overtaken by a reveal: leave the window wherever the reveal is taking it
-    // rather than finishing a slide nobody wants any more.
-    if (InterlockedCompareExchange(&g_animAbort, 0, 0)) {
-        InterlockedExchange(&g_animOverride, 0);
-        return;
-    }
-
-    // Arm the hold before the final move, not after, and stand the animation
-    // clamp down first so the hold is the branch that runs.
-    //
-    // The animation clamp restores whatever position the caller asked for.
-    // That is right for the mod's own frames, but Windows moves the taskbar to
-    // its own hidden rect as the slide ends -- a sliver short of off-screen --
-    // and the clamp would preserve that. The hold forces the mod's position
-    // whoever asked.
-    if (g_settings.hideFully) {
-        const LONG w = g_dockedBeforeHide.right - g_dockedBeforeHide.left;
-        const LONG h = g_dockedBeforeHide.bottom - g_dockedBeforeHide.top;
-        g_clipRect = {to.left, to.top, to.left + w, to.top + h};
-        InterlockedExchange(&g_clipHold, 1);
-    }
-
-    InterlockedExchange(&g_animOverride, 0);
-
-    SetWindowPos(g_trayWnd, nullptr, to.left, to.top, 0, 0,
-                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 // ------------------------------------------------------------------ z-order
@@ -1592,6 +1433,11 @@ void RaiseTaskbarIfDemoted() {
 // hooked functions are called while the taskbar sits idle, so there is no
 // polling site. The watch thread supplies one by posting a message that runs
 // this on the taskbar's own thread.
+// Defined with the taskbar records below.
+bool PrimaryBarReady();
+bool PrimaryBarHeld();
+void HidePrimaryBar(const RECT& docked, UINT edge);
+
 void WatcherTick() {
     // No pointer yet: nothing has run GetDockedRect and no state change has run
     // GetAutoHideFlags. Force a recompute rather than waiting for the user to
@@ -1637,31 +1483,21 @@ void WatcherTick() {
         // edge for a title bar or a close button would otherwise summon the
         // taskbar. A pointer already over the taskbar has arrived deliberately
         // and waits for nothing.
-        if (g_settings.revealDwellMs > 0 && !CursorOverTaskbar(g_trayUI)) {
+        // On an edge with a display past it the pointer crosses the strip on
+        // its way there, so the wait is never shorter than HeldDwellMs.
+        const int dwellMs = PrimaryBarHeld()
+                                ? HeldDwellMs(g_settings.revealDwellMs)
+                                : g_settings.revealDwellMs;
+        if (dwellMs > 0 && !CursorOverTaskbar(g_trayUI)) {
             const ULONGLONG now = GetTickCount64();
             if (g_dwellStart == 0) {
                 g_dwellStart = now;
             }
-            if (now - g_dwellStart < (ULONGLONG)g_settings.revealDwellMs) {
+            if (now - g_dwellStart < (ULONGLONG)dwellMs) {
                 return;
             }
         }
         g_dwellStart = 0;
-
-        ApplyDurationOverrides(g_trayUI);
-        InterlockedExchange(&g_animAbort, 1);
-        InterlockedExchange(&g_clipHold, 0);
-
-        if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
-            // Was hidden outright rather than moved: put it back before asking
-            // Windows to unhide, so it reappears at full size in place.
-            SetWindowPos(g_trayWnd, nullptr, g_dockedBeforeHide.left,
-                         g_dockedBeforeHide.top,
-                         g_dockedBeforeHide.right - g_dockedBeforeHide.left,
-                         g_dockedBeforeHide.bottom - g_dockedBeforeHide.top,
-                         SWP_NOZORDER | SWP_NOACTIVATE);
-            ShowWindow(g_trayWnd, SW_SHOWNA);
-        }
 
         // Raise the taskbar before the slide starts, while it is still
         // off-screen. Raised afterwards, it visibly slides up behind whatever
@@ -1717,41 +1553,18 @@ void WatcherTick() {
     }
     g_leaveTicks = 0;
 
-    // Unhide slides itself, but nothing performs the hide slide off-bottom, so
-    // set the state and then issue the slide. With the flags now set,
-    // GetDockedRect returns the hidden rect.
+    // Windows' Unhide asks for the shown position itself, but nothing asks for
+    // the hidden one off the bottom edge. So set the state, after which
+    // GetDockedRect returns the hidden rect, and start the hide here.
     g_dwellStart = 0;
+
+    if (!PrimaryBarReady()) {
+        return;   // no record of the taskbar yet; try on a later tick
+    }
 
     g_inWatcherCall = true;
     TrayUI_SetAutoHideFlags_Original(g_trayUI, stored | ABS_ALWAYSONTOP);
-
-    if (g_trayWnd) {
-        RECT hidden{};
-        TrayUI_GetDockedRect_Original(g_trayUI, &hidden, 0);
-
-        // Windows stops a sliver short of off-screen so the pointer can find
-        // the taskbar. CursorAtRevealStrip does that job here, so hide it
-        // completely. Only left and top are set: the slide moves the window
-        // without resizing it.
-        RECT mon{};
-        if (g_settings.hideFully && TrayMonitorRect(&mon)) {
-            const LONG w = docked.right - docked.left;
-            const LONG h = docked.bottom - docked.top;
-            switch (edge) {
-                case ABE_LEFT:  hidden.left = mon.left - w; break;
-                case ABE_TOP:   hidden.top = mon.top - h;   break;
-                case ABE_RIGHT: hidden.left = mon.right;    break;
-            }
-        }
-
-        GetWindowRect(g_trayWnd, &g_animFrom);
-        g_dockedBeforeHide = docked;
-        g_animTo = hidden;
-        g_animDurationMs =
-            g_settings.hideDurationMs > 0 ? g_settings.hideDurationMs : 400;
-        g_animEdge = edge;
-        InterlockedExchange(&g_animRequested, 1);
-    }
+    HidePrimaryBar(docked, edge);
     g_inWatcherCall = false;
 }
 
@@ -1862,7 +1675,8 @@ UINT DockedEdge() {
     return SHAppBarMessage(ABM_GETTASKBARPOS, &abd) ? abd.uEdge : ABE_BOTTOM;
 }
 
-void ReleaseBar(TaskbarRec* rec);
+void ReleaseBar(TaskbarRec* rec, bool shown = false);
+void StartBarAnimation(TaskbarRec* rec, int hiddenTarget);
 
 // Fill in what depends on the display layout. Returns false when no display
 // claims the window, which happens for a moment while the layout changes.
@@ -1909,9 +1723,7 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
 
         const RECT& m = displays.rect[own];
         const int hz = displays.hz[own];
-        // Held taskbars are handled on the bottom edge only, for now.
-        const bool held =
-            edge == ABE_BOTTOM && DisplayBeyond(m, edge, others, nOthers);
+        const bool held = DisplayBeyond(m, edge, others, nOthers);
         const bool changed = !EqualRect(&rec->display, &m) ||
                              rec->displayHz != hz || rec->edge != edge ||
                              rec->held != held;
@@ -1958,14 +1770,20 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
 
 // ------------------------------------------------ the mod's own hide and reveal
 
-// When any taskbar is held, the mod moves every taskbar itself, so that all of
-// them on a desk move alike. Held taskbars exist only on the bottom edge for
-// now, so this is also "the bottom edge, with a display past some taskbar".
-// With one display it is never true, and the bottom edge stays Windows' own.
+// Whether the mod moves the taskbars itself. On the left, top and right it
+// does whenever it is active on that edge: Windows does not hide a taskbar
+// there at all without it. On the bottom edge, which Windows handles, it does
+// only when some taskbar is held, so that every taskbar on the desk moves
+// alike; with one display that is never true and the bottom edge stays
+// Windows' own.
 volatile LONG g_barsReleased = 0;   // unloading: hands off every taskbar
 
 bool BarsHandled() {
-    return !g_fatalReason && !g_barsReleased && AnyHeld();
+    if (g_fatalReason || g_barsReleased || g_recCount == 0) {
+        return false;
+    }
+    const UINT edge = g_recs[0].edge;
+    return edge >= ABE_BOTTOM ? AnyHeld() : EdgeEnabled(edge);
 }
 
 UINT g_barTickMsg = 0;
@@ -2009,9 +1827,13 @@ void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
 }
 
 // Give a taskbar back to Windows: stop its animation, remove its region, and
-// put the window where Windows last asked for it. Used when the layout
-// changes under it, when nothing is held any more, and when the mod unloads.
-void ReleaseBar(TaskbarRec* rec) {
+// put the window where Windows last asked for it, or, with `shown`, where it
+// is fully shown. Used when the layout changes under it, when the mod stops
+// moving the taskbars, and when it unloads.
+void ReleaseBar(TaskbarRec* rec, bool shown) {
+    if (shown) {
+        rec->hiddenAsked = 0;
+    }
     rec->animating = false;
     rec->dwellStart = 0;
     rec->revealSent = 0;
@@ -2041,10 +1863,37 @@ void ReleaseBar(TaskbarRec* rec) {
            p.y, rec->hiddenAsked);
 }
 
+// Off the bottom edge Windows hides nothing once the mod lets go, and has no
+// reason to bring a hidden taskbar back, so there they are left shown.
 void ReleaseAllBars() {
     for (int i = 0; i < g_recCount; i++) {
-        ReleaseBar(&g_recs[i]);
+        ReleaseBar(&g_recs[i], g_recs[i].edge < ABE_BOTTOM);
     }
+}
+
+bool PrimaryBarReady() {
+    TaskbarRec* rec = g_trayWnd ? RecFor(g_trayWnd) : nullptr;
+    return rec && !IsRectEmpty(&rec->display) && BarsHandled();
+}
+
+bool PrimaryBarHeld() {
+    TaskbarRec* rec = g_trayWnd ? RecFor(g_trayWnd) : nullptr;
+    return rec && rec->held;
+}
+
+// Start the primary's hide off the bottom edge, from where it is docked.
+void HidePrimaryBar(const RECT& docked, UINT edge) {
+    TaskbarRec* rec = RecFor(g_trayWnd);
+    if (!rec) {
+        return;
+    }
+    rec->shown = {docked.left, docked.top};
+    rec->size = {docked.right - docked.left, docked.bottom - docked.top};
+    const int thickness =
+        (edge == ABE_LEFT || edge == ABE_RIGHT) ? rec->size.cx : rec->size.cy;
+    rec->hiddenAsked = HiddenTarget(thickness, g_settings.hideFully, rec->held);
+    rec->placed = true;
+    StartBarAnimation(rec, rec->hiddenAsked);
 }
 
 void StartBarAnimation(TaskbarRec* rec, int hiddenTarget) {
@@ -2197,14 +2046,24 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
                                              : 0;
     const int off = dx ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
 
+    // Windows says only "shown" or "hidden"; how much to hide is the mod's
+    // own answer. On the bottom edge that is Windows' own 2 px sliver.
+    const int thickness =
+        (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT) ? w : h;
+    const int target =
+        off == 0 ? 0
+                 : HiddenTarget(thickness,
+                                g_settings.hideFully && rec->edge < ABE_BOTTOM,
+                                rec->held);
+
     rec->shown = {asked.left + dx, asked.top + dy};
     rec->size = {w, h};
-    if (off != rec->hiddenAsked || !rec->placed) {
-        rec->hiddenAsked = off;
+    if (target != rec->hiddenAsked || !rec->placed) {
+        rec->hiddenAsked = target;
         rec->dwellStart = 0;
         rec->revealSent = 0;
         rec->revealStage = 0;
-        StartBarAnimation(rec, off);
+        StartBarAnimation(rec, target);
     }
 
     // Windows gets the position the animation is at, not the one it asked for.
@@ -2251,15 +2110,25 @@ void WatchHeldReveals() {
 
     for (int i = 0; i < g_recCount; i++) {
         TaskbarRec* rec = &g_recs[i];
-        if (!rec->held || !rec->placed || rec->hiddenAsked == 0 ||
-            !rec->clipped) {
+        if (!rec->placed || rec->hiddenAsked == 0 || !rec->clipped) {
+            continue;
+        }
+        // Off the bottom edge the primary is revealed by WatcherTick, which
+        // also sets its state. A secondary there may be hidden completely,
+        // with no sliver for Windows to notice the pointer on, so it is
+        // revealed here whether held or not. On the bottom edge Windows
+        // reveals what is not held.
+        const bool offBottom = rec->edge < ABE_BOTTOM;
+        if (offBottom ? rec->primary : !rec->held) {
             continue;
         }
         const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
                        rec->shown.y + rec->size.cy};
-        const RECT strip = RevealStrip(rec->display, bar, rec->edge,
-                                       HeldStripPx(g_settings.revealTolerance),
-                                       GetDpiForWindow(rec->hwnd));
+        const RECT strip =
+            RevealStrip(rec->display, bar, rec->edge,
+                        rec->held ? HeldStripPx(g_settings.revealTolerance)
+                                  : g_settings.revealTolerance,
+                        GetDpiForWindow(rec->hwnd));
         if (!PtInRect(&strip, pt)) {
             rec->dwellStart = 0;
             rec->revealSent = 0;
@@ -2268,10 +2137,10 @@ void WatchHeldReveals() {
         }
         if (!rec->dwellStart) {
             rec->dwellStart = now;
-            continue;
         }
-        if (now - rec->dwellStart <
-            (ULONGLONG)HeldDwellMs(g_settings.revealDwellMs)) {
+        const int dwellMs = rec->held ? HeldDwellMs(g_settings.revealDwellMs)
+                                      : g_settings.revealDwellMs;
+        if (now - rec->dwellStart < (ULONGLONG)dwellMs) {
             continue;
         }
         if (rec->revealStage == 0) {
@@ -2547,6 +2416,16 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         // moves are not overruled, then leave every taskbar alone.
         ReleaseAllBars();
         InterlockedExchange(&g_barsReleased, 1);
+        // Without the mod Windows no longer treats auto-hide as on off the
+        // bottom edge. A secondary taskbar left believing it is hidden stays
+        // unreachable until "show on all displays" is toggled, so make each
+        // look at its state again.
+        for (int i = 0; i < g_recCount; i++) {
+            if (!g_recs[i].primary) {
+                PostMessageW(g_recs[i].hwnd, WM_SETTINGCHANGE, SPI_SETWORKAREA,
+                             0);
+            }
+        }
         return 1;
     }
 
@@ -2559,35 +2438,6 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             BarPosChanging(rec, wp, reqX, reqY);
             return r;
         }
-    }
-
-    if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
-        InterlockedCompareExchange(&g_clipHold, 0, 0) &&
-        !InterlockedCompareExchange(&g_animOverride, 0, 0)) {
-        // Parked fully off-screen: Windows would otherwise move the window back
-        // to its own hidden rect, leaving a sliver on screen.
-        WINDOWPOS* wp = (WINDOWPOS*)lParam;
-        LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-        wp->x = g_clipRect.left;
-        wp->y = g_clipRect.top;
-        wp->cx = g_clipRect.right - g_clipRect.left;
-        wp->cy = g_clipRect.bottom - g_clipRect.top;
-        wp->flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
-        return r;
-    }
-
-    if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
-        InterlockedCompareExchange(&g_animOverride, 0, 0)) {
-        WINDOWPOS* wp = (WINDOWPOS*)lParam;
-        const int reqX = wp->x, reqY = wp->y;
-
-        LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-
-        // Put back what we asked for: the taskbar clamps every intermediate
-        // position to the endpoint, which is what made the slide invisible.
-        wp->x = reqX;
-        wp->y = reqY;
-        return r;
     }
 
     if (g_watchMsg && uMsg == g_watchMsg) {
@@ -2921,10 +2771,6 @@ DWORD WINAPI WatchThreadProc(LPVOID) {
                          L"Settings > Personalisation > Taskbar > Taskbar "
                          L"behaviours.");
             }
-        }
-
-        if (InterlockedCompareExchange(&g_animRequested, 0, 1) == 1) {
-            RunHideAnimation();
         }
 
         if (g_trayWnd && g_watchMsg) {
@@ -3314,8 +3160,8 @@ PCWSTR SetUpHooks() {
     g_durationOffsetsVerified =
         ScanForDurationLoads((const BYTE*)TrayUI_SlideWindow_Address);
     if (!g_durationOffsetsVerified) {
-        Wh_Log(L"slide duration offsets unverified, the duration settings have "
-               L"no effect");
+        Wh_Log(L"SlideWindow no longer reads its durations where the build "
+               L"matcher expects; the mod itself does not depend on it");
     }
 
     return nullptr;
@@ -3385,13 +3231,7 @@ void RestoreTaskbarIfHidden() {
         return;   // not hidden
     }
 
-    InterlockedExchange(&g_clipHold, 0);   // or the restore below is clamped
-
     *flags &= ~ABS_ALWAYSONTOP;   // no longer "hidden"
-
-    if (InterlockedCompareExchange(&g_windowHidden, 0, 1) == 1) {
-        ShowWindow(g_trayWnd, SW_SHOWNA);
-    }
 
     if (g_lastDockedRect.right > g_lastDockedRect.left) {
         SetWindowPos(g_trayWnd, nullptr, g_lastDockedRect.left,
@@ -3418,24 +3258,9 @@ void StopWatchThread() {
     }
 }
 
-void Wh_ModBeforeUninit() {
-    // Stop the watcher first: left running, it can hide the taskbar again
-    // between the restore below and the thread being stopped, which strands it
-    // off-screen -- exactly what the restore exists to prevent.
-    StopWatchThread();
-    RestoreTaskbarIfHidden();
-}
-
-void Wh_ModUninit() {
-    StopWatchThread();
-
-    for (HANDLE* h : {&g_hideTimer, &g_slideTimer}) {
-        if (*h) {
-            CloseHandle(*h);
-            *h = nullptr;
-        }
-    }
-
+// Stop the mod's animations and give every taskbar back to Windows. Called
+// with the watch thread already stopped, and safe to call twice.
+void ReleaseBarsOnUnload() {
     InterlockedExchange(&g_barStop, 1);
     if (g_barWake) {
         SetEvent(g_barWake);
@@ -3455,6 +3280,28 @@ void Wh_ModUninit() {
                             2000, &done);
     }
     InterlockedExchange(&g_barsReleased, 1);
+}
+
+void Wh_ModBeforeUninit() {
+    // Stop the watcher first: left running, it can hide the taskbar again
+    // between the restore below and the thread being stopped, which strands it
+    // off-screen -- exactly what the restore exists to prevent.
+    StopWatchThread();
+    ReleaseBarsOnUnload();
+    RestoreTaskbarIfHidden();
+}
+
+void Wh_ModUninit() {
+    StopWatchThread();
+
+    for (HANDLE* h : {&g_slideTimer}) {
+        if (*h) {
+            CloseHandle(*h);
+            *h = nullptr;
+        }
+    }
+
+    ReleaseBarsOnUnload();
 
     for (int i = 0; i < g_recCount; i++) {
         if (!g_recs[i].primary && g_recs[i].hwnd) {

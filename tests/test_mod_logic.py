@@ -102,6 +102,10 @@ int main(int argc, char** argv) {
         printf("%%d\n", AutoHideOffLongEnough(a[0], a[1], (int)a[2]) ? 1 : 0);
         return 0;
     }
+    if (!strcmp(cmd, "target")) {   // thickness hideFully held
+        printf("%%d\n", HiddenTarget((int)a[0], a[1] != 0, a[2] != 0));
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -298,3 +302,11 @@ def test_auto_hide_off_warning_waits_for_it_to_stay_off(logic):
     assert logic('offwarn', 0, 100000, 15000) == [0]        # on
     assert logic('offwarn', 90000, 100000, 15000) == [0]    # off for 10 s
     assert logic('offwarn', 85000, 100000, 15000) == [1]    # off for 15 s
+
+
+def test_hidden_target(logic):
+    # target thickness hideFully held -> pixels of thickness to hide
+    assert logic('target', 48, 1, 0) == [48]   # hide completely, nothing beyond the edge
+    assert logic('target', 48, 0, 0) == [46]   # leave Windows' 2 px sliver
+    assert logic('target', 60, 1, 1) == [58]   # held: the sliver stays, whatever the setting
+    assert logic('target', 60, 0, 1) == [58]
