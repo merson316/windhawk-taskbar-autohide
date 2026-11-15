@@ -955,7 +955,14 @@ UINT CurrentStuckPlace(void* pThis) {
 }
 
 // Moving the taskbar to another edge is TrayUI::_HandleTrayPrivateSettingMessage
-// with setting 6 (read from taskbar.dll 9974). It does, in order:
+// with setting 6 (read from taskbar.dll 9974 and 10066). Its one caller is the
+// tray's window procedure, for message 0x5CA with wParam = the setting and
+// lParam = the value, and every sender found uses SendMessage (Settings, its
+// registry watcher, WinRT TaskbarSettings, the context menu). A second path,
+// message 0x5B2 (remote settings: the edge in the low byte of wParam), does the
+// same. The mod sees both in its subclass of the tray window before Windows
+// does, so it brackets them there, on every build, with no symbol needed.
+// The handler does, in order:
 //
 //   if ((GetAutoHideFlags() & 3) == 3) SetAutoHideState(0);   // show first
 //   SetStuckPlace(edge);    // stores the edge, posts 0x5c3 to the tray window
@@ -973,6 +980,10 @@ UINT CurrentStuckPlace(void* pThis) {
 // announcement it queued is delivered, the mod is transparent: every hook
 // passes straight through and no taskbar is hidden or held.
 #define EDGE_SETTLE_MS 2500
+#define TRAY_MSG_PRIVATE_SETTING 0x5CA
+#define TRAY_SETTING_STUCK_PLACE 6
+#define TRAY_SETTING_AUTO_HIDE 4
+#define TRAY_MSG_REMOTE_SETTINGS 0x5B2
 volatile LONG g_lastEdgeSeen = -1;
 volatile LONG64 g_edgeSettleUntil = 0;
 volatile LONG g_inEdgeChange = 0;
@@ -984,9 +995,9 @@ bool EdgeChangeInProgress() {
 }
 
 // Note the edge a hook has just read, and say whether the mod should stand
-// back because the edge is changing or changed a moment ago. Seeing a new edge
-// here is the fallback for builds where the setting handler cannot be hooked;
-// by then the sequence has already begun.
+// back because the edge is changing or changed a moment ago. The window
+// messages that change the edge are bracketed in the tray's subclass; seeing a
+// new edge here covers any path that reaches Windows another way.
 bool EdgeSettling(UINT edge) {
     const LONG64 now = (LONG64)GetTickCount64();
     if (edge <= ABE_BOTTOM) {
@@ -1352,7 +1363,6 @@ struct TaskbarRec;
 TaskbarRec* RecFor(HWND hwnd);
 bool BarsHandled();
 void SlideHint(HWND hwnd, bool show);
-void NoteSecondaryTray(HWND hwnd);
 
 void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                                     HMONITOR monitor, bool show, bool animate) {
@@ -1371,7 +1381,6 @@ void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                L"%d -> not animated by Windows",
                hWnd, rect ? rect->left : 0, rect ? rect->top : 0,
                rect ? rect->right : 0, rect ? rect->bottom : 0, show, animate);
-        NoteSecondaryTray(hWnd);
         TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, false);
         SlideHint(hWnd, show);
         return;
@@ -1686,12 +1695,6 @@ struct TaskbarRec {
     // A secondary off the bottom edge, which the mod hides and reveals itself.
     LONG64 lastKeptUp;      // last moment something was keeping it up
     int leaveTicks;
-
-    // The CSecondaryTray behind a secondary's window, and the unhide Windows
-    // last gave it, learned when Windows slides this window from inside that
-    // unhide. With it the mod can have Windows show the taskbar for real.
-    void* tray;
-    int trayFlags, trayRequest;
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -1908,6 +1911,18 @@ int HiddenTargetFor(const TaskbarRec* rec) {
 // Flags bit 1: do not start the hide timer again. The request is telemetry.
 // Windows' own hover path is a hit test that starts a 50 ms timer, which then
 // calls this with (0, 0xf) if the real pointer is inside the window.
+//
+// The mod reaches it with a window message, which needs no symbol: 0x5BE with
+// wParam 1 and lParam 0 runs CSecondaryTray::_HandleImmersiveInvoke, which
+// calls _Unhide(2, 1): shown, and the hide timer not started (read in 9974
+// and 10066). Windows then keeps the taskbar's content visible and leaves the
+// hiding to the mod.
+#define TRAY_MSG_IMMERSIVE_INVOKE 0x5BE
+
+void UnhideThroughWindows(HWND secondary) {
+    SendMessageW(secondary, TRAY_MSG_IMMERSIVE_INVOKE, 1, 0);
+}
+
 using CSecondaryTray_Unhide_t = void(WINAPI*)(void* pThis, int flags,
                                               int request);
 CSecondaryTray_Unhide_t CSecondaryTray_Unhide_Original;
@@ -2390,18 +2405,11 @@ void WatchSecondaries() {
                 continue;
             }
             // If Windows believes this taskbar hidden too, have it unhide it:
-            // it keeps a hidden taskbar's content invisible. With flags 2
-            // Windows does not start its own hide timer again, so from then
-            // on only the mod hides this taskbar and the two stay in step.
-            // Unhide does nothing when Windows already has it shown. Without
-            // the tray, the hit test has the same effect while the pointer is
-            // over the window, which it is here; Windows then hides it again
-            // by itself and SlideHint follows.
-            if (rec->tray && CSecondaryTray_Unhide_Original) {
-                CSecondaryTray_Unhide_Original(rec->tray, 2, 0xf);
-            } else {
-                RevealHeld(rec, pt);
-            }
+            // it keeps a hidden taskbar's content invisible. Windows does not
+            // start its own hide timer again, so from then on only the mod
+            // hides this taskbar and the two stay in step. It does nothing
+            // when Windows already has it shown.
+            UnhideThroughWindows(rec->hwnd);
             RevealModBar(rec);
             continue;
         }
@@ -2490,45 +2498,6 @@ void WatchHeldReveals() {
     }
 }
 
-// ------------------------------------------------------------- edge change
-
-// See EdgeChangeInProgress. Hooked from symbols only; without it the mod
-// falls back to noticing the new edge from its other hooks.
-using TrayUI_HandleTrayPrivateSettingMessage_t =
-    LONG_PTR(WINAPI*)(void* pThis, ULONG setting, LONG_PTR value);
-TrayUI_HandleTrayPrivateSettingMessage_t
-    TrayUI_HandleTrayPrivateSettingMessage_Original;
-
-#define TRAY_SETTING_STUCK_PLACE 6
-
-LONG_PTR WINAPI TrayUI_HandleTrayPrivateSettingMessage_Hook(void* pThis,
-                                                            ULONG setting,
-                                                            LONG_PTR value) {
-    if (g_fatalReason || setting != TRAY_SETTING_STUCK_PLACE) {
-        return TrayUI_HandleTrayPrivateSettingMessage_Original(pThis, setting,
-                                                               value);
-    }
-
-    Wh_Log(L"taskbar is moving to edge %d: the mod stands back", (int)value);
-    // Give every taskbar back first, so Windows moves whole, uncloaked
-    // windows with their content in place, and forget where they were.
-    ReleaseAllBars();
-    for (int i = 0; i < g_recCount; i++) {
-        g_recs[i].display = {0, 0, 0, 0};
-        g_recs[i].held = false;
-    }
-    InterlockedExchange(&g_recsStale, 1);
-
-    InterlockedExchange(&g_inEdgeChange, 1);
-    const LONG_PTR r =
-        TrayUI_HandleTrayPrivateSettingMessage_Original(pThis, setting, value);
-    InterlockedExchange64(&g_edgeSettleUntil,
-                          (LONG64)GetTickCount64() + EDGE_SETTLE_MS);
-    InterlockedExchange(&g_inEdgeChange, 0);
-    InterlockedExchange(&g_lastEdgeSeen, (LONG)value);
-    return r;
-}
-
 // ------------------------------------------ notifications, secondary taskbars
 
 // A flashing button asks every taskbar to show, and a secondary taskbar is
@@ -2539,24 +2508,6 @@ LONG_PTR WINAPI TrayUI_HandleTrayPrivateSettingMessage_Hook(void* pThis,
 //
 // Hooked from symbols only. On a build whose symbols Microsoft has not
 // published it is left alone, and secondary taskbars keep Windows' behaviour.
-
-// Set while Windows is inside an unhide of a secondary taskbar.
-void* g_unhidingTray = nullptr;
-int g_unhidingFlags = 0, g_unhidingRequest = 0;
-
-// Windows is sliding this window. If that is happening inside a secondary
-// taskbar's unhide, the window is that taskbar's.
-void NoteSecondaryTray(HWND hwnd) {
-    if (!g_unhidingTray) {
-        return;
-    }
-    TaskbarRec* rec = RecFor(hwnd);
-    if (rec && !rec->primary) {
-        rec->tray = g_unhidingTray;
-        rec->trayFlags = g_unhidingFlags;
-        rec->trayRequest = g_unhidingRequest;
-    }
-}
 
 struct SecondaryBurst {
     void* tray;
@@ -2642,12 +2593,7 @@ void WINAPI CSecondaryTray_Unhide_Hook(void* pThis, int flags, int request) {
     // Off the bottom edge the mod shows these taskbars itself, and Windows,
     // which may believe this one is showing already, would do nothing.
     RevealModSecondaries();
-    void* const outer = g_unhidingTray;
-    g_unhidingTray = pThis;
-    g_unhidingFlags = flags;
-    g_unhidingRequest = request;
     CSecondaryTray_Unhide_Original(pThis, flags, request);
-    g_unhidingTray = outer;
 }
 
 // Paces every animation from a high-resolution timer: it asks the taskbar's
@@ -2836,6 +2782,46 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return TickBars();
     }
 
+    if (!g_fatalReason &&
+        ((uMsg == TRAY_MSG_PRIVATE_SETTING &&
+          wParam == TRAY_SETTING_STUCK_PLACE) ||
+         uMsg == TRAY_MSG_REMOTE_SETTINGS)) {
+        // The taskbar is being moved to another edge. See
+        // EdgeChangeInProgress: give every taskbar back, then answer nothing
+        // for Windows until the call returns and a moment after.
+        Wh_Log(L"taskbar is changing edge (message %#x, wParam %#llx, lParam "
+               L"%#llx): the mod stands back",
+               uMsg, (unsigned long long)wParam, (unsigned long long)lParam);
+        ReleaseAllBars();
+        for (int i = 0; i < g_recCount; i++) {
+            g_recs[i].display = {0, 0, 0, 0};
+            g_recs[i].held = false;
+        }
+        InterlockedExchange(&g_recsStale, 1);
+
+        InterlockedExchange(&g_inEdgeChange, 1);
+        const LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+        InterlockedExchange64(&g_edgeSettleUntil,
+                              (LONG64)GetTickCount64() + EDGE_SETTLE_MS);
+        InterlockedExchange(&g_inEdgeChange, 0);
+        if (g_trayUI && g_offsetsVerified) {
+            InterlockedExchange(
+                &g_lastEdgeSeen,
+                (LONG) * (UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset));
+        }
+        return r;
+    }
+
+    if (uMsg == TRAY_MSG_PRIVATE_SETTING &&
+        wParam == TRAY_SETTING_AUTO_HIDE) {
+        // Something is setting auto-hide. After Explorer starts off the
+        // bottom edge the flags read off for about a minute and then on; this
+        // is one of the three messages that can do that, and the log says
+        // when it arrives.
+        Wh_Log(L"auto-hide set through the tray's setting message: %lld",
+               (long long)lParam);
+    }
+
     if (g_barRevealMsg && uMsg == g_barRevealMsg) {
         InterlockedExchange(&g_unloading, 1);
 
@@ -2854,24 +2840,10 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                 IsRectEmpty(&rec->display)) {
                 continue;
             }
-            if (rec->tray && CSecondaryTray_Unhide_Original) {
-                // The sure way: the unhide Windows itself last used for this
-                // taskbar. The hit test below only works with the pointer
-                // near, and at unload it is in Windhawk's window.
-                Wh_Log(L"unload: unhiding taskbar %p through Windows",
-                       rec->hwnd);
-                // Flags 2: do not start the hide timer again. Request 5 is
-                // what Windows uses when auto-hide is switched off.
-                CSecondaryTray_Unhide_Original(rec->tray, 2, 5);
-            } else {
-                Wh_Log(L"unload: taskbar %p has no known tray, sending the "
-                       L"hit test",
-                       rec->hwnd);
-                RECT cur{};
-                GetWindowRect(rec->hwnd, &cur);
-                RevealHeld(rec, {(cur.left + cur.right) / 2,
-                                 (cur.top + cur.bottom) / 2});
-            }
+            // Not the hit test: that only works with the pointer near, and
+            // at unload it is in Windhawk's window.
+            Wh_Log(L"unload: unhiding taskbar %p through Windows", rec->hwnd);
+            UnhideThroughWindows(rec->hwnd);
             asked++;
         }
         return asked;
@@ -3578,21 +3550,6 @@ PCWSTR SetUpHooks() {
           LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
          &CSecondaryTray_Unhide_Original, CSecondaryTray_Unhide_Hook, true},
     };
-    WindhawkUtils::SYMBOL_HOOK settingHooks[] = {
-        {{LR"(public: __int64 __cdecl TrayUI::_HandleTrayPrivateSettingMessage(unsigned long,__int64))",
-          LR"(public: __int64 __cdecl TrayUI::_HandleTrayPrivateSettingMessage(unsigned long,__int64) )"},
-         &TrayUI_HandleTrayPrivateSettingMessage_Original,
-         TrayUI_HandleTrayPrivateSettingMessage_Hook, true},
-    };
-    if (known ||
-        !WindhawkUtils::HookSymbols(taskbar, settingHooks,
-                                    ARRAYSIZE(settingHooks)) ||
-        !TrayUI_HandleTrayPrivateSettingMessage_Original) {
-        Wh_Log(L"edge changes: the setting handler is not hooked on this "
-               L"build; panels may open in the old place after the taskbar "
-               L"is moved to another edge, until Explorer restarts");
-    }
-
     if (known ||
         !WindhawkUtils::HookSymbols(taskbar, secondaryHooks,
                                     ARRAYSIZE(secondaryHooks)) ||
