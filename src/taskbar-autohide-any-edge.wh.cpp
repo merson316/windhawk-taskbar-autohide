@@ -26,18 +26,27 @@ bottom edge uses, and supplies the pointer tracking that Windows only performs
 on the bottom edge.
 
 It handles every taskbar when "Show my taskbar on all displays" is on, each at
-its own display's scaling and refresh rate.
+its own display's scaling and refresh rate. On every edge, the bottom included,
+it also:
+
+- hides the taskbar completely, with no line left along the screen edge;
+- keeps a taskbar beside another display on its own display (see below);
+- shows the taskbar once for a flashing button, then lets it hide;
+- keeps the taskbar up while Quick Settings is open;
+- waits for the "Hide delay" before hiding;
+- animates at the display's refresh rate, up to the frame rate setting.
 
 ## More than one display
 
 A taskbar whose edge has another display beyond it has nowhere to hide into.
 Windows slides it onto the neighbouring display and clips it there, and the
 hidden window takes that display's scaling: with displays scaled differently,
-its icons can come back the wrong size. The mod keeps such a taskbar's window
-where it is and slides its content out of it, so nothing is drawn on the other
-display and the scaling never changes. This applies on every edge, the bottom
-included. Rest the pointer on the edge of the taskbar's own display for a
-moment to bring it back.
+its icons can come back the wrong size. The same happens when another display
+only touches the place the taskbar would hide into. The mod keeps such a
+taskbar's window where it is and slides its content out of it, so nothing is
+drawn on the other display and the scaling never changes. This applies on
+every edge, the bottom included. Rest the pointer on the edge of the taskbar's
+own display for a moment to bring it back.
 
 On the bottom edge Windows still decides when a taskbar hides and the mod
 carries it out, which brings "Hide completely", "Hide delay" and the reveal
@@ -86,7 +95,16 @@ writes which one applies to the Windhawk log, once per session.
 - On a Windows build whose debug symbols Microsoft has not published, a
   flashing button may bring a secondary taskbar on the bottom edge up again
   for each flash.
+- With "Hide completely" off, a bottom taskbar with no display near it is left
+  to Windows' own slide. The frame rate setting still paces it, but the two
+  duration settings do not reach it.
 - Requires Windows 11 build 26200 or newer.
+
+## Reporting a problem
+
+This build keeps its log short. Each release also carries
+`taskbar-autohide-any-edge.debug.wh.cpp`, the same mod with a detailed log;
+use that one to reproduce the problem and attach the Windhawk log.
 
 ## If it does not work
 
