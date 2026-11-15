@@ -1994,6 +1994,16 @@ HWND BarContent(TaskbarRec* rec) {
         rec->content = FindWindowExW(
             rec->hwnd, nullptr,
             L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr);
+        static bool warned = false;
+        if (!rec->content && !warned) {
+            // A build that names this window otherwise. A held taskbar then
+            // still hides, behind its region, but is wiped away where it
+            // stands, not slid.
+            warned = true;
+            Wh_Log(L"taskbar %p has no content window of the class the mod "
+                   L"knows: a held taskbar will wipe, not slide",
+                   rec->hwnd);
+        }
     }
     return rec->content;
 }
