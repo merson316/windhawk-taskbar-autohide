@@ -27,6 +27,14 @@ int main(int argc, char** argv) {
         printf("42\n");
         return 0;
     }
+    if (!strcmp(cmd, "burst")) {   // holdMs gapMs (now request pointer surface)...
+        BurstState state{0, 0, -1};
+        for (int i = 2; i + 3 < n; i += 4) {
+            printf("%%d\n", (int)BurstDecide(&state, a[i], (int)a[i + 1], (int)a[0], (int)a[1],
+                                             a[i + 2] != 0, a[i + 3] != 0));
+        }
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -56,3 +64,37 @@ def logic(tmp_path_factory):
 
 def test_block_is_found_and_compiles(logic):
     assert logic('answer') == [42]
+
+
+# ---- notification bursts (#9) ------------------------------------------------
+# Events are (now ms, request, pointer at the edge, shell surface in front).
+# Verdicts: 0 begin a burst and show, 1 let Windows show it, 2 keep hidden.
+
+HOLD, GAP = 1500, 10000
+
+
+def burst(logic, *events):
+    return logic('burst', HOLD, GAP, *[v for e in events for v in e])
+
+
+def test_repeat_flashes_show_once(logic):
+    # Request 17 every 5.6 s: shown once, then kept hidden.
+    assert burst(logic, (0, 17, 0, 0), (5600, 17, 0, 0), (11200, 17, 0, 0)) == [0, 2, 2]
+
+
+def test_stray_request_passes_without_starting_a_burst(logic):
+    # A 15 between the 17s is shown, and the next 17 is still a repeat.
+    assert burst(logic, (0, 17, 0, 0), (3000, 15, 0, 0), (5600, 17, 0, 0)) == [0, 1, 2]
+
+
+def test_repeat_inside_its_hold_passes(logic):
+    assert burst(logic, (0, 17, 0, 0), (1000, 17, 0, 0)) == [0, 1]
+
+
+def test_quiet_longer_than_the_gap_begins_again(logic):
+    assert burst(logic, (0, 17, 0, 0), (10001, 17, 0, 0)) == [0, 0]
+
+
+def test_pointer_or_open_surface_lets_a_repeat_through(logic):
+    assert burst(logic, (0, 17, 0, 0), (5600, 17, 1, 0)) == [0, 1]
+    assert burst(logic, (0, 17, 0, 0), (5600, 17, 0, 1)) == [0, 1]

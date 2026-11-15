@@ -146,7 +146,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
     including the bottom.
 
     Default: 1500.
-- notificationBurstGapMs: 5000
+- notificationBurstGapMs: 10000
   $name: Notifications - treat as one within (ms)
   $description: >-
     A flashing button asks for the taskbar once per flash, not once per
@@ -157,7 +157,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
     lower it if two separate notifications get merged. Unused when the setting
     above is 0.
 
-    Default: 5000.
+    Default: 10000.
 - revealDwellMs: 0
   $name: Reveal dwell (ms)
   $description: >-
@@ -265,7 +265,7 @@ struct Settings {
     bool keepTaskbarOnTop = true;
     int revealDwellMs = 0;
     int notificationHoldMs = 1500;
-    int notificationBurstGapMs = 5000;
+    int notificationBurstGapMs = 10000;
     int hideDurationMs = 0;
     int showDurationMs = 0;
 } g_settings;
@@ -339,6 +339,48 @@ void LoadSettings() {
 // everything between the two markers on its own and runs it, so nothing in
 // here may use more than <windows.h> types.
 // ==PureLogic==
+
+// A flashing taskbar button produces one unhide per flash. Unhides closer
+// together than the gap belong to one burst and are treated as one
+// notification: the taskbar shows once, hides after the hold, and stays hidden
+// while the flashing continues.
+//
+// `request` is the kind of unhide that opened the burst. A flashing button
+// repeats one kind. Any other kind arriving mid-burst is a separate event --
+// the Win key, a different notification -- so it is shown, but it does not
+// open a new burst: if it did, the flash after it would look new as well, and
+// every stray request would bring the taskbar back twice.
+struct BurstState {
+    LONG64 lastUnhide;
+    LONG64 holdUntil;
+    int request;   // -1: no burst yet
+};
+
+enum BurstVerdict {
+    BURST_BEGIN = 0,   // a new burst: show it for the hold
+    BURST_PASS = 1,    // let Windows show it
+    BURST_DROP = 2,    // the burst's own request repeating after its hold
+};
+
+BurstVerdict BurstDecide(BurstState* s, LONG64 now, int request, int holdMs,
+                         int gapMs, bool pointerAtEdge, bool surfaceInFront) {
+    const LONG64 last = s->lastUnhide;
+    s->lastUnhide = now;
+
+    if (s->request < 0 || now - last > gapMs) {
+        s->request = request;
+        s->holdUntil = now + holdMs;
+        return BURST_BEGIN;
+    }
+    if (request != s->request) {
+        return BURST_PASS;
+    }
+    if (now >= s->holdUntil && !pointerAtEdge && !surfaceInFront) {
+        return BURST_DROP;
+    }
+    return BURST_PASS;
+}
+
 // ==/PureLogic==
 
 extern HWND g_trayWnd;   // defined with the taskbar state below
@@ -489,7 +531,6 @@ ULONGLONG g_dwellStart = 0;
 // Re-hiding immediately makes it flap, so hold it visible for a while after any
 // unhide the mod did not issue.
 volatile LONG64 g_holdVisibleUntil = 0;
-volatile LONG64 g_lastNotifyUnhide = 0;
 
 // Windows 11 hosts Start, Search and the shell flyouts in their own processes,
 // so the taskbar is not the foreground window while any of them is open.
@@ -568,33 +609,10 @@ bool PointerOverShellSurface() {
     return (GetWindowLongPtrW(top, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) != 0;
 }
 
-// Whether the user is interacting with the shell at all. Used to decide that a
-// repeat unhide is the user asking rather than a notification repeating, so it
-// is deliberately broad: the taskbar itself counts, and so does the desktop.
-bool ShellHasFocus() {
-    HWND fg = GetForegroundWindow();
-    if (!fg) {
-        return false;
-    }
-    if (fg == g_trayWnd) {
-        return true;
-    }
-
-    DWORD pid = 0;
-    GetWindowThreadProcessId(fg, &pid);
-    if (!pid) {
-        return false;
-    }
-    if (pid == GetCurrentProcessId()) {
-        return true;
-    }
-    return ForegroundIsShellHost(pid);
-}
-
-// Whether a shell surface is actually open, which is the different question of
-// whether to keep an already-visible taskbar up. Narrow where the above is
-// broad: the taskbar holding focus is not a surface -- it keeps focus after its
-// own flyouts close -- and neither is the desktop.
+// Whether a shell surface (Start, Search, a flyout's host) is open in front.
+// Deliberately narrow: the taskbar holding focus is not a surface -- it keeps
+// focus after its own flyouts close -- and neither is the desktop or a File
+// Explorer window, though all three belong to this process.
 bool ShellSurfaceInForeground() {
     HWND fg = GetForegroundWindow();
     if (!fg || fg == g_trayWnd) {
@@ -619,15 +637,9 @@ bool ShellSurfaceInForeground() {
     return ForegroundIsShellHost(pid);
 }
 
-// A flashing taskbar button produces one unhide per flash. Unhides closer
-// together than notificationBurstGapMs belong to the same burst and are treated
-// as one notification, so the taskbar shows once, hides after the hold, and
-// stays hidden while the flashing continues.
-//
-// This records what kind of unhide opened the current burst. A flashing button
-// repeats one cause; anything else arriving mid-burst is a separate event and
-// must not be swallowed as a repeat.
-volatile LONG g_burstRequest = -1;
+// The notification burst in progress; see BurstDecide. Only the unhide hook
+// touches it, on the taskbar's thread.
+BurstState g_burst{0, 0, -1};
 
 // The last docked rect seen while shown, so unloading can put the taskbar back.
 RECT g_lastDockedRect{};
@@ -830,26 +842,24 @@ void WINAPI TrayUI_Unhide_Hook(void* pThis, int flags, int request) {
     }
 
     if (!g_inWatcherCall && g_settings.notificationHoldMs > 0) {
-        LONG64 now = (LONG64)GetTickCount64();
-        LONG64 last = InterlockedExchange64(&g_lastNotifyUnhide, now);
-
-        if (now - last > g_settings.notificationBurstGapMs ||
-            InterlockedCompareExchange(&g_burstRequest, request, request) !=
-                request) {
-            // A new notification, or a different cause arriving mid-burst:
-            // show it for the configured hold.
-            InterlockedExchange(&g_burstRequest, request);
-            InterlockedExchange64(&g_holdVisibleUntil,
-                                  now + g_settings.notificationHoldMs);
-        } else if (now >= InterlockedCompareExchange64(&g_holdVisibleUntil, 0,
-                                                       0) &&
-                   edge <= ABE_BOTTOM && !CursorAtRevealStrip(edge) &&
-                   !ShellHasFocus()) {
-            // The same cause repeating, already shown for its hold, pointer
-            // away from the edge and nothing of the taskbar's in front: keep it
-            // hidden rather than flashing it back up. Applies on every edge
-            // including the bottom, where Windows drives the hiding itself.
-            return;
+        // A repeat is let through when the user is plainly asking: the
+        // pointer is at the edge, or a shell surface is open in front. The
+        // desktop or a File Explorer window having focus is not that, so this
+        // asks ShellSurfaceInForeground, not ShellHasFocus. Applies on every
+        // edge including the bottom, where Windows drives the hiding itself.
+        const bool pointerAtEdge =
+            edge > ABE_BOTTOM || CursorAtRevealStrip(edge);
+        switch (BurstDecide(&g_burst, (LONG64)GetTickCount64(), request,
+                            g_settings.notificationHoldMs,
+                            g_settings.notificationBurstGapMs, pointerAtEdge,
+                            ShellSurfaceInForeground())) {
+            case BURST_BEGIN:
+                InterlockedExchange64(&g_holdVisibleUntil, g_burst.holdUntil);
+                break;
+            case BURST_DROP:
+                return;
+            case BURST_PASS:
+                break;
         }
     }
 
