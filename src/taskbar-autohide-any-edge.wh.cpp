@@ -7,7 +7,7 @@
 // @github          https://github.com/merson316
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lwtsapi32 -lwinhttp -ldwmapi
+// @compilerOptions -lcomctl32 -lwtsapi32 -lwinhttp -ldwmapi -lgdi32
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -1358,10 +1358,24 @@ volatile LONG g_slideThreadId = 0;
 double g_slideStartMs = 0.0;
 double g_slideFrameStart = 0.0;
 
+struct TaskbarRec;
+TaskbarRec* RecFor(HWND hwnd);
+bool BarsHandled();
+
 void WINAPI TrayUI_SlideWindow_Hook(void* pThis, HWND hWnd, const RECT* rect,
                                     HMONITOR monitor, bool show, bool animate) {
     if (g_fatalReason) {
         TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, animate);
+        return;
+    }
+
+    // A taskbar the mod animates itself: Windows' slide is a loop on this
+    // thread that moves the window in a few coarse steps and blocks the thread
+    // meanwhile. Without it Windows asks for the end position once, and the
+    // mod goes there on its own clock. Secondary taskbars slide through this
+    // function too.
+    if (BarsHandled() && RecFor(hWnd)) {
+        TrayUI_SlideWindow_Original(pThis, hWnd, rect, monitor, show, false);
         return;
     }
 
@@ -1743,6 +1757,21 @@ struct TaskbarRec {
     SIZE size;
     int hiddenAsked;   // pixels of thickness Windows last asked to be hidden
     int hiddenNow;     // pixels hidden right now
+
+    // Set once the mod has put the window somewhere itself. From then on its
+    // position says where the animation is, not what Windows wants.
+    bool placed;
+    bool ownMove;      // inside the mod's own SetWindowPos
+    bool clipped;
+    RECT region;       // the window region in force, when clipped
+
+    bool animating;
+    int from, to;      // hidden pixels
+    double startMs;
+    int durationMs;
+    int frameUs;
+    int steps, late;
+    double lastStepMs, minGapMs, maxGapMs;
 };
 
 TaskbarRec g_recs[MAX_TASKBARS];
@@ -1853,9 +1882,11 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
     rec->edge = edge;
     // Held taskbars are handled on the bottom edge only, for now.
     rec->held = edge == ABE_BOTTOM && DisplayBeyond(m, edge, others, nOthers);
-    rec->shown = {bar.left + dx, bar.top + dy};
-    rec->size = {bar.right - bar.left, bar.bottom - bar.top};
-    rec->hiddenAsked = rec->hiddenNow = hidden;
+    if (!rec->placed) {
+        rec->shown = {bar.left + dx, bar.top + dy};
+        rec->size = {bar.right - bar.left, bar.bottom - bar.top};
+        rec->hiddenAsked = rec->hiddenNow = hidden;
+    }
 
     if (!EqualRect(&was.display, &rec->display) ||
         was.displayHz != rec->displayHz || was.edge != rec->edge ||
@@ -1870,11 +1901,241 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
     return true;
 }
 
+// ------------------------------------------------ the mod's own hide and reveal
+
+// When any taskbar is held, the mod moves every taskbar itself, so that all of
+// them on a desk move alike. Held taskbars exist only on the bottom edge for
+// now, so this is also "the bottom edge, with a display past some taskbar".
+// With one display it is never true, and the bottom edge stays Windows' own.
+bool BarsHandled() {
+    return !g_fatalReason && AnyHeld();
+}
+
+UINT g_barTickMsg = 0;
+HANDLE g_barWake = nullptr;
+HANDLE g_barThread = nullptr;
+volatile LONG g_barStop = 0;
+
+// Put the window and its region where `hiddenPx` hidden pixels call for.
+void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
+    const BarPlacement p =
+        PlaceBar(rec->shown, rec->size, rec->edge, rec->held, hiddenPx);
+
+    RECT cur{};
+    GetWindowRect(rec->hwnd, &cur);
+    if (cur.left != p.x || cur.top != p.y) {
+        rec->ownMove = true;
+        SetWindowPos(rec->hwnd, nullptr, p.x, p.y, 0, 0,
+                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        rec->ownMove = false;
+    }
+
+    if (!p.clipped) {
+        if (rec->clipped) {
+            SetWindowRgn(rec->hwnd, nullptr, TRUE);
+            rec->clipped = false;
+        }
+    } else if (!rec->clipped || !EqualRect(&rec->region, &p.region)) {
+        // The system owns the region once SetWindowRgn has taken it.
+        HRGN rgn = CreateRectRgnIndirect(&p.region);
+        if (rgn && SetWindowRgn(rec->hwnd, rgn, TRUE)) {
+            rec->region = p.region;
+            rec->clipped = true;
+        } else if (rgn) {
+            DeleteObject(rgn);
+        }
+    }
+
+    rec->hiddenNow = hiddenPx;
+    rec->placed = true;
+}
+
+void StartBarAnimation(TaskbarRec* rec, int hiddenTarget) {
+    rec->from = rec->hiddenNow;
+    rec->to = hiddenTarget;
+    rec->startMs = NowMs();
+    rec->durationMs = hiddenTarget > rec->hiddenNow
+                          ? (g_settings.hideDurationMs > 0
+                                 ? g_settings.hideDurationMs
+                                 : 400)
+                          : (g_settings.showDurationMs > 0
+                                 ? g_settings.showDurationMs
+                                 : 200);
+    rec->frameUs =
+        1000000 / StepsPerSecond(rec->displayHz, g_settings.frameRate);
+    rec->steps = rec->late = 0;
+    rec->lastStepMs = rec->startMs;
+    rec->minGapMs = 1e9;
+    rec->maxGapMs = 0;
+    rec->animating = true;
+    if (g_barThread) {
+        SetEvent(g_barWake);
+    } else {
+        // Nothing to pace it: go to the end in one step. Posted, because this
+        // is reached from inside WM_WINDOWPOSCHANGING.
+        rec->durationMs = 0;
+        PostMessageW(g_trayWnd, g_barTickMsg, 0, 0);
+    }
+}
+
+// One step of one taskbar's animation. Eases out both ways: quick to start,
+// settling into the end position.
+void TickBar(TaskbarRec* rec) {
+    const double now = NowMs();
+    double t = rec->durationMs > 0 ? (now - rec->startMs) / rec->durationMs
+                                   : 1.0;
+    if (t > 1.0) {
+        t = 1.0;
+    }
+    const double e = 1.0 - (1.0 - t) * (1.0 - t) * (1.0 - t);
+    const double pos = rec->from + (rec->to - rec->from) * e;
+    ApplyPlacement(rec, t >= 1.0 ? rec->to : (int)(pos + 0.5));
+
+    const double gap = now - rec->lastStepMs;
+    if (rec->steps > 0) {
+        if (gap < rec->minGapMs) rec->minGapMs = gap;
+        if (gap > rec->maxGapMs) rec->maxGapMs = gap;
+        if (gap > rec->frameUs * 1.5 / 1000.0) rec->late++;
+    }
+    rec->lastStepMs = now;
+    rec->steps++;
+
+    if (t >= 1.0) {
+        rec->animating = false;
+        Wh_Log(L"taskbar %p %s %d->%d px in %d ms at %d fps: %d steps, gap "
+               L"%d..%d us, %d late, dpi %u",
+               rec->hwnd, rec->to > rec->from ? L"hide" : L"reveal", rec->from,
+               rec->to, (int)(now - rec->startMs), 1000000 / rec->frameUs,
+               rec->steps, rec->steps > 1 ? (int)(rec->minGapMs * 1000) : 0,
+               (int)(rec->maxGapMs * 1000), rec->late,
+               GetDpiForWindow(rec->hwnd));
+    }
+}
+
+// Step every animating taskbar. Returns the shortest frame among those still
+// animating, in microseconds, or 0 when none is.
+LRESULT TickBars() {
+    int frame = 0;
+    for (int i = 0; i < g_recCount; i++) {
+        TaskbarRec* rec = &g_recs[i];
+        if (!rec->animating) {
+            continue;
+        }
+        TickBar(rec);
+        if (rec->animating && (frame == 0 || rec->frameUs < frame)) {
+            frame = rec->frameUs;
+        }
+    }
+    return frame;
+}
+
+// WM_WINDOWPOSCHANGING on a taskbar the mod animates, after the taskbar's own
+// handler has had it. reqX and reqY are what was asked before that handler.
+void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
+    if (wp->flags & SWP_NOMOVE) {
+        return;
+    }
+
+    if (rec->ownMove) {
+        // The taskbar's handler replaces any position with the one it
+        // believes in. Put back what the mod asked for, or the window stays
+        // put while the region moves and the motion runs backwards.
+        wp->x = reqX;
+        wp->y = reqY;
+        return;
+    }
+
+    // Windows asking: work out how much of the taskbar it wants hidden.
+    const int w = (wp->flags & SWP_NOSIZE) ? rec->size.cx : wp->cx;
+    const int h = (wp->flags & SWP_NOSIZE) ? rec->size.cy : wp->cy;
+    const RECT asked{wp->x, wp->y, wp->x + w, wp->y + h};
+    const RECT& m = rec->display;
+    const int dx = asked.left < m.left     ? m.left - asked.left
+                   : asked.right > m.right ? m.right - asked.right
+                                           : 0;
+    const int dy = asked.top < m.top         ? m.top - asked.top
+                   : asked.bottom > m.bottom ? m.bottom - asked.bottom
+                                             : 0;
+    const int off = dx ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
+
+    rec->shown = {asked.left + dx, asked.top + dy};
+    rec->size = {w, h};
+    if (off != rec->hiddenAsked || !rec->placed) {
+        rec->hiddenAsked = off;
+        StartBarAnimation(rec, off);
+    }
+
+    // Windows gets the position the animation is at, not the one it asked for.
+    const BarPlacement p =
+        PlaceBar(rec->shown, rec->size, rec->edge, rec->held, rec->hiddenNow);
+    wp->x = p.x;
+    wp->y = p.y;
+    rec->placed = true;
+}
+
+// Paces every animation: one tick per frame, from a high-resolution timer,
+// aimed at frame boundaries so a late tick does not push the later ones back.
+// The step itself runs on the taskbar's thread, which owns the records.
+DWORD WINAPI BarThreadProc(LPVOID) {
+    HANDLE timer = CreateWaitableTimerExW(
+        nullptr, nullptr, 0x00000002 /* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION */,
+        TIMER_ALL_ACCESS);
+    if (!timer) {
+        timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
+    }
+
+    while (WaitForSingleObject(g_barWake, INFINITE) == WAIT_OBJECT_0 &&
+           !InterlockedCompareExchange(&g_barStop, 0, 0)) {
+        double next = NowMs();
+        for (;;) {
+            DWORD_PTR frameUs = 0;
+            HWND tray = g_trayWnd;
+            if (!tray ||
+                !SendMessageTimeoutW(tray, g_barTickMsg, 0, 0,
+                                     SMTO_ABORTIFHUNG, 200, &frameUs) ||
+                !frameUs || InterlockedCompareExchange(&g_barStop, 0, 0)) {
+                break;
+            }
+            next += frameUs / 1000.0;
+            const double wait = next - NowMs();
+            if (wait <= 0) {
+                next = NowMs();
+                continue;
+            }
+            LARGE_INTEGER due;
+            due.QuadPart = -(LONGLONG)(wait * 10000.0);
+            if (timer &&
+                SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE)) {
+                WaitForSingleObject(timer, 100);
+            } else {
+                Sleep((DWORD)wait);
+            }
+        }
+    }
+
+    if (timer) {
+        CloseHandle(timer);
+    }
+    return 0;
+}
+
 LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
     if (uMsg == WM_NCDESTROY) {
         DropRec(hWnd);
+        return DefSubclassProc(hWnd, uMsg, wParam, lParam);
     }
+
+    if (uMsg == WM_WINDOWPOSCHANGING && lParam && BarsHandled()) {
+        if (TaskbarRec* rec = RecFor(hWnd)) {
+            WINDOWPOS* wp = (WINDOWPOS*)lParam;
+            const int reqX = wp->x, reqY = wp->y;
+            LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            BarPosChanging(rec, wp, reqX, reqY);
+            return r;
+        }
+    }
+
     return DefSubclassProc(hWnd, uMsg, wParam, lParam);
 }
 
@@ -1931,6 +2192,16 @@ void RefreshRecords() {
         // its facts stay as they were until the next refresh.
         FillRecFacts(&g_recs[i], displays, edge);
     }
+
+    // Take over a taskbar that is already hidden where Windows parked it:
+    // bring it onto its own display now, not at the next reveal.
+    if (BarsHandled()) {
+        for (int i = 0; i < g_recCount; i++) {
+            if (!g_recs[i].placed && !IsRectEmpty(&g_recs[i].display)) {
+                ApplyPlacement(&g_recs[i], g_recs[i].hiddenNow);
+            }
+        }
+    }
 }
 
 void MaybeRefreshRecords() {
@@ -1945,6 +2216,20 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
     if (uMsg == WM_DISPLAYCHANGE || uMsg == WM_SETTINGCHANGE) {
         InterlockedExchange(&g_recsStale, 1);
+    }
+
+    if (g_barTickMsg && uMsg == g_barTickMsg) {
+        return TickBars();
+    }
+
+    if (uMsg == WM_WINDOWPOSCHANGING && lParam && BarsHandled()) {
+        if (TaskbarRec* rec = RecFor(hWnd)) {
+            WINDOWPOS* wp = (WINDOWPOS*)lParam;
+            const int reqX = wp->x, reqY = wp->y;
+            LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            BarPosChanging(rec, wp, reqX, reqY);
+            return r;
+        }
     }
 
     if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
@@ -2708,6 +2993,18 @@ BOOL Wh_ModInit() {
         return FALSE;
     }
 
+    g_barTickMsg =
+        RegisterWindowMessageW(L"WindhawkTaskbarAutoHideAnyEdgeBarTick");
+    g_barWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (g_barTickMsg && g_barWake) {
+        g_barThread =
+            CreateThread(nullptr, 0, BarThreadProc, nullptr, 0, nullptr);
+    }
+    if (!g_barThread) {
+        Wh_Log(L"could not start the pacing thread; held taskbars will jump "
+               L"instead of sliding");
+    }
+
     g_watchThread = CreateThread(nullptr, 0, WatchThreadProc, nullptr, 0,
                                  nullptr);
     if (!g_watchThread) {
@@ -2788,12 +3085,32 @@ void Wh_ModUninit() {
         }
     }
 
-    // The watch thread has stopped, so no more ticks reach the records.
+    InterlockedExchange(&g_barStop, 1);
+    if (g_barWake) {
+        SetEvent(g_barWake);
+    }
+    if (g_barThread) {
+        WaitForSingleObject(g_barThread, 2000);
+        CloseHandle(g_barThread);
+        g_barThread = nullptr;
+    }
+
+    // The watch and pacing threads have stopped, so nothing more reaches the
+    // records. Windows still believes each taskbar is where it last asked;
+    // without its region the window is whole again, and the next hide or
+    // reveal puts it back there.
     for (int i = 0; i < g_recCount; i++) {
+        if (g_recs[i].hwnd && g_recs[i].clipped) {
+            SetWindowRgn(g_recs[i].hwnd, nullptr, TRUE);
+        }
         if (!g_recs[i].primary && g_recs[i].hwnd) {
             WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_recs[i].hwnd,
                                                              SecondaryProc);
         }
+    }
+    if (g_barWake) {
+        CloseHandle(g_barWake);
+        g_barWake = nullptr;
     }
 
     if (g_trayWnd && g_subclassed) {
