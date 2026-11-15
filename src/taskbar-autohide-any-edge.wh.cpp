@@ -393,8 +393,17 @@ enum BurstVerdict {
     BURST_DROP = 2,    // the burst's own request repeating after its hold
 };
 
+// The one unhide request a flashing button sends (CTaskBand::UnhideTray and
+// CSecondaryTaskBand::UnhideTray; no other caller uses it). Every other
+// request is the user or the shell asking, and is never held back.
+#define UNHIDE_REQUEST_FLASH 0x11
+
 BurstVerdict BurstDecide(BurstState* s, LONG64 now, int request, int holdMs,
                          int gapMs, bool pointerAtEdge, bool surfaceInFront) {
+    if (request != UNHIDE_REQUEST_FLASH) {
+        return BURST_PASS;
+    }
+
     const LONG64 last = s->lastUnhide;
     s->lastUnhide = now;
 
@@ -410,6 +419,15 @@ BurstVerdict BurstDecide(BurstState* s, LONG64 now, int request, int holdMs,
         return BURST_DROP;
     }
     return BURST_PASS;
+}
+
+// Whether to override Windows' refusal to hide. Windows refuses while a
+// button flashes, and also while a jump list or a task-list flyout is open.
+// Only the first is the mod's business: a burst exists, its hold has run out,
+// and the last flash was within the gap, so the flashing is still going on.
+bool BurstOverridesVeto(const BurstState* s, LONG64 now, int gapMs) {
+    return s->request >= 0 && now >= s->holdUntil &&
+           now - s->lastUnhide <= gapMs;
 }
 
 // Whether a Quick Settings window counts as open. Its window outlives the
@@ -1299,14 +1317,17 @@ bool g_durationOffsetsVerified = false;
 
 using CTaskListWnd_PermitAutoHide_t = int(WINAPI*)(void* pThis);
 CTaskListWnd_PermitAutoHide_t CTaskListWnd_PermitAutoHide_Original;
+bool AnyBurstOverridesVeto(LONG64 now);   // with the secondary bursts, below
+
 int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
-    // With Quick Settings open the answer is Windows' own: forcing the hide
-    // would pull the taskbar out from under the panel.
+    // Only for a flashing button whose hold is over. Windows' other reasons to
+    // refuse (an open jump list or task-list flyout) stand, and so does its
+    // answer while Quick Settings is open: forcing the hide would pull the
+    // taskbar out from under the panel.
     if (!g_fatalReason && g_settings.notificationHoldMs > 0 &&
-        (LONG64)GetTickCount64() >=
-            InterlockedCompareExchange64(&g_holdVisibleUntil, 0, 0) &&
+        AnyBurstOverridesVeto((LONG64)GetTickCount64()) &&
         !QuickSettingsOpen()) {
-        return TRUE;   // hold elapsed: allow hiding even if Windows objects
+        return TRUE;
     }
     return CTaskListWnd_PermitAutoHide_Original(pThis);
 }
@@ -2271,24 +2292,36 @@ LRESULT TickBars() {
 
 // WM_WINDOWPOSCHANGING on a taskbar the mod animates, after the taskbar's own
 // handler has had it. reqX and reqY are what was asked before that handler.
-void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
-    if (wp->flags & SWP_NOMOVE) {
-        return;
-    }
-
-    if (rec->ownMove && reqX == rec->ownX && reqY == rec->ownY) {
-        // The taskbar's handler replaces any position with the one it
-        // believes in. Put back what the mod asked for, or the window stays
-        // put while the region moves and the motion runs backwards.
+void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
+                    UINT reqFlags) {
+    // TrayUI::_HandleWindowPosChanging has just run. It turns every request,
+    // even one that only changes the z-order, into a move to the rect it
+    // believes in (GetDockedRect), and when the window already sits on that
+    // rect it sets SWP_NOMOVE | SWP_NOSIZE instead. So the flags as they are
+    // now do not say what was asked: testing SWP_NOMOVE here used to drop the
+    // mod's own moves whenever the window was on Windows' rect, which left a
+    // hidden taskbar 2 px short of hidden, or parked where Windows put it.
+    if (rec->ownMove && !(reqFlags & SWP_NOMOVE) && reqX == rec->ownX &&
+        reqY == rec->ownY) {
+        // The mod's own move: put back what it asked for.
         wp->x = reqX;
         wp->y = reqY;
+        wp->flags &= ~SWP_NOMOVE;
         return;
     }
 
-    // Windows asking: work out how much of the taskbar it wants hidden.
-    const int w = (wp->flags & SWP_NOSIZE) ? rec->size.cx : wp->cx;
-    const int h = (wp->flags & SWP_NOSIZE) ? rec->size.cy : wp->cy;
-    const RECT asked{wp->x, wp->y, wp->x + w, wp->y + h};
+    // Windows asking. Where it wants the window is the rect it wrote, or, if
+    // it left SWP_NOMOVE, the rect the window is on. From that, work out how
+    // much of the taskbar it wants hidden.
+    RECT cur{};
+    GetWindowRect(rec->hwnd, &cur);
+    const bool noMove = (wp->flags & SWP_NOMOVE) != 0;
+    const bool noSize = (wp->flags & SWP_NOSIZE) != 0;
+    const int w = noSize ? cur.right - cur.left : wp->cx;
+    const int h = noSize ? cur.bottom - cur.top : wp->cy;
+    const int askedX = noMove ? cur.left : wp->x;
+    const int askedY = noMove ? cur.top : wp->y;
+    const RECT asked{askedX, askedY, askedX + w, askedY + h};
     const RECT& m = rec->display;
 
     if (!BarBelongsTo(m, asked, rec->edge)) {
@@ -2351,6 +2384,9 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
         PlaceBar(rec->shown, rec->size, rec->edge, rec->held, rec->hiddenNow);
     wp->x = p.x;
     wp->y = p.y;
+    if (p.x != cur.left || p.y != cur.top) {
+        wp->flags &= ~SWP_NOMOVE;
+    }
     rec->placed = true;
 }
 
@@ -2635,6 +2671,19 @@ BurstState* SecondaryBurstFor(void* tray) {
     return &spare->burst;
 }
 
+bool AnyBurstOverridesVeto(LONG64 now) {
+    const int gap = g_settings.notificationBurstGapMs;
+    if (BurstOverridesVeto(&g_burst, now, gap)) {
+        return true;
+    }
+    for (const SecondaryBurst& b : g_secondaryBursts) {
+        if (b.tray && BurstOverridesVeto(&b.burst, now, gap)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Whether the pointer is at the docked edge of any secondary taskbar's
 // display: the user reaching for one, which a repeat must not be mistaken for.
 bool PointerAtSecondaryEdge() {
@@ -2743,8 +2792,9 @@ LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         if (rec && !IsRectEmpty(&rec->display)) {
             WINDOWPOS* wp = (WINDOWPOS*)lParam;
             const int reqX = wp->x, reqY = wp->y;
+            const UINT reqFlags = wp->flags;
             LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-            BarPosChanging(rec, wp, reqX, reqY);
+            BarPosChanging(rec, wp, reqX, reqY, reqFlags);
             return r;
         }
     }
@@ -2936,8 +2986,9 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         if (rec && !IsRectEmpty(&rec->display)) {
             WINDOWPOS* wp = (WINDOWPOS*)lParam;
             const int reqX = wp->x, reqY = wp->y;
+            const UINT reqFlags = wp->flags;
             LRESULT r = DefSubclassProc(hWnd, uMsg, wParam, lParam);
-            BarPosChanging(rec, wp, reqX, reqY);
+            BarPosChanging(rec, wp, reqX, reqY, reqFlags);
             return r;
         }
     }

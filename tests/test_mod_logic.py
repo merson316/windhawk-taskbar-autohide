@@ -106,6 +106,11 @@ int main(int argc, char** argv) {
         printf("%%d\n", HiddenTarget((int)a[0], a[1] != 0, a[2] != 0));
         return 0;
     }
+    if (!strcmp(cmd, "vetooff")) {   // lastUnhide holdUntil request now gapMs
+        BurstState state{a[0], a[1], (int)a[2]};
+        printf("%%d\n", BurstOverridesVeto(&state, a[3], (int)a[4]) ? 1 : 0);
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -319,3 +324,26 @@ def test_hidden_target(logic):
     # sliver would be rows from its middle, which show as a line of icon tops.
     assert logic('target', 60, 1, 1) == [60]
     assert logic('target', 60, 0, 1) == [60]
+
+
+# ---- from the audit against taskbar.dll --------------------------------------
+
+def test_only_a_flashing_button_makes_a_burst(logic):
+    # Request 0x11 (17) is the only one a flashing button sends. Anything else
+    # (Start is 2, a flyout 4, the pointer 0xf) is the user, and is never held
+    # back: opening Start twice in a row must show the taskbar twice.
+    assert burst(logic, (0, 2, 0, 0), (100, 2, 0, 0), (200, 15, 0, 0)) == [1, 1, 1]
+    # ...and does not open a burst that a later flash would then be "repeating".
+    assert burst(logic, (0, 2, 0, 0), (100, 17, 0, 0), (5700, 17, 0, 0)) == [1, 0, 2]
+
+
+def test_windows_veto_is_overridden_only_inside_a_flash_burst(logic):
+    # vetooff lastUnhide holdUntil request now gapMs
+    # Windows refuses to hide for several reasons (a flashing button, an open
+    # jump list or task-list flyout). The mod overrides the refusal only for
+    # the flashing button: a burst exists, its hold has run out, and the
+    # flashing is still going on.
+    assert logic('vetooff', 0, 0, -1, 5000, 10000) == [0]           # no burst at all
+    assert logic('vetooff', 1000, 2500, 17, 2000, 10000) == [0]     # still inside the hold
+    assert logic('vetooff', 1000, 2500, 17, 3000, 10000) == [1]     # hold over, still flashing
+    assert logic('vetooff', 1000, 2500, 17, 11001, 10000) == [0]    # flashing stopped
