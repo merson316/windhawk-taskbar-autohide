@@ -229,7 +229,7 @@ cp "$SRC" "$WORK/taskbar-autohide-any-edge.wh.cpp"
 # The same mod with its detailed log on, for whoever reports a problem. A
 # version from before the switch existed has no such build.
 ASSETS=("$WORK/taskbar-autohide-any-edge.wh.cpp")
-if grep -q '^// #define TASKBAR_AUTOHIDE_DEBUG$' "$SRC" && [ -f tools/make_debug_build.py ]; then
+if grep -q '^// #define TASKBAR_AUTOHIDE_DEBUG\r\?$' "$SRC" && [ -f tools/make_debug_build.py ]; then
   .venv/bin/python tools/make_debug_build.py "$SRC" "$WORK/taskbar-autohide-any-edge.debug.wh.cpp"
   ASSETS+=("$WORK/taskbar-autohide-any-edge.debug.wh.cpp")
 fi

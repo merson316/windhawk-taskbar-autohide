@@ -19,13 +19,22 @@ def source():
 def test_debug_build_differs_by_one_line():
     a, b = source().split('\n'), debug_source(source()).split('\n')
     assert len(a) == len(b)
-    changed = [(x, y) for x, y in zip(a, b) if x != y]
+    changed = [(x.rstrip('\r'), y.rstrip('\r')) for x, y in zip(a, b) if x != y]
     assert changed == [('// #define TASKBAR_AUTOHIDE_DEBUG', '#define TASKBAR_AUTOHIDE_DEBUG')]
 
 
 def test_shipped_source_has_the_detailed_log_off():
     assert has_switch(source())
-    assert '\n#define TASKBAR_AUTOHIDE_DEBUG\n' not in source()
+    assert '\n#define TASKBAR_AUTOHIDE_DEBUG' not in source()
+
+
+def test_line_endings_do_not_matter():
+    # A checkout on Windows may have CRLF line endings.
+    crlf = source().replace('\r\n', '\n').replace('\n', '\r\n')
+    assert has_switch(crlf)
+    out = debug_source(crlf)
+    assert '\r\n#define TASKBAR_AUTOHIDE_DEBUG\r\n' in out
+    assert out.count('\r\n') == crlf.count('\r\n') and len(out) == len(crlf) - 3
 
 
 def test_a_source_without_the_switch_is_refused():

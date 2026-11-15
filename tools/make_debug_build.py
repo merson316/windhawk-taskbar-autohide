@@ -6,21 +6,25 @@ on. One line differs, and nothing else.
 import os
 import sys
 
-OFF = '// #define TASKBAR_AUTOHIDE_DEBUG\n'
-ON = '#define TASKBAR_AUTOHIDE_DEBUG\n'
+import re
+
+# The switch, on a line of its own, whatever the line ending: a checkout on
+# Windows may have CRLF.
+OFF = re.compile(r'(?m)^// #define TASKBAR_AUTOHIDE_DEBUG(?=\r?$)')
+ON = '#define TASKBAR_AUTOHIDE_DEBUG'
 SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src', 'taskbar-autohide-any-edge.wh.cpp')
 
 
 def has_switch(source):
-    return source.count(OFF) == 1
+    return len(OFF.findall(source)) == 1
 
 
 def debug_source(source):
     """source with the detailed log on. Raises ValueError when the source has
     no switch for it, or more than one."""
     if not has_switch(source):
-        raise ValueError(f'expected exactly one line {OFF.strip()!r}')
-    return source.replace(OFF, ON)
+        raise ValueError("expected exactly one line '// #define TASKBAR_AUTOHIDE_DEBUG'")
+    return OFF.sub(ON, source)
 
 
 def main(argv):
