@@ -2241,6 +2241,16 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
     const bool noMove = (wp->flags & SWP_NOMOVE) != 0;
+    if (noMove && (reqFlags & SWP_NOMOVE) && rec->held) {
+        // Nobody asked for a position: the request arrived without a move
+        // and the taskbar's handler added none (a frame change, a region, a
+        // z-order change). A held taskbar's window stays on its shown rect
+        // while hidden, so where the window is says nothing about what
+        // Windows wants, and reading it as "shown" revealed a taskbar the
+        // moment Windows hid it. (Seen on the bottom edge: the upper display's
+        // taskbar asked to hide, then this 2 ms later, and never hid.)
+        return;
+    }
     const bool noSize = (wp->flags & SWP_NOSIZE) != 0;
     const int w = noSize ? cur.right - cur.left : wp->cx;
     const int h = noSize ? cur.bottom - cur.top : wp->cy;
