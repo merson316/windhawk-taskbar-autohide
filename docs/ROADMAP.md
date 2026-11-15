@@ -68,10 +68,10 @@ and the components around it.
   (`Feature_61970341`) gates both edge tests in `taskbar.dll`. Answering it
   would let Windows decide the hiding off the bottom edge as it does on it,
   and retire the mod's own pointer tracking. Not tried.
-- **One animation path.** On the bottom edge with nothing held, the slide is
-  still Windows' loop, paced through hooks on `Sleep` and `GetTickCount`. The
+- **One animation path.** On the bottom edge with "Hide completely" off and
+  nothing held, the slide is still Windows' loop, paced through hooks on
+  `Sleep` and `GetTickCount`. The
   mod's own animation could take it over in every layout and those two hooks
   could go.
 - **Layouts not yet run through `tools/test-taskbars.ps1`:** displays side by
   side, three or more displays, displays that share only part of an edge.
-- **Hide delay on the bottom edge**, where Windows' timer decides.

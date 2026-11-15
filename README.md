@@ -44,8 +44,9 @@ the masked result — `GetDockedRect` returns the hidden rect only when
   redundant -- run one or the other, since they hook the same function.
 - Keeps the taskbar up while Quick Settings is open, on every edge. On the
   bottom edge Windows alone hides it under the open panel.
-- On the bottom edge with one display, or with displays side by side, leaves
-  the hiding to Windows and only paces its slide.
+- Brings the same to the bottom edge: no line of taskbar left on screen, the
+  hide delay, the reveal dwell and trigger width. Windows still decides there
+  when a taskbar hides; the mod carries it out.
 
 ## Requirements
 
@@ -79,12 +80,12 @@ Compile → Enable.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so there it hides every taskbar completely. On the bottom edge the sliver stays, because Windows reveals from it, except for a taskbar with a display beyond its edge. |
+| Hide completely | on | Windows parks a hidden taskbar with a sliver still on screen so the pointer can find it. On the left, top and right edges that reads as a line along the screen edge. The mod tracks the pointer itself, so it hides every taskbar completely, on every edge. Turn this off to keep Windows' sliver; on the bottom edge, with no display below, that also hands the taskbar back to Windows' own slide. |
 | Leave edges facing another display alone | off | With a display beyond the taskbar's edge there is nowhere to hide into, so the mod keeps the taskbar's window where it is and slides its content out of it. Turn this on to leave such an edge alone instead. The bottom edge is not affected. |
 | Animation frame rate | 90 | The most frames per second for both slides; each taskbar steps at its own display's refresh rate up to this. Higher is smoother and costs more CPU; range 30-240. Disable "Taskbar auto-hide speed" if you have it — both mods pace the same reveal. |
 | Hide animation duration | 0 | How long the taskbar takes to slide out of view. 0 uses 400 ms; range 25-2000. |
 | Reveal animation duration | 0 | 0 keeps the Windows default of 200 ms; range 25-2000. |
-| Hide delay | 0 ms | How long the taskbar stays up after the pointer leaves it, or after Start or a flyout closes, before it hides. The pointer coming back starts the wait again. No effect on the bottom edge, where Windows decides when the taskbar hides. Range 0-10000. |
+| Hide delay | 0 ms | How long the taskbar stays up after the pointer leaves it, or after Start or a flyout closes, before it hides. The pointer coming back starts the wait again. Applies on every edge. Range 0-10000. |
 | Notifications - keep visible for | 1500 ms | How long a notification keeps the taskbar up before it hides again. **0 turns notification handling off.** |
 | Notifications - treat as one within | 10000 ms | Requests closer together than this count as one notification. Only used when the above is not 0. |
 | Reveal dwell | 0 (off) | How long the pointer must rest in the trigger strip before the taskbar appears. Off by default; raise it if the taskbar appears when you were only crossing the edge. A pointer already over the taskbar never waits. |
@@ -145,6 +146,13 @@ Off the bottom edge the mod hides and reveals the secondary taskbars itself, as
 it does the primary. On the bottom edge Windows decides when each taskbar hides
 and the mod carries the movement out.
 
+On the bottom edge, with "Hide completely" on, every taskbar is handled the way
+a held one is, whether or not a display lies below it: the window stays, the
+content slides, nothing is left on screen, and the pointer resting on the
+display's edge brings it back. That is what gives the bottom edge the reveal
+dwell and trigger width. The hide delay there is a refusal: Windows asks the
+taskbar whether it may hide, and the mod says no until the delay has passed.
+
 ### How the animation works
 
 Windows rewrites every requested taskbar position in `WM_WINDOWPOSCHANGING`,
@@ -163,8 +171,9 @@ content invisible. There the mod runs its slide inside that call, which is
 where Windows' own blocking slide loop would have run, so the taskbar is still
 drawn while it moves.
 
-When the mod leaves a bottom-edge taskbar to Windows (one display, or displays
-side by side), the slide is Windows' own loop, and the mod only paces it:
+When the mod leaves a bottom-edge taskbar to Windows ("Hide completely" off
+and no display below it), the slide is Windows' own loop, and the mod only
+paces it:
 `Sleep` and `GetTickCount` are hooked and take effect only on the thread
 currently inside `SlideWindow`, replacing the inter-frame sleep with a frame
 budget and reporting a clock fine enough to separate the frames it buys. This
@@ -182,8 +191,9 @@ In the order these actually turn out to be the cause:
    The mod raises a dialog when auto-hide has stayed off for two minutes.
    (Windows reports it off for about a minute after Explorer starts with the
    taskbar off the bottom edge; that settles by itself.)
-2. **The taskbar is on the bottom edge, with no display below it.** Windows
-   already handles auto-hide there and the mod leaves the hiding to it.
+2. **The taskbar is on the bottom edge, with "Hide completely" off and no
+   display below it.** Windows already handles auto-hide there and the mod
+   leaves it to Windows.
 3. **"Leave edges facing another display alone" is on** and the edge faces
    another display, so that edge behaves as it does with the mod uninstalled.
 
@@ -207,8 +217,9 @@ docked left, Windows auto-hide on -- active
   change of edge and to unhide a secondary taskbar) and on the class of the
   window that draws it. `tools/test-taskbars.ps1` checks those on a running
   taskbar.
-- **On the bottom edge Windows decides when a taskbar hides.** The hide delay
-  setting therefore has no effect there.
+- **On the bottom edge Windows decides when a taskbar hides.** The mod can
+  refuse a hide (for the hide delay, and while Quick Settings is open) but
+  does not start one.
 - **Without symbols for a build, one function may be missing.** A flashing
   button is kept from re-showing a secondary taskbar through
   `CSecondaryTray::_Unhide`. The mod carries its address for the builds in the

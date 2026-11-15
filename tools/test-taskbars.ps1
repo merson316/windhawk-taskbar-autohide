@@ -491,6 +491,12 @@ function Hide-Fully {
     return ($null -eq $v) -or ([int]$v -ne 0)
 }
 
+function Hide-Delay {
+    $v = (Get-ItemProperty 'HKLM:\SOFTWARE\Windhawk\Engine\Mods\local@taskbar-autohide-any-edge\Settings' -ErrorAction SilentlyContinue).hideDelayMs
+    if ($null -eq $v) { return 0 }
+    return [int]$v
+}
+
 function Wanted($name) { -not $Only -or $name -match $Only }
 
 function Guard {
@@ -567,7 +573,11 @@ function Judge-Trace($name, $trace, $from, $to, $homeDpi) {
             if ($peak -lt $half) { $faults += "nothing was drawn to hide (at most $peak px)" }
             else {
                 # Gone from the screen while the window still had most of the way to go.
-                $gone = $trace | Where-Object { $_.Drawn -le 2 -and $_.Showing -gt $dist * 0.6 } | Select-Object -First 1
+                # Only while it slides: once hidden, the window's region can be
+                # off for an instant with the content slid away and nothing
+                # drawn (Windows swapping its own region on the bottom edge).
+                $sliding = @(); foreach ($x in $trace) { if ($x.Showing -le 2) { break }; $sliding += $x }
+                $gone = $sliding | Where-Object { $_.Drawn -le 2 -and $_.Showing -gt $dist * 0.6 } | Select-Object -First 1
                 if ($gone) { $faults += "vanished from the screen with $($gone.Showing) px of window still in view (not a slide)" }
             }
             if ($last.Drawn -gt 4) { $faults += "$($last.Drawn) px still drawn at the end" }
@@ -620,7 +630,7 @@ function Test-Edge($edge, $changed) {
             if (-not $away) { $away = $m }
 
             Park $away
-            $t = [TaskbarDriver]::Trace($b.Hwnd, 0, 2, 400, 6000)
+            $t = [TaskbarDriver]::Trace($b.Hwnd, 0, 2, 400, 6000 + (Hide-Delay))
             Guard
             $start = $t[0].Showing
             if (Wanted "hide") { Judge-Trace "$en/hide/$name (settle)" $t $start 0 $b.HomeDpi }
@@ -642,15 +652,24 @@ function Test-Edge($edge, $changed) {
             }
 
             Park $away
-            $t = [TaskbarDriver]::Trace($b.Hwnd, 0, 2, 400, 6000)
+            $t = [TaskbarDriver]::Trace($b.Hwnd, 0, 2, 400, 6000 + (Hide-Delay))
             Guard
             if (Wanted "hide") {
                 Judge-Trace "$en/hide/$name" $t $t[0].Showing 0 $b.HomeDpi
-                # With the mod and its "Hide completely" setting, off the
-                # bottom edge, no line of taskbar is left along the edge.
-                if ($mod -and $edge -ne 3 -and (Hide-Fully)) {
+                # With the mod and its "Hide completely" setting, no line of
+                # taskbar is left along the edge.
+                if ($mod -and (Hide-Fully)) {
                     $left = $t[$t.Count - 1].Showing
                     Check "$en/hide/$name/no line left" ($left -eq 0) "$left px still in view"
+                }
+                # The mod's "Hide delay": the taskbar stays whole for that
+                # long after the pointer has left it.
+                $delay = Hide-Delay
+                if ($mod -and $delay -gt 0) {
+                    $whole = $t[0].Showing
+                    $began = $t | Where-Object { $_.Showing -lt $whole } | Select-Object -First 1
+                    $at = if ($began) { [int]$began.Ms } else { -1 }
+                    Check "$en/hide/$name/waits the hide delay" ($at -ge $delay - 150 -and $at -le $delay + 2500) "set to $delay ms; began to hide after $at ms"
                 }
             }
         }
@@ -673,7 +692,7 @@ function Test-Edge($edge, $changed) {
         }
         [TaskbarDriver]::Keys([uint16[]]@(0x1B))          # Esc
         if ($canHide) {
-            $t = [TaskbarDriver]::Trace($main.Hwnd, 0, 2, 400, 6000)
+            $t = [TaskbarDriver]::Trace($main.Hwnd, 0, 2, 400, 6000 + (Hide-Delay))
             Judge-Trace "$en/start/hides after" $t $t[0].Showing 0 $main.HomeDpi
         }
     }
@@ -703,7 +722,7 @@ function Test-Edge($edge, $changed) {
         $still = @([TaskbarDriver]::Panels("ControlCenterWindow", [NullString]::Value) | Where-Object { $_.Showing })
         if ($still.Count) { [TaskbarDriver]::Keys([uint16[]]@(0x5B, 0x41)) }
         if ($canHide) {
-            $t = [TaskbarDriver]::Trace($main.Hwnd, 0, 2, 400, 6000)
+            $t = [TaskbarDriver]::Trace($main.Hwnd, 0, 2, 400, 6000 + (Hide-Delay))
             Judge-Trace "$en/quick/hides after" $t $t[0].Showing 0 $main.HomeDpi
         }
     }

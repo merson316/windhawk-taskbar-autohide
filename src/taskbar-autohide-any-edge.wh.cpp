@@ -39,7 +39,9 @@ display and the scaling never changes. This applies on every edge, the bottom
 included. Rest the pointer on the edge of the taskbar's own display for a
 moment to bring it back.
 
-With one display, or displays side by side, the bottom edge is left to Windows.
+On the bottom edge Windows still decides when a taskbar hides and the mod
+carries it out, which brings "Hide completely", "Hide delay" and the reveal
+settings to that edge too.
 
 ## Notification handling
 
@@ -64,8 +66,9 @@ In the order these actually turn out to be the cause:
 - **Auto-hide is not enabled in Windows.** Settings > Personalisation > Taskbar
   > Taskbar behaviours. Windows greys that option out when the taskbar is not
   at the bottom, so set it with the taskbar at the bottom and then move it.
-- **The taskbar is on the bottom edge with no display below it**, where
-  Windows already handles auto-hide. The mod leaves the hiding to it.
+- **The taskbar is on the bottom edge, "Hide completely" is off and no
+  display lies below it**, where Windows already handles auto-hide and the
+  mod leaves it to Windows.
 - **"Leave edges facing another display alone" is on** and the edge faces
   another display.
 
@@ -74,11 +77,9 @@ writes which one applies to the Windhawk log, once per session.
 
 ## Known limitations
 
-- On the bottom edge Windows decides when a taskbar hides, so "Hide delay" has
-  no effect there.
-- Windows parks a hidden taskbar with a sliver still on screen. Off the bottom
-  edge the mod hides every taskbar completely instead, since it does its own
-  pointer tracking; "Hide completely" turns that off.
+- Windows parks a hidden taskbar with a sliver still on screen. The mod hides
+  every taskbar completely instead, since it does its own pointer tracking;
+  "Hide completely" turns that off.
 - Off the bottom edge a revealed taskbar can come up behind another window.
   The mod raises it before the slide starts, except while a full-screen window
   is in front. See "Keep the taskbar above other windows".
@@ -110,10 +111,10 @@ reason instead of failing silently. The taskbar is left alone in that state.
   $name: Hide completely
   $description: >-
     Windows parks a hidden taskbar with a sliver still on screen so the pointer
-    can find it. On the bottom edge nobody notices; on the left, top and right
-    it reads as a line along the screen edge. This mod does its own pointer
-    tracking, so the sliver earns nothing. Turn this off to keep Windows'
-    position.
+    can find it, which reads as a line along the screen edge. This mod does
+    its own pointer tracking, so the sliver earns nothing, on any edge. Turn
+    this off to keep Windows' position; on the bottom edge that also hands a
+    taskbar with no display below it back to Windows' own slide.
 
     Default: on.
 - frameRate: 90
@@ -152,8 +153,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
     The pointer coming back starts the wait again.
 
     This is the wait before the hide begins, not how long the slide takes.
-    It has no effect on the bottom edge, where Windows hides the taskbar
-    itself. Range 0-10000.
+    It applies on every edge. Range 0-10000.
 
     Default: 0.
 - notificationHoldMs: 1500
@@ -1277,6 +1277,8 @@ using CTaskListWnd_PermitAutoHide_t = int(WINAPI*)(void* pThis);
 CTaskListWnd_PermitAutoHide_t CTaskListWnd_PermitAutoHide_Original;
 bool AnyBurstOverridesVeto(LONG64 now);   // with the secondary bursts, below
 
+bool BottomHideDelayElapsed();
+
 int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
     // While Quick Settings is open the taskbar stays up, on every edge. On
     // the bottom edge Windows decides the hiding and, left alone, hides the
@@ -1285,6 +1287,13 @@ int WINAPI CTaskListWnd_PermitAutoHide_Hook(void* pThis) {
     // watcher already holds it; this makes the bottom the same. Refusing here
     // is how Windows itself holds the taskbar for an open jump list.
     if (!g_fatalReason && QuickSettingsOpen()) {
+        return FALSE;
+    }
+
+    // The hide delay, on the bottom edge. Off it the mod decides when a
+    // taskbar hides and waits there; here Windows decides, and asks this
+    // first, so the wait is a refusal until the delay has passed.
+    if (!g_fatalReason && !BottomHideDelayElapsed()) {
         return FALSE;
     }
 
@@ -1701,6 +1710,12 @@ struct TaskbarRec {
     int displayHz;
     UINT edge;
     bool held;         // another display lies past its docked edge
+    // The window stays on its shown position and its content slides inside
+    // it. So for a held taskbar, and for every taskbar on the bottom edge
+    // while "Hide completely" is on: that is what lets the mod hide it
+    // wholly there and reveal it from its own strip, where Windows would
+    // need a sliver of window left on screen.
+    bool inPlace;
     POINT shown;       // top-left when fully shown
     SIZE size;
     int hiddenAsked;   // pixels of thickness Windows last asked to be hidden
@@ -1757,9 +1772,9 @@ TaskbarRec* RecFor(HWND hwnd) {
     return nullptr;
 }
 
-bool AnyHeld() {
+bool AnyInPlace() {
     for (int i = 0; i < g_recCount; i++) {
-        if (g_recs[i].held) {
+        if (g_recs[i].inPlace) {
             return true;
         }
     }
@@ -1844,6 +1859,7 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
                 MoveBarContent(rec, 0, 0);
                 rec->placed = false;
                 rec->held = false;
+        rec->inPlace = false;
                 rec->display = {0, 0, 0, 0};
             }
             return false;
@@ -1860,9 +1876,11 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
         const RECT& m = displays.rect[own];
         const int hz = displays.hz[own];
         const bool held = DisplayBeyond(m, edge, others, nOthers);
+        const bool inPlace =
+            held || (edge == ABE_BOTTOM && g_settings.hideFully);
         const bool changed = !EqualRect(&rec->display, &m) ||
                              rec->displayHz != hz || rec->edge != edge ||
-                             rec->held != held;
+                             rec->held != held || rec->inPlace != inPlace;
 
         if (changed && rec->placed) {
             // The layout moved under a taskbar the mod had placed. Hand the
@@ -1875,6 +1893,7 @@ bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
         rec->displayHz = hz;
         rec->edge = edge;
         rec->held = held;
+        rec->inPlace = inPlace;
         if (!rec->placed) {
             // How far the window is from sitting inside its display: that
             // much of its thickness is hidden, and moving it back gives the
@@ -1920,7 +1939,7 @@ bool BarsHandled() {
         return false;
     }
     const UINT edge = g_recs[0].edge;
-    return edge >= ABE_BOTTOM ? AnyHeld() : EdgeEnabled(edge);
+    return edge >= ABE_BOTTOM ? AnyInPlace() : EdgeEnabled(edge);
 }
 
 UINT g_barTickMsg = 0;
@@ -1945,7 +1964,7 @@ int HiddenTargetFor(const TaskbarRec* rec) {
                               : rec->size.cy;
     return HiddenTarget(thickness,
                         g_settings.hideFully && rec->edge < ABE_BOTTOM,
-                        rec->held);
+                        rec->inPlace);
 }
 
 // Off the bottom edge Windows hides a secondary taskbar only after the pointer
@@ -2064,7 +2083,7 @@ void MoveBar(TaskbarRec* rec, int x, int y) {
 // Put the window and its region where `hiddenPx` hidden pixels call for.
 void ApplyPlacement(TaskbarRec* rec, int hiddenPx) {
     const BarPlacement p =
-        PlaceBar(rec->shown, rec->size, rec->edge, rec->held, hiddenPx);
+        PlaceBar(rec->shown, rec->size, rec->edge, rec->inPlace, hiddenPx);
 
     // Before the move, not after: while it runs the taskbar asks for its own
     // position, and that request is answered from hiddenNow. Left at the
@@ -2375,7 +2394,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
     RECT cur{};
     GetWindowRect(rec->hwnd, &cur);
     const bool noMove = (wp->flags & SWP_NOMOVE) != 0;
-    if (noMove && (reqFlags & SWP_NOMOVE) && rec->held) {
+    if (noMove && (reqFlags & SWP_NOMOVE) && rec->inPlace) {
         // Nobody asked for a position: the request arrived without a move
         // and the taskbar's handler added none (a frame change, a region, a
         // z-order change). A held taskbar's window stays on its shown rect
@@ -2417,6 +2436,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
         MoveBarContent(rec, 0, 0);
         rec->placed = false;
         rec->held = false;
+        rec->inPlace = false;
         rec->display = {0, 0, 0, 0};
         rec->dwellStart = rec->revealSent = 0;
         rec->revealStage = 0;
@@ -2456,7 +2476,7 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY,
 
     // Windows gets the position the animation is at, not the one it asked for.
     const BarPlacement p =
-        PlaceBar(rec->shown, rec->size, rec->edge, rec->held, rec->hiddenNow);
+        PlaceBar(rec->shown, rec->size, rec->edge, rec->inPlace, rec->hiddenNow);
     wp->x = p.x;
     wp->y = p.y;
     if (p.x != cur.left || p.y != cur.top) {
@@ -2618,6 +2638,57 @@ void RevealSecondariesForFlash() {
     }
 }
 
+// The hide delay on the bottom edge. Windows does not say which taskbar it is
+// about to hide, but it is never the one under the pointer, so the delay runs
+// from the last moment something kept up a taskbar the pointer is not on now:
+// the pointer over it, or Start, a flyout or Quick Settings open.
+LONG64 g_bottomSurfaceUp = 0;
+
+void WatchBottomKeepUps() {
+    if (g_recCount == 0 || g_recs[0].edge != ABE_BOTTOM ||
+        g_settings.hideDelayMs <= 0) {
+        return;
+    }
+    POINT pt{};
+    if (!GetCursorPos(&pt)) {
+        return;
+    }
+    const LONG64 now = (LONG64)GetTickCount64();
+    if (PointerOverShellSurface() || ShellSurfaceInForeground() ||
+        QuickSettingsOpen()) {
+        g_bottomSurfaceUp = now;
+    }
+    for (int i = 0; i < g_recCount; i++) {
+        TaskbarRec* rec = &g_recs[i];
+        const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
+                       rec->shown.y + rec->size.cy};
+        if (!IsRectEmpty(&rec->display) && rec->hiddenAsked == 0 &&
+            PtInRect(&bar, pt)) {
+            rec->lastKeptUp = now;
+        }
+    }
+}
+
+bool BottomHideDelayElapsed() {
+    if (g_recCount == 0 || g_recs[0].edge != ABE_BOTTOM ||
+        g_settings.hideDelayMs <= 0) {
+        return true;
+    }
+    POINT pt{};
+    GetCursorPos(&pt);
+    LONG64 last = g_bottomSurfaceUp;
+    for (int i = 0; i < g_recCount; i++) {
+        const TaskbarRec* rec = &g_recs[i];
+        const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
+                       rec->shown.y + rec->size.cy};
+        if (!PtInRect(&bar, pt) && rec->lastKeptUp > last) {
+            last = rec->lastKeptUp;
+        }
+    }
+    return HideDelayElapsed((LONG64)GetTickCount64(), last,
+                            g_settings.hideDelayMs);
+}
+
 // From the watch tick: reveal any held, hidden taskbar whose strip the
 // pointer has rested in.
 void WatchHeldReveals() {
@@ -2633,10 +2704,10 @@ void WatchHeldReveals() {
         if (!rec->placed || rec->hiddenAsked == 0 || !rec->clipped) {
             continue;
         }
-        // The bottom edge only, and only what is held: Windows reveals the
-        // rest there. Off the bottom edge the primary is WatcherTick's and
-        // the secondaries are WatchSecondaries'.
-        if (rec->edge < ABE_BOTTOM || !rec->held) {
+        // The bottom edge only, and only what stays in place: Windows reveals
+        // the rest there. Off the bottom edge the primary is WatcherTick's
+        // and the secondaries are WatchSecondaries'.
+        if (rec->edge < ABE_BOTTOM || !rec->inPlace) {
             continue;
         }
         const RECT bar{rec->shown.x, rec->shown.y, rec->shown.x + rec->size.cx,
@@ -2929,7 +3000,7 @@ void RefreshRecords() {
             if (rec->placed || IsRectEmpty(&rec->display)) {
                 continue;
             }
-            if (rec->held && rec->hiddenNow > 0) {
+            if (rec->inPlace && rec->hiddenNow > 0) {
                 // Parked by Windows, it has the neighbouring display's DPI,
                 // and moving it to the held position alone did not change
                 // that (measured: it stayed at the neighbour's DPI until its
@@ -3062,6 +3133,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         for (int i = 0; i < g_recCount; i++) {
             g_recs[i].display = {0, 0, 0, 0};
             g_recs[i].held = false;
+            g_recs[i].inPlace = false;
         }
         InterlockedExchange(&g_recsStale, 1);
 
@@ -3164,6 +3236,7 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
             MaybeRefreshRecords();
             WatchHeldReveals();
             WatchSecondaries();
+            WatchBottomKeepUps();
         }
         WatcherTick();
         return 0;
