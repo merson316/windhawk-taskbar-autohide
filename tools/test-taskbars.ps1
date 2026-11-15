@@ -827,7 +827,7 @@ function Test-Restart($edge) {
     Check "$en/restart/Explorer and the mod are back" ($took -ge 0) "after $took ms"
     if ($took -lt 0) { return }
     Start-Sleep -Milliseconds 3000
-    Check-Hides-And-Returns "$en/restart" $edge 120000
+    Check-Hides-And-Returns "$en/restart" $edge $(if ($env:HARNESS_RESTART_WAIT) { [int]$env:HARNESS_RESTART_WAIT } else { 120000 })
 }
 
 # A flashing button, for about 15 s. Counts how often each taskbar comes up

@@ -2097,16 +2097,6 @@ HWND BarContent(TaskbarRec* rec) {
         rec->content = FindWindowExW(
             rec->hwnd, nullptr,
             L"Windows.UI.Composition.DesktopWindowContentBridge", nullptr);
-        static bool warned = false;
-        if (!rec->content && !warned) {
-            // A build that names this window otherwise. A held taskbar then
-            // still hides, behind its region, but is wiped away where it
-            // stands, not slid.
-            warned = true;
-            Wh_Log(L"taskbar %p has no content window of the class the mod "
-                   L"knows: a held taskbar will wipe, not slide",
-                   rec->hwnd);
-        }
     }
     return rec->content;
 }
@@ -3112,11 +3102,83 @@ void RefreshRecords() {
     }
 }
 
+// Once a second: is every taskbar the mod keeps in place still as the mod
+// left it? Two things change it behind the mod's back. Windows sets a region
+// of its own on a taskbar, and while Explorer starts it does so after the mod
+// has taken the taskbar over, when the message that would put the mod's
+// region back has nowhere to go yet. And the content window does not exist in
+// those first moments, so it was never slid. Either way the taskbar stood on
+// screen, empty, while both Windows and the mod had it down as hidden (seen
+// after restarting Explorer with the primary on the top or right edge beside
+// another display).
+void VerifyPlacements() {
+    if (!BarsHandled()) {
+        return;
+    }
+    static ULONGLONG contentMissingSince = 0;
+    static bool warned = false;
+    for (int i = 0; i < g_recCount; i++) {
+        TaskbarRec* rec = &g_recs[i];
+        if (!rec->placed || !rec->inPlace || rec->animating ||
+            IsRectEmpty(&rec->display)) {
+            continue;
+        }
+        const BarPlacement want = PlaceBar(rec->shown, rec->size, rec->edge,
+                                           true, rec->hiddenNow);
+        RECT box{};
+        const int kind = GetWindowRgnBox(rec->hwnd, &box);
+        const bool regionRight =
+            want.clipped ? (kind == NULLREGION
+                                ? IsRectEmpty(&want.region)
+                                : kind != ERROR && EqualRect(&box, &want.region))
+                         : kind == ERROR;
+
+        bool contentRight = true;
+        if (HWND content = BarContent(rec)) {
+            RECT bar{}, c{};
+            GetWindowRect(rec->hwnd, &bar);
+            GetWindowRect(content, &c);
+            contentRight = c.left - bar.left == want.contentDx &&
+                           c.top - bar.top == want.contentDy;
+            contentMissingSince = 0;
+        } else if (!warned) {
+            const ULONGLONG now = GetTickCount64();
+            if (!contentMissingSince) {
+                contentMissingSince = now;
+            } else if (now - contentMissingSince > 15000) {
+                // A build that names this window otherwise. A taskbar kept in
+                // place then still hides, behind its region, but is wiped
+                // away where it stands, not slid.
+                warned = true;
+                Wh_Log(L"taskbar %p has no content window of the class the "
+                       L"mod knows: a taskbar kept in place will wipe, not "
+                       L"slide",
+                       rec->hwnd);
+            }
+        }
+
+        if (regionRight && contentRight) {
+            continue;
+        }
+        DLog(L"taskbar %p was not as the mod left it (region %s, content "
+             L"%s): putting it back at %d px hidden",
+             rec->hwnd, regionRight ? L"right" : L"changed",
+             contentRight ? L"right" : L"moved", rec->hiddenNow);
+        // Unknown now, so the placement sets or removes each.
+        rec->clipped = true;
+        rec->region = {-1, -1, -1, -1};
+        rec->contentMoved = true;
+        rec->contentDx = rec->contentDy = -1;
+        ApplyPlacement(rec, rec->hiddenNow);
+    }
+}
+
 void MaybeRefreshRecords() {
     const ULONGLONG now = GetTickCount64();
     if (InterlockedExchange(&g_recsStale, 0) || now - g_recsRefreshed >= 1000) {
         g_recsRefreshed = now;
         RefreshRecords();
+        VerifyPlacements();
     }
 }
 
