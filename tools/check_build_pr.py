@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from matcher import HOOKED
+from matcher import row_values
 from matcher.apply import apply_entry, known_builds  # noqa: E402
 
 SRC = 'src/taskbar-autohide-any-edge.wh.cpp'
@@ -96,7 +96,7 @@ def _canonical_entry(b):
     fields only, so nothing else on the entry's lines is ever trusted."""
     k = b['pdb_key']
     d4 = ', '.join(f'0x{int(k[i:i + 2], 16):02X}' for i in range(16, 32, 2))
-    values = ', '.join(f'0x{b[f]:X}' for f in HOOKED)
+    values = row_values(b)
     return (f'    {{L"{b["version"]}",\n'
             f'     {{0x{int(k[:8], 16):08X}, 0x{int(k[8:12], 16):04X}, 0x{int(k[12:16], 16):04X}, {{{d4}}}}},\n'
             f'     {int(k[32:], 16)}, {values}}},\n')

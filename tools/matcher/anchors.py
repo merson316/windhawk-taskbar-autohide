@@ -95,3 +95,9 @@ def slide_window(pe):
 def permit_auto_hide(pe):
     return sorted(set(_starts(pe, find_bytes(pe, PERMIT_FIELDS))) &
                   set(_starts(pe, find_bytes(pe, PERMIT_LIST))))
+
+
+def secondary_tray_unhide(pe):
+    """CSecondaryTray::_Unhide logs under the same name as TrayUI::Unhide, so
+    both refer to that string; match.py tells them apart."""
+    return string_referrers(pe, 'AutoHideOnTaskbarShow')

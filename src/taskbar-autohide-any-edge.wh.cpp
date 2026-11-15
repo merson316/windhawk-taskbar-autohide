@@ -2557,10 +2557,11 @@ void UnhideThroughWindows(HWND secondary);
 
 // A flashing button has just brought the primary taskbar up. Off the bottom
 // edge the mod shows and hides the secondary taskbars itself, and it hears of
-// a flash on one of them only through CSecondaryTray::_Unhide, which cannot be
-// hooked on a build without symbols: there, a flash left them hidden. So the
-// primary's flash brings them up as well, once, and the mod hides them again
-// as it hides any secondary nothing keeps up.
+// a flash on one of them only through CSecondaryTray::_Unhide. That function
+// is not hooked on a build with neither symbols nor a built-in address for
+// it: there, a flash left them hidden. So the primary's flash brings them up
+// as well, once, and the mod hides them again as it hides any secondary
+// nothing keeps up.
 void RevealSecondariesForFlash() {
     if (CSecondaryTray_Unhide_Original || !BarsHandled()) {
         return;
@@ -2635,8 +2636,9 @@ void WatchHeldReveals() {
 // flags 0, so this one function sees every request once. The same burst rule
 // applies, with a burst per taskbar.
 //
-// Hooked from symbols only. On a build whose symbols Microsoft has not
-// published it is left alone, and secondary taskbars keep Windows' behaviour.
+// Hooked from symbols, or at the address kKnownBuilds has for the build. On a
+// build with neither it is left alone, and secondary taskbars keep Windows'
+// behaviour.
 
 struct SecondaryBurst {
     void* tray;
@@ -3550,6 +3552,10 @@ struct KnownBuild {
     DWORD unhide;
     DWORD slideWindow;
     DWORD permitAutoHide;
+    // Optional: CSecondaryTray::_Unhide. 0, which a row that stops before it
+    // is filled with, where it was not matched with the certainty the others
+    // were.
+    DWORD secondaryTrayUnhide;
 };
 
 const KnownBuild kKnownBuilds[] = {
@@ -3567,7 +3573,7 @@ const KnownBuild kKnownBuilds[] = {
     // Matched against 10.0.26100.9974 by tools/match-build.py.
     {L"10.0.26100.10066",
      {0x16BF9C30, 0x8191, 0xA000, {0x05, 0xC1, 0x90, 0x39, 0xE9, 0x6A, 0x9D, 0xF7}},
-     1, 0x27F20, 0x45020, 0xB0810, 0x44F80, 0x1A2B0, 0xB08B0, 0x7F5D0},
+     1, 0x27F20, 0x45020, 0xB0810, 0x44F80, 0x1A2B0, 0xB08B0, 0x7F5D0, 0x15BBCC},
 };
 
 const KnownBuild* FindKnownBuild(HMODULE module) {
@@ -3587,7 +3593,9 @@ const KnownBuild* FindKnownBuild(HMODULE module) {
 // any of them, check each one lands where the matcher said it would: a
 // function start in the unwind table, or for GetStuckPlace, a leaf with no
 // unwind data, its exact body. A wrong entry then fails with a message instead
-// of patching the middle of a function and taking Explorer down with it.
+// of patching the middle of a function and taking Explorer down with it. The
+// optional address is held to the same check when the entry gives one: an
+// entry with any address wrong is not trusted for the others.
 bool KnownBuildLooksRight(HMODULE taskbar, const KnownBuild& b) {
     const BYTE* base = (const BYTE*)taskbar;
     auto* nt = (const IMAGE_NT_HEADERS*)(base + ((const IMAGE_DOS_HEADER*)base)->e_lfanew);
@@ -3609,17 +3617,20 @@ bool KnownBuildLooksRight(HMODULE taskbar, const KnownBuild& b) {
     const DWORD starts[] = {b.getAutoHideFlags, b.setAutoHideFlags,
                             b.getDockedRect,    b.unhide,
                             b.slideWindow,      b.permitAutoHide};
-    for (DWORD rva : starts) {
+    auto isFunctionStart = [base, size](DWORD rva) {
         DWORD64 imageBase = 0;
         PRUNTIME_FUNCTION fn =
             rva < size ? RtlLookupFunctionEntry((DWORD64)(base + rva),
                                                 &imageBase, nullptr)
                        : nullptr;
-        if (!fn || imageBase != (DWORD64)base || fn->BeginAddress != rva) {
+        return fn && imageBase == (DWORD64)base && fn->BeginAddress == rva;
+    };
+    for (DWORD rva : starts) {
+        if (!isFunctionStart(rva)) {
             return false;
         }
     }
-    return true;
+    return !b.secondaryTrayUnhide || isFunctionStart(b.secondaryTrayUnhide);
 }
 
 // The same hooks HookSymbols would set, at the tabled addresses.
@@ -3764,20 +3775,39 @@ PCWSTR SetUpHooks() {
                L"mod.";
     }
 
-    // Optional, and from symbols only: it is not in kKnownBuilds. Without it
-    // the rest of the mod works, and a flashing button shows secondary
+    // Optional: from symbols, or from kKnownBuilds where the entry has its
+    // address (KnownBuildLooksRight has checked it with the others). Without
+    // it the rest of the mod works, and a flashing button shows secondary
     // taskbars as Windows itself would.
     WindhawkUtils::SYMBOL_HOOK secondaryHooks[] = {
         {{LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
           LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
          &CSecondaryTray_Unhide_Original, CSecondaryTray_Unhide_Hook, true},
     };
-    if (known ||
-        !WindhawkUtils::HookSymbols(taskbar, secondaryHooks,
-                                    ARRAYSIZE(secondaryHooks)) ||
-        !CSecondaryTray_Unhide_Original) {
+    bool secondaryHooked;
+    if (known) {
+        secondaryHooked =
+            known->secondaryTrayUnhide &&
+            WindhawkUtils::SetFunctionHook(
+                (CSecondaryTray_Unhide_t)((BYTE*)taskbar +
+                                          known->secondaryTrayUnhide),
+                CSecondaryTray_Unhide_Hook, &CSecondaryTray_Unhide_Original);
+    } else {
+        secondaryHooked = WindhawkUtils::HookSymbols(
+            taskbar, secondaryHooks, ARRAYSIZE(secondaryHooks));
+    }
+    if (!secondaryHooked || !CSecondaryTray_Unhide_Original) {
+        // RevealSecondariesForFlash stands in when this pointer is null.
+        CSecondaryTray_Unhide_Original = nullptr;
         Wh_Log(L"secondary taskbars: notification handling unavailable on "
-               L"this build");
+               L"this build%s",
+               known && !known->secondaryTrayUnhide
+                   ? L" (no built-in address for it)"
+                   : L"");
+    } else if (known) {
+        Wh_Log(L"secondary taskbars: notification handling uses the built-in "
+               L"address for taskbar.dll %s",
+               known->version);
     }
 
     // Every one of these is load-bearing: running with any missing would change

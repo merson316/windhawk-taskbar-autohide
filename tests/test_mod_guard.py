@@ -12,7 +12,7 @@ SRC = os.path.join(REPO, 'src/taskbar-autohide-any-edge.wh.cpp')
 WINDHAWK = os.environ.get('WINDHAWK_DIR', '/mnt/c/Program Files/Windhawk')
 CLANG = os.path.join(WINDHAWK, 'Compiler/bin/clang++.exe')
 FIELDS = ['getStuckPlace', 'getAutoHideFlags', 'setAutoHideFlags', 'getDockedRect',
-          'unhide', 'slideWindow', 'permitAutoHide']
+          'unhide', 'slideWindow', 'permitAutoHide', 'secondaryTrayUnhide']
 
 HARNESS = r'''
 #include <windows.h>
@@ -22,7 +22,17 @@ HARNESS = r'''
 int main(int argc, char** argv) {
     HMODULE m = LoadLibraryExA(argv[1], nullptr, DONT_RESOLVE_DLL_REFERENCES);
     if (!m) return 2;
+    // The entry for the version named in argv[2]; the first one if none is.
     KnownBuild b = kKnownBuilds[0];
+    if (argc > 2) {
+        bool found = false;
+        for (const KnownBuild& k : kKnownBuilds) {
+            char version[64];
+            WideCharToMultiByte(CP_ACP, 0, k.version, -1, version, sizeof(version), nullptr, nullptr);
+            if (!lstrcmpA(argv[2], version)) { b = k; found = true; }
+        }
+        if (!found) return 3;
+    }
     printf("table %%d\n", KnownBuildLooksRight(m, b));
     DWORD KnownBuild::*fields[] = {%s};
     for (int i = 0; i < %d; i++) {
@@ -33,6 +43,10 @@ int main(int argc, char** argv) {
     KnownBuild outside = b;
     outside.getStuckPlace = 0x7FFFFFF0;
     printf("outside %%d\n", KnownBuildLooksRight(m, outside));
+    KnownBuild without = b;
+    without.secondaryTrayUnhide = 0;
+    printf("without optional %%d\n", KnownBuildLooksRight(m, without));
+    printf("optional 0x%%lX\n", (unsigned long)b.secondaryTrayUnhide);
     return 0;
 }
 '''
@@ -86,4 +100,17 @@ def test_table_addresses_pass_and_any_moved_one_fails(harness, dll_9807):
     out = p.stdout.splitlines()
     assert out[0] == 'table 1'
     assert out[1:1 + len(FIELDS)] == [f'moved {i} 0' for i in range(len(FIELDS))]
-    assert out[-1] == 'outside 0'
+    assert out[1 + len(FIELDS)] == 'outside 0'
+    # 9807's entry has no optional address: 0 passes, anything else is checked.
+    assert out[-2:] == ['without optional 1', 'optional 0x0']
+
+
+def test_optional_address_is_checked_like_the_others(harness, dll_10066):
+    p = harness(dll_10066, '10.0.26100.10066')
+    assert p.returncode == 0, p.stderr
+    out = p.stdout.splitlines()
+    assert out[0] == 'table 1'
+    # Every address moved off its function start fails the entry, the optional
+    # one included; an entry without the optional address still passes.
+    assert out[1:1 + len(FIELDS)] == [f'moved {i} 0' for i in range(len(FIELDS))]
+    assert out[-2:] == ['without optional 1', 'optional 0x15BBCC']

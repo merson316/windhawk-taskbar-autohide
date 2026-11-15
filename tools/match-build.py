@@ -6,7 +6,9 @@ not published, by matching against an older build that has a PDB.
   tools/match-build.py --new DLL --auto-ref
 
 Exit 0 with the evidence table on a match; exit 2, with the reason on stderr,
-when any function cannot be matched with certainty."""
+when any required function cannot be matched with certainty. An optional
+function that cannot be matched is recorded as absent (0) and does not fail
+the build."""
 import argparse
 import json
 import os
@@ -14,7 +16,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from matcher import HOOKED  # noqa: E402
+from matcher import FIELDS, reference_rvas  # noqa: E402
 from matcher.match import evidence_table, format_entry, match_build  # noqa: E402
 from matcher.pdb import publics  # noqa: E402
 from matcher.pe import PE  # noqa: E402
@@ -39,12 +41,12 @@ def main():
     else:
         ap.error('give --ref and --ref-pdb, or --auto-ref')
 
-    found = publics(ref_pdb, list(HOOKED.values()))
-    missing = [f for f, n in HOOKED.items() if n not in found]
-    if missing:
-        print(f'reference PDB lacks {", ".join(missing)}', file=sys.stderr)
+    try:
+        ref_rvas = reference_rvas(publics(ref_pdb, list(FIELDS.values())))
+    except LookupError as e:
+        print(f'reference {e}', file=sys.stderr)
         return 2
-    result = match_build(new, ref, {f: found[n] for f, n in HOOKED.items()})
+    result = match_build(new, ref, ref_rvas)
 
     print(f'new {new.file_version()} ({new.pdb_key()}), reference {ref.file_version()} ({ref.pdb_key()})')
     print(evidence_table(result))

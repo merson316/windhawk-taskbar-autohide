@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # autorelease imports this module by name: let it find this copy when run as a script.
 sys.modules.setdefault('watch_build', sys.modules[__name__])
 
-from matcher import HOOKED, reference  # noqa: E402
+from matcher import FIELDS, reference, reference_rvas  # noqa: E402
 from matcher.apply import apply_entry, known_builds  # noqa: E402
 from matcher.buildcheck import accepted_layouts, check_build  # noqa: E402
 from matcher.match import evidence_table, format_entry, match_build  # noqa: E402
@@ -268,11 +268,11 @@ def check(pe, staged, known, layouts, dry_run):
         return 0, None
 
     ref, ref_pdb = auto_reference(pe)
-    found = publics(ref_pdb, list(HOOKED.values()))
-    missing = [f for f, n in HOOKED.items() if n not in found]
-    if missing:
-        raise RuntimeError(f'reference {ref.file_version()} PDB lacks {", ".join(missing)}')
-    result = match_build(pe, ref, {f: found[n] for f, n in HOOKED.items()})
+    try:
+        ref_rvas = reference_rvas(publics(ref_pdb, list(FIELDS.values())))
+    except LookupError as e:
+        raise RuntimeError(f'reference {ref.file_version()} {e}')
+    result = match_build(pe, ref, ref_rvas)
     evidence = evidence_table(result)
     print(f'new {version}, reference {ref.file_version()}\n{evidence}')
     if result.rvas is None:

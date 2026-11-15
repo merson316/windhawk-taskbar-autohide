@@ -7,11 +7,14 @@ rewrites a function, and then nothing is close. For TrayUI's virtual functions
 there is a second way: the function keeps its vtable slot, so a candidate that
 sits in the reference function's slot, measured from at least two functions
 already matched the strict way, and still calls the same imports, is accepted
-as that function."""
+as that function.
+
+A function in OPTIONAL is held to the strict way only. When it is not matched
+the build is still accepted, with that function recorded as absent (0)."""
 import struct
 from dataclasses import dataclass, field
 
-from . import HOOKED, anchors
+from . import FIELDS, HOOKED, OPTIONAL, anchors, row_values
 from .code import Function, similarity
 
 EXACT = 0.999   # getStuckPlace: an 18-byte leaf that must not change at all
@@ -96,7 +99,7 @@ def same_slot(new, ref, cand, ref_rva, pairs):
 def match_build(new, ref, ref_rvas):
     found, rows, turned_down = {}, [], {}
     order = ['getAutoHideFlags', 'getStuckPlace', 'setAutoHideFlags', 'unhide',
-             'getDockedRect', 'slideWindow', 'permitAutoHide']
+             'getDockedRect', 'slideWindow', 'permitAutoHide', 'secondaryTrayUnhide']
     sources = {
         'getAutoHideFlags': ('ScanForOffsets shape', lambda: anchors.get_auto_hide_flags(new)),
         'getStuckPlace': ('exact bytes', lambda: anchors.get_stuck_place(new)),
@@ -105,9 +108,13 @@ def match_build(new, ref, ref_rvas):
         'getDockedRect': ('calls getAutoHideFlags', lambda: anchors.callers(new, found['getAutoHideFlags'])),
         'slideWindow': ('duration loads', lambda: anchors.slide_window(new)),
         'permitAutoHide': ('member-offset pattern', lambda: anchors.permit_auto_hide(new)),
+        'secondaryTrayUnhide': ('"AutoHideOnTaskbarShow"', lambda: anchors.secondary_tray_unhide(new)),
     }
     for name in order:
         anchor, find = sources[name]
+        if name in OPTIONAL and name not in ref_rvas:
+            rows.append(Row(name, anchor, [], verdict='not in the reference'))
+            continue
         if name == 'getDockedRect' and 'getAutoHideFlags' not in found:
             rows.append(Row(name, anchor, [], verdict='needs getAutoHideFlags'))
             continue
@@ -153,10 +160,18 @@ def match_build(new, ref, ref_rvas):
             row.rva, row.size, row.similarity, row.imports_equal, row.offsets_equal = c, fn.size, sim, imp, off
             row.verdict = 'ok (vtable slot)'
             found[row.field] = c
-    failed = [r for r in rows if r.field not in found]
+    for row in rows:
+        if row.field not in OPTIONAL:
+            continue
+        if row.field in found and any(found[row.field] == found.get(f) for f in HOOKED):
+            del found[row.field]
+            row.verdict = 'is also a required function'
+        if row.field not in found:
+            row.verdict = f'absent: {row.verdict}'
+    failed = [r for r in rows if r.field in HOOKED and r.field not in found]
     if failed:
         return MatchResult(None, rows, '; '.join(f'{r.field}: {r.verdict}' for r in failed))
-    return MatchResult({f: found[f] for f in HOOKED}, rows)
+    return MatchResult({f: found.get(f, 0) if f in OPTIONAL else found[f] for f in FIELDS}, rows)
 
 
 def _version(pe):
@@ -174,7 +189,7 @@ def pick_reference(new, candidates):
 def format_entry(new, rvas):
     guid, age = new.codeview()
     d4 = ', '.join(f'0x{b:02X}' for b in guid.bytes[8:])
-    values = ', '.join(f'0x{rvas[f]:X}' for f in HOOKED)
+    values = row_values(rvas)
     return (f'    {{L"{new.file_version()}",\n'
             f'     {{0x{guid.time_low:08X}, 0x{guid.time_mid:04X}, 0x{guid.time_hi_version:04X}, {{{d4}}}}},\n'
             f'     {age}, {values}}},\n')

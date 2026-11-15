@@ -1,4 +1,4 @@
-Windows installed taskbar.dll **{version}**, and Microsoft has not published its symbols. `tools/match-build.py` matched the mod's seven functions against **{reference}**:
+Windows installed taskbar.dll **{version}**, and Microsoft has not published its symbols. `tools/match-build.py` matched the mod's seven required functions, and where it could the optional one, against **{reference}**:
 
 {evidence}
 
