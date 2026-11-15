@@ -2782,7 +2782,43 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
         return TickBars();
     }
 
-    if (!g_fatalReason &&
+    // While the edge is changing, and for the moment after, record what
+    // reaches the tray: what Windows asks of the window and what state it
+    // holds. This is how an edge change that goes wrong gets explained.
+    if (g_trayUI && g_offsetsVerified &&
+        (uMsg == WM_WINDOWPOSCHANGING || uMsg == WM_SIZE || uMsg == 0x553 ||
+         uMsg == TRAY_MSG_PRIVATE_SETTING ||
+         uMsg == TRAY_MSG_REMOTE_SETTINGS) &&
+        (EdgeChangeInProgress() || uMsg == TRAY_MSG_PRIVATE_SETTING ||
+         uMsg == TRAY_MSG_REMOTE_SETTINGS)) {
+        RECT cur{};
+        GetWindowRect(hWnd, &cur);
+        const UINT edge = *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+        const UINT stored = *(UINT*)((BYTE*)g_trayUI + g_trayUiFlagsOffset);
+        if (uMsg == WM_WINDOWPOSCHANGING && lParam) {
+            const WINDOWPOS* wp = (const WINDOWPOS*)lParam;
+            Wh_Log(L"edge change: Windows asks (%d,%d) %dx%d flags %#x; "
+                   L"window (%d,%d,%d,%d), edge %u, flags %#x",
+                   wp->x, wp->y, wp->cx, wp->cy, wp->flags, cur.left, cur.top,
+                   cur.right, cur.bottom, edge, stored);
+        } else {
+            Wh_Log(L"edge change: message %#x (%#llx, %#llx); window "
+                   L"(%d,%d,%d,%d), edge %u, flags %#x",
+                   uMsg, (unsigned long long)wParam,
+                   (unsigned long long)lParam, cur.left, cur.top, cur.right,
+                   cur.bottom, edge, stored);
+        }
+    }
+
+    // A request for the edge the taskbar is already on changes nothing in
+    // Windows (SetStuckPlace returns early), and every process with the
+    // Settings handler loaded repeats the request, so one edge change arrives
+    // more than once. Only the first is an edge change.
+    const bool sameEdge =
+        uMsg == TRAY_MSG_PRIVATE_SETTING && g_trayUI && g_offsetsVerified &&
+        (UINT)lParam == *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+
+    if (!g_fatalReason && !sameEdge &&
         ((uMsg == TRAY_MSG_PRIVATE_SETTING &&
           wParam == TRAY_SETTING_STUCK_PLACE) ||
          uMsg == TRAY_MSG_REMOTE_SETTINGS)) {

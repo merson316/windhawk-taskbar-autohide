@@ -638,3 +638,146 @@ Inferred, not observed:
   window; its caller was not read.
 - That nothing else moves the child. Only the two classes named were read.
   The XAML island code in `Windows.UI.Xaml.dll` was not read.
+
+## Q6. Edge change left to bottom that reverts to left (10066, mod d4dc21c)
+
+Read in `taskbar.dll` 9974 with symbols. The 10066 functions were compared
+instruction by instruction after address normalisation and are identical:
+handler 0x1008CC, `SetStuckPlace` 0xFD210 (9974 0x100220),
+`_HandleWindowPosChanging` 0x44D54 (9974 0x41CA4), `_HandleSize` 0xA6454
+(9974 0xAA594). Offsets below are from base 0 (`+0x140` edge, `+0x14C`
+moving edge, `+0xF0` in-size-move, `+0x6C` flags).
+
+### 1. What can set the edge to a value other than the one requested
+
+Observed. The complete list of writes to `+0x140` in `TrayUI`:
+
+| Writer | Value | When |
+|---|---|---|
+| `SetStuckPlace` 0x10029F | the requested edge | only when it differs from `+0x140` (`cmp`, `je` at 0x100268) |
+| `_HandleWindowPosChanging` 0x41E66 | `_RecalcStuckPos(rect)` | only while `+0xF0` is not 0. The rect is the one in the `WINDOWPOS`; with `SWP_NOMOVE` or `SWP_NOSIZE` the missing part comes from the current window rect |
+| `_HandleSize` 0xAA621 | `_RecalcStuckPos(NULL)`, which uses `GetWindowRect` of the taskbar | on `WM_SIZE`, only while `+0xF0` is not 0 and `(GetAutoHideFlags() & 3) != 3` |
+| `_DoneMoving` 0xD8E28, 0xD8F0D | the moving edge `+0x14C` | only when `+0x14C` is not -1. It is set by `_HandleMoving` on `WM_MOVING` |
+| `_GetSaveStateAndInitRects` | from the registry | once, at window creation |
+
+- `+0xF0` is written in one function only: `SetStuckPlace` sets it to 1
+  before its `SetWindowPos(hwnd, 0, stuck rect of the new edge, 0x214)` and
+  to 0 after (0x100303, 0x10036D). It also calls `SetInSizeMove` (0x100060),
+  which forwards to host slot 0x1C0.
+- `_RecalcStuckPos` (0x103A00) takes the centre of the rect, sets `+0x14C`
+  to -1 and returns `_CalcDragPlace(centre)` (0x1024B8). That function picks
+  the display under the point and the nearest edge of it by the diagonals.
+  A rect on the left stuck rect gives edge 0.
+- So the edge is recomputed from geometry twice inside `SetStuckPlace`:
+  from the requested rect in `WM_WINDOWPOSCHANGING`, and from the window's
+  real rect in `WM_SIZE`. If the window is on the left rect when that
+  `WM_SIZE` runs, the edge becomes 0 again. Nothing outside
+  `SetStuckPlace`'s `SetWindowPos` can do this.
+- When the request equals the current edge: the handler returns early
+  (only `NotifySettingsChanged`, slot 0x3E0) unless
+  `GetMultiMonTaskbarState()` is not 0. If it continues, `SetStuckPlace`
+  itself skips everything except `SendMessage(0x45D)` (0x100268 to
+  0x10038E). No `SetWindowPos`, no `+0xF0`, no write to the edge.
+
+### 2. Who sends the second message
+
+Observed in `SettingsHandlers_DesktopTaskbar.dll` (9818):
+
+- `DesktopTaskbarSettingsSingleton::Location(mode)` (0x37B90) stores the
+  value in its own cache (`+0x3C8`, valid flag `+0x3CC`), writes
+  `TaskbarLocation` and sends `0x5CA, 6, mode`.
+- `ExplorerAdvancedKeyChanged` (0x3435C) runs on a change of the `Advanced`
+  key. `UpdateLocationFromRegistry` (0x3B848) compares the registry value
+  with that cache and reports a change only when they differ. Then it sends
+  `0x5CA, 6, value` again.
+- The cache is per singleton, so per process. The process that set the
+  value does not send twice. Any other process that has this DLL loaded
+  sees a difference and sends the second message.
+
+So a second `0x5CA, 6, 3` about 200 ms later is normal and does not need the
+mod.
+
+### 3. What depends on the flags, and the difference between 3 and 1
+
+Observed, for the first message with stored flags 3 and the mod passing
+`GetAutoHideFlags` through:
+
+1. On the left edge Windows' `GetAutoHideFlags` answers 0 (the
+   `Feature_61970341` mask). The handler's test `(flags & 3) == 3` is false,
+   so it does not call `SetAutoHideState(0)` first.
+2. `SetStuckPlace(3)` stores edge 3. From this instruction on the mask no
+   longer applies, and Windows reads the stored 3.
+3. In `WM_WINDOWPOSCHANGING` the edge is recomputed from the requested
+   bottom rect (3). `GetDockedRect` then returns `_ComputeHiddenRect` for
+   the bottom edge, because the flags are 3, and the request is overwritten
+   with that hidden rect (0x41DD6). The window is moved below the display,
+   not onto the bottom stuck rect.
+4. In `WM_SIZE`, `_HandleSize` skips its recompute because the flags are 3.
+5. Back in the handler, `Unhide(0, 7)` acts only if `+0x55` is not 0. If it
+   acts: flags 1, `_UnhideNow`, `SlideWindow` to the bottom stuck rect, hide
+   timer started.
+
+With stored flags 1 instead: step 3 docks the window on the bottom stuck
+rect, step 4 recomputes the edge from the real window rect, step 5 changes
+nothing. That is the path Windows takes for a shown auto-hide taskbar.
+
+Nothing in the sequence forces `SWP_NOMOVE` in this case; the rects differ.
+The auto-hide bar registration (host slot 0x78) is not moved to the new
+edge on this path, because `SetAutoHideState` is not called.
+
+### 4. The mod's own code in build d4dc21c
+
+Observed in the source:
+
+- `TrayWatchProc` on `0x5CA`/6: `ReleaseAllBars`, clear `display` and
+  `held`, set `g_inEdgeChange`, `DefSubclassProc`, set the 2500 ms settle
+  time, clear `g_inEdgeChange`.
+- `EdgeChangeInProgress()` is true for both messages and for the posted
+  `0x5C3`. In that state: `TrayUI_GetAutoHideFlags_Hook` returns the
+  original value, `TrayUI_Unhide_Hook` and `TrayUI_SlideWindow_Hook` call
+  the original, and `BarsHandled()` is false, so `BarPosChanging` is not
+  called and the `WINDOWPOS` is left as Windows wrote it.
+- `BarPosChanging` runs after `DefSubclassProc`, so even when active it
+  cannot change the rect that `_HandleWindowPosChanging` uses for the
+  recompute. It can change where the window ends up, which is what
+  `_HandleSize` reads.
+- `ReleaseBar` returns early when `rec->placed` is false. The first release
+  clears it, so at the second message the mod does not move the window.
+
+So in this build the hooks do not alter what Windows asks during either
+message. What the mod contributes is the state it left: stored flags 3 on an
+edge where Windows normally keeps them at 0 or 1.
+
+### 5. Conclusion
+
+- The code explains the first message completely, and shows that with
+  flags 3 it takes a path Windows does not take by itself (item 3).
+- The code does not explain the second message. With edge 3 at entry, no
+  instruction in the handler or in what it calls can write the edge. For
+  the edge to become 0 there, `SetStuckPlace`'s `SetWindowPos` must have run
+  with the window on the left rect during `WM_SIZE` and flags other than 3,
+  or the edge was no longer 3 when the second message arrived. Neither was
+  observed.
+- The HEAD change (call `Unhide(3, 7)` before forwarding) is supported by
+  the code for what it is meant to do. Called while the mod's
+  `GetAutoHideFlags` hook still answers the stored flags, `Unhide` sees 3,
+  stores 1 and shows the taskbar without animation and without starting
+  the hide timer. The edge change then runs as in the flags 1 case. It
+  needs `+0x55` to be non-zero, which was not read.
+- A second message with the same edge is normal. The bracket can skip its
+  release work when `lParam` equals the current edge.
+
+Inferred, not observed:
+
+- That the hidden-rect path of item 3 is the cause of the revert. It is the
+  only difference from Windows' own sequence that the code shows, so it is
+  the most likely cause; confidence low to medium.
+- What wrote edge 0. To settle it, log in the subclass during both
+  messages and for 2500 ms after: every `WM_WINDOWPOSCHANGING` and
+  `WM_SIZE` with the `WINDOWPOS`, the window rect, `+0x140`, `+0x14C`,
+  `+0xF0` and `+0x6C`; and every `0x5CA`, `0x5B2` and `0x553`.
+- The callers of `SetStuckPlace` through its vtable slot other than the
+  handler and `ApplyRemoteSettings`. A third caller would be another way to
+  an edge 0.
+- The value of `GetMultiMonTaskbarState()` on the owner's machine.
+- The meaning of `+0x55`.
