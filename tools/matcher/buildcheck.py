@@ -12,6 +12,13 @@ def accepted_layouts(src_text):
     return {'old', 'inverted'} if 'p[7] == 0x75' in body else {'old'}
 
 
+def reads_durations(src_text):
+    """Whether a version reads the slide durations out of TrayUI::SlideWindow
+    when it loads, and so refuses a build that loads them elsewhere. Versions
+    that animate by themselves do not."""
+    return 'ScanForDurationLoads(' in src_text
+
+
 def layout(pe, rva):
     """The GetAutoHideFlags layout at rva, judged exactly as the mod judges it."""
     found = scan.scan_for_offsets(pe.read(rva, 0x100), {'old', 'inverted'})

@@ -101,3 +101,11 @@ def test_built_in_build_listed_once_when_winbindex_has_it_too():
                         'durations': True, 'layout': 'inverted'}]
     sw = should_work_for({'old', 'inverted'}, listed, set(), KNOWN, published={KNOWN[0]['pdb_key']})
     assert [b['taskbar'] for b in sw].count('10.0.26100.9807') == 1
+
+
+def test_should_work_for_a_version_that_reads_no_durations():
+    builds = [{'taskbar': '10.0.26100.9807', 'symbols': True, 'resolved': True, 'layout': 'old',
+               'durations': False}]
+    assert should_work_for({'old'}, builds, set()) == []
+    assert [b['taskbar'] for b in should_work_for({'old'}, builds, set(), durations_needed=False)] == [
+        '10.0.26100.9807']

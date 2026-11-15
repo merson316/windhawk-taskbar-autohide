@@ -55,3 +55,9 @@ def test_check_build_durations_in_a_reworked_slide_window(dll_10066):
 def test_check_build_durations_absent(dll_9807):
     rvas = {'getAutoHideFlags': 0x41F70, 'slideWindow': 0x41ED0}   # GetDockedRect, not SlideWindow
     assert check_build(PE(dll_9807), None, rvas)['durations'] is False
+
+
+def test_reads_durations_follows_the_source():
+    from matcher.buildcheck import reads_durations
+    assert reads_durations('bool ScanForDurationLoads(const BYTE* fn) {\n}\n') is True
+    assert reads_durations('bool ScanForOffsets(const BYTE* fn) {\n}\n') is False
