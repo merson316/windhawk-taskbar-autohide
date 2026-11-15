@@ -192,5 +192,46 @@ Test 'A failed final rename puts the old runtime back' {
     Assert ((Get-ItemProperty $key).Version -eq '1.18.0') 'Version unchanged'
 }
 
+# A staged request to change settings only, as tools/set-mod-settings.py leaves it.
+function SettingsRequest($t, $json) {
+    [IO.File]::WriteAllText("$($t.Staging)\request.json", "{`"settings`": $json}")
+}
+
+Test 'Settings request writes the values and tells Windhawk' {
+    param($t)
+    New-ItemProperty "$key\Settings" -Name hideDelayMs -Value 0 -PropertyType DWord | Out-Null
+    SettingsRequest $t '{"hideDelayMs": 800, "hideFully": 0}'
+    $r = Run $t
+    Assert ($r.ok) "ok: $($r.error)"
+    $s = Get-ItemProperty "$key\Settings"
+    Assert ($s.hideDelayMs -eq 800) 'hideDelayMs written'
+    Assert ($s.hideFully -eq 0) 'hideFully written'
+    Assert ($s.edge -eq 'top') 'other settings left alone'
+    $p = Get-ItemProperty $key
+    Assert ($p.SettingsChangeTime -gt 0) 'SettingsChangeTime set'
+    Assert ($p.Version -eq '1.18.0') 'Version unchanged'
+    Assert ($p.LibraryFileName -eq "${mod}_1.18.0_500841.dll") 'LibraryFileName unchanged'
+    Assert (@(Get-ChildItem "$($t.Data)\Engine\Mods\64").Count -eq 1) 'no DLL copied'
+    Assert (-not (Test-Path "$($t.Staging)\request.json")) 'request read once'
+}
+
+Test 'Settings request refuses a name that is not a setting name' {
+    param($t)
+    SettingsRequest $t '{"..\\Disabled": 0}'
+    $r = Run $t
+    Assert (-not $r.ok) 'refused'
+    Assert ($r.error -match 'setting name') "error: $($r.error)"
+    Assert (-not (Get-ItemProperty $key).SettingsChangeTime) 'nothing announced'
+}
+
+Test 'Settings request refuses a value that is not a whole number' {
+    param($t)
+    SettingsRequest $t '{"hideDelayMs": "calc.exe", "hideFully": 0}'
+    $r = Run $t
+    Assert (-not $r.ok) 'refused'
+    Assert ($r.error -match 'whole number') "error: $($r.error)"
+    Assert ($null -eq (Get-ItemProperty "$key\Settings").hideFully) 'nothing written'
+}
+
 if ($failed) { Write-Host "$failed failed"; exit 1 }
 Write-Host 'all passed'
