@@ -426,6 +426,59 @@ bool HideDelayElapsed(LONG64 now, LONG64 lastKeptUp, int delayMs) {
 // taskbar is "held": its window travels less than half its thickness, so most
 // of it stays where it belongs, and a window region takes away the rest.
 
+// Whether `bar`, a taskbar window docked to `edge`, is `display`'s taskbar. A
+// taskbar spans its display along the docked edge, and shown or hidden it
+// reaches that edge: shown it ends on it, hidden it straddles it or, hidden
+// completely, touches it from outside. The display
+// past the edge matches neither, which is why the display the window is
+// mostly on cannot be asked: hidden, that is the wrong one.
+bool BarBelongsTo(const RECT& display, const RECT& bar, UINT edge) {
+    const RECT& m = display;
+    const RECT& b = bar;
+    switch (edge) {
+        case ABE_LEFT:
+            return b.top == m.top && b.bottom == m.bottom &&
+                   b.right <= m.right && b.right >= m.left && b.left <= m.left;
+        case ABE_TOP:
+            return b.left == m.left && b.right == m.right &&
+                   b.bottom <= m.bottom && b.bottom >= m.top && b.top <= m.top;
+        case ABE_RIGHT:
+            return b.top == m.top && b.bottom == m.bottom &&
+                   b.left >= m.left && b.left <= m.right && b.right >= m.right;
+        default:
+            return b.left == m.left && b.right == m.right && b.top >= m.top &&
+                   b.top <= m.bottom && b.bottom >= m.bottom;
+    }
+}
+
+// Which windows to start and stop keeping a record for: `seen` are the
+// taskbar windows that exist now, `have` the ones with a record. Returns the
+// number written to toAdd; *nDrop receives the number written to toDrop.
+int DiffWindows(const HWND* have, int nHave, const HWND* seen, int nSeen,
+                HWND* toAdd, HWND* toDrop, int* nDrop) {
+    int nAdd = 0;
+    *nDrop = 0;
+    for (int i = 0; i < nSeen; i++) {
+        bool known = false;
+        for (int j = 0; j < nHave; j++) {
+            known = known || have[j] == seen[i];
+        }
+        if (!known) {
+            toAdd[nAdd++] = seen[i];
+        }
+    }
+    for (int j = 0; j < nHave; j++) {
+        bool still = false;
+        for (int i = 0; i < nSeen; i++) {
+            still = still || seen[i] == have[j];
+        }
+        if (!still) {
+            toDrop[(*nDrop)++] = have[j];
+        }
+    }
+    return nAdd;
+}
+
 // Whether another display touches the one-pixel band just past `edge` of
 // `own`. An edge that only partly faces another display counts.
 bool DisplayBeyond(const RECT& own, UINT edge, const RECT* others, int count) {
@@ -1671,8 +1724,229 @@ void WatcherTick() {
     g_inWatcherCall = false;
 }
 
+// ------------------------------------------------------- one record per taskbar
+
+// What the mod knows about each taskbar window: the primary and every
+// secondary. Made when the window is first seen and dropped when it goes; the
+// display facts are refreshed when the layout may have changed. Everything
+// here runs on the taskbar's thread.
+#define MAX_TASKBARS 8
+
+struct TaskbarRec {
+    HWND hwnd;
+    bool primary;
+    RECT display;      // the display it belongs to
+    int displayHz;
+    UINT edge;
+    bool held;         // another display lies past its docked edge
+    POINT shown;       // top-left when fully shown
+    SIZE size;
+    int hiddenAsked;   // pixels of thickness Windows last asked to be hidden
+    int hiddenNow;     // pixels hidden right now
+};
+
+TaskbarRec g_recs[MAX_TASKBARS];
+int g_recCount = 0;
+volatile LONG g_recsStale = 1;
+ULONGLONG g_recsRefreshed = 0;
+
+TaskbarRec* RecFor(HWND hwnd) {
+    for (int i = 0; i < g_recCount; i++) {
+        if (g_recs[i].hwnd == hwnd) {
+            return &g_recs[i];
+        }
+    }
+    return nullptr;
+}
+
+bool AnyHeld() {
+    for (int i = 0; i < g_recCount; i++) {
+        if (g_recs[i].held) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void DropRec(HWND hwnd) {
+    for (int i = 0; i < g_recCount; i++) {
+        if (g_recs[i].hwnd == hwnd) {
+            Wh_Log(L"taskbar %p: record dropped", hwnd);
+            g_recs[i] = g_recs[--g_recCount];
+            return;
+        }
+    }
+}
+
+struct DisplayList {
+    RECT rect[MAX_TASKBARS];
+    int hz[MAX_TASKBARS];
+    int count;
+};
+
+BOOL CALLBACK CollectDisplay(HMONITOR monitor, HDC, LPRECT, LPARAM data) {
+    auto* list = (DisplayList*)data;
+    MONITORINFOEXW mi{};
+    mi.cbSize = sizeof(mi);
+    if (list->count < MAX_TASKBARS && GetMonitorInfoW(monitor, &mi)) {
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        list->rect[list->count] = mi.rcMonitor;
+        list->hz[list->count] =
+            EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm)
+                ? (int)dm.dmDisplayFrequency
+                : 0;
+        list->count++;
+    }
+    return TRUE;
+}
+
+// The edge every taskbar is docked to. Windows keeps one for all of them.
+UINT DockedEdge() {
+    if (g_trayUI && g_offsetsVerified) {
+        return *(UINT*)((BYTE*)g_trayUI + g_trayUiEdgeOffset);
+    }
+    APPBARDATA abd{sizeof(abd)};
+    return SHAppBarMessage(ABM_GETTASKBARPOS, &abd) ? abd.uEdge : ABE_BOTTOM;
+}
+
+// Fill in what depends on the display layout. Returns false when no display
+// claims the window, which happens for a moment while the layout changes.
+bool FillRecFacts(TaskbarRec* rec, const DisplayList& displays, UINT edge) {
+    RECT bar{};
+    if (!GetWindowRect(rec->hwnd, &bar)) {
+        return false;
+    }
+    int own = -1;
+    for (int i = 0; i < displays.count; i++) {
+        if (BarBelongsTo(displays.rect[i], bar, edge)) {
+            own = i;
+            break;
+        }
+    }
+    if (own < 0) {
+        return false;
+    }
+
+    RECT others[MAX_TASKBARS];
+    int nOthers = 0;
+    for (int i = 0; i < displays.count; i++) {
+        if (i != own) {
+            others[nOthers++] = displays.rect[i];
+        }
+    }
+
+    const RECT& m = displays.rect[own];
+    // How far the window is from sitting inside its display: that much of
+    // its thickness is hidden, and moving it back gives the shown position.
+    const int dx = bar.left < m.left     ? m.left - bar.left
+                   : bar.right > m.right ? m.right - bar.right
+                                         : 0;
+    const int dy = bar.top < m.top         ? m.top - bar.top
+                   : bar.bottom > m.bottom ? m.bottom - bar.bottom
+                                           : 0;
+    const int hidden = dx ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
+
+    TaskbarRec was = *rec;
+    rec->display = m;
+    rec->displayHz = displays.hz[own];
+    rec->edge = edge;
+    // Held taskbars are handled on the bottom edge only, for now.
+    rec->held = edge == ABE_BOTTOM && DisplayBeyond(m, edge, others, nOthers);
+    rec->shown = {bar.left + dx, bar.top + dy};
+    rec->size = {bar.right - bar.left, bar.bottom - bar.top};
+    rec->hiddenAsked = rec->hiddenNow = hidden;
+
+    if (!EqualRect(&was.display, &rec->display) ||
+        was.displayHz != rec->displayHz || was.edge != rec->edge ||
+        was.held != rec->held) {
+        Wh_Log(L"taskbar %p (%s) at (%d,%d,%d,%d): display (%d,%d,%d,%d) at "
+               L"%d Hz, edge %u, %s",
+               rec->hwnd, rec->primary ? L"primary" : L"secondary", bar.left,
+               bar.top, bar.right, bar.bottom, m.left, m.top, m.right,
+               m.bottom, rec->displayHz, edge,
+               rec->held ? L"held: a display lies past the edge" : L"not held");
+    }
+    return true;
+}
+
+LRESULT CALLBACK SecondaryProc(HWND hWnd, UINT uMsg, WPARAM wParam,
+                               LPARAM lParam, DWORD_PTR dwRefData) {
+    if (uMsg == WM_NCDESTROY) {
+        DropRec(hWnd);
+    }
+    return DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+// Bring the records in line with the taskbar windows that exist, and their
+// display facts in line with the layout. Cheap enough for once a second, and
+// run at once when Windows says the displays or settings changed.
+void RefreshRecords() {
+    HWND seen[MAX_TASKBARS];
+    int nSeen = 0;
+    if (g_trayWnd && IsWindow(g_trayWnd)) {
+        seen[nSeen++] = g_trayWnd;
+    }
+    const DWORD pid = GetCurrentProcessId();
+    HWND w = nullptr;
+    while (nSeen < MAX_TASKBARS &&
+           (w = FindWindowExW(nullptr, w, L"Shell_SecondaryTrayWnd", nullptr))) {
+        DWORD owner = 0;
+        GetWindowThreadProcessId(w, &owner);
+        if (owner == pid) {
+            seen[nSeen++] = w;
+        }
+    }
+
+    HWND have[MAX_TASKBARS], toAdd[MAX_TASKBARS], toDrop[MAX_TASKBARS];
+    for (int i = 0; i < g_recCount; i++) {
+        have[i] = g_recs[i].hwnd;
+    }
+    int nDrop = 0;
+    const int nAdd =
+        DiffWindows(have, g_recCount, seen, nSeen, toAdd, toDrop, &nDrop);
+    for (int i = 0; i < nDrop; i++) {
+        DropRec(toDrop[i]);
+    }
+
+    DisplayList displays{};
+    EnumDisplayMonitors(nullptr, nullptr, CollectDisplay, (LPARAM)&displays);
+    const UINT edge = DockedEdge();
+
+    for (int i = 0; i < nAdd && g_recCount < MAX_TASKBARS; i++) {
+        TaskbarRec rec{};
+        rec.hwnd = toAdd[i];
+        rec.primary = toAdd[i] == g_trayWnd;
+        // The primary is already subclassed with TrayWatchProc.
+        if (!rec.primary && !WindhawkUtils::SetWindowSubclassFromAnyThread(
+                                rec.hwnd, SecondaryProc, 0)) {
+            Wh_Log(L"taskbar %p: could not subclass", rec.hwnd);
+            continue;
+        }
+        g_recs[g_recCount++] = rec;
+    }
+
+    for (int i = 0; i < g_recCount; i++) {
+        // A window between positions is claimed by no display for a moment;
+        // its facts stay as they were until the next refresh.
+        FillRecFacts(&g_recs[i], displays, edge);
+    }
+}
+
+void MaybeRefreshRecords() {
+    const ULONGLONG now = GetTickCount64();
+    if (InterlockedExchange(&g_recsStale, 0) || now - g_recsRefreshed >= 1000) {
+        g_recsRefreshed = now;
+        RefreshRecords();
+    }
+}
+
 LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
                                LPARAM lParam, DWORD_PTR dwRefData) {
+    if (uMsg == WM_DISPLAYCHANGE || uMsg == WM_SETTINGCHANGE) {
+        InterlockedExchange(&g_recsStale, 1);
+    }
+
     if (uMsg == WM_WINDOWPOSCHANGING && lParam &&
         InterlockedCompareExchange(&g_clipHold, 0, 0) &&
         !InterlockedCompareExchange(&g_animOverride, 0, 0)) {
@@ -1703,6 +1977,9 @@ LRESULT CALLBACK TrayWatchProc(HWND hWnd, UINT uMsg, WPARAM wParam,
     }
 
     if (g_watchMsg && uMsg == g_watchMsg) {
+        if (!g_fatalReason) {
+            MaybeRefreshRecords();
+        }
         WatcherTick();
         return 0;
     }
@@ -2508,6 +2785,14 @@ void Wh_ModUninit() {
         if (*h) {
             CloseHandle(*h);
             *h = nullptr;
+        }
+    }
+
+    // The watch thread has stopped, so no more ticks reach the records.
+    for (int i = 0; i < g_recCount; i++) {
+        if (!g_recs[i].primary && g_recs[i].hwnd) {
+            WindhawkUtils::RemoveWindowSubclassFromAnyThread(g_recs[i].hwnd,
+                                                             SecondaryProc);
         }
     }
 

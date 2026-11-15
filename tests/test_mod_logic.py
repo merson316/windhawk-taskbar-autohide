@@ -75,6 +75,25 @@ int main(int argc, char** argv) {
         printf("%%d\n", PanelCountsAsOpen(a[0] != 0, a[1] != 0, a[2] != 0) ? 1 : 0);
         return 0;
     }
+    if (!strcmp(cmd, "diff")) {   // nHave have... nSeen seen...
+        HWND have[16], seen[16], add[16], drop[16];
+        int nHave = (int)a[0], nSeen = (int)a[1 + nHave], nDrop = 0;
+        for (int i = 0; i < nHave; i++) have[i] = (HWND)(INT_PTR)a[1 + i];
+        for (int i = 0; i < nSeen; i++) seen[i] = (HWND)(INT_PTR)a[2 + nHave + i];
+        int nAdd = DiffWindows(have, nHave, seen, nSeen, add, drop, &nDrop);
+        printf("%%d", nAdd);
+        for (int i = 0; i < nAdd; i++) printf(" %%lld", (long long)(INT_PTR)add[i]);
+        printf(" %%d", nDrop);
+        for (int i = 0; i < nDrop; i++) printf(" %%lld", (long long)(INT_PTR)drop[i]);
+        printf("\n");
+        return 0;
+    }
+    if (!strcmp(cmd, "belongs")) {   // display(4) bar(4) edge
+        printf("%%d\n", BarBelongsTo({(LONG)a[0], (LONG)a[1], (LONG)a[2], (LONG)a[3]},
+                                     {(LONG)a[4], (LONG)a[5], (LONG)a[6], (LONG)a[7]},
+                                     (UINT)a[8]) ? 1 : 0);
+        return 0;
+    }
     fprintf(stderr, "unknown command %%s\n", cmd);
     return 3;
 }
@@ -212,3 +231,41 @@ def test_panel_open_only_when_visible_uncloaked_and_on_a_display(logic):
     # visible, cloaked, on a display
     cases = [(v, c, d) for v in (0, 1) for c in (0, 1) for d in (0, 1)]
     assert [logic('panel', *case)[0] for case in cases] == [0, 0, 0, 0, 0, 1, 0, 0]
+
+
+# ---- one record per taskbar window -------------------------------------------
+
+def test_records_follow_windows(logic):
+    # diff nHave have... nSeen seen...  ->  nAdd adds... nDrop drops...
+    assert logic('diff', 2, 1, 2, 2, 2, 3) == [1, 3, 1, 1]   # have {1,2}, seen {2,3}
+    assert logic('diff', 0, 2, 5, 6) == [2, 5, 6, 0]         # both new
+    assert logic('diff', 2, 5, 6, 0) == [0, 2, 5, 6]         # both gone
+    assert logic('diff', 2, 5, 6, 2, 6, 5) == [0, 0]         # same windows, other order
+
+
+def test_a_taskbar_belongs_to_the_display_whose_edge_it_reaches(logic):
+    # belongs display(4) bar(4) edge. Shown or hidden, the secondary measured
+    # on the stacked layout is the upper display's, never the primary's.
+    for bar in ((988, -60, 2428, 0), (988, -2, 2428, 58), (988, -32, 2428, 28)):
+        assert logic('belongs', *UPPER, *bar, 3) == [1]
+        assert logic('belongs', *PRIMARY, *bar, 3) == [0]
+    for bar in ((0, 1392, 3440, 1440), (0, 1438, 3440, 1486)):
+        assert logic('belongs', *PRIMARY, *bar, 3) == [1]
+    # Two displays of one width, stacked: the taskbar straddling the seam is
+    # the upper one's bottom taskbar, and the lower one's top taskbar.
+    upper, lower, bar = (0, -1080, 1920, 0), (0, 0, 1920, 1080), (0, -2, 1920, 46)
+    assert logic('belongs', *upper, *bar, 3) == [1] and logic('belongs', *lower, *bar, 3) == [0]
+    assert logic('belongs', *lower, *bar, 1) == [1] and logic('belongs', *upper, *bar, 1) == [0]
+    # Left and right edges.
+    assert logic('belongs', 0, 0, 1920, 1080, -46, 0, 2, 1080, 0) == [1]
+    assert logic('belongs', 0, 0, 1920, 1080, 1918, 0, 1966, 1080, 2) == [1]
+
+
+def test_a_completely_hidden_taskbar_still_belongs_to_its_display(logic):
+    # "Hide completely" parks the window just past the edge, touching it.
+    assert logic('belongs', 0, 0, 3440, 1440, -48, 0, 0, 1440, 0) == [1]          # left
+    assert logic('belongs', 0, 0, 3440, 1440, 0, -48, 3440, 0, 1) == [1]          # top
+    assert logic('belongs', 0, 0, 3440, 1440, 3440, 0, 3488, 1440, 2) == [1]      # right
+    assert logic('belongs', 0, 0, 3440, 1440, 0, 1440, 3440, 1488, 3) == [1]      # bottom
+    # ...and not to the display it is parked on.
+    assert logic('belongs', 3440, 0, 5360, 1440, 3440, 0, 3488, 1440, 2) == [0]
