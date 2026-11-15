@@ -1798,6 +1798,22 @@ HANDLE g_barWake = nullptr;
 HANDLE g_barThread = nullptr;
 volatile LONG g_barStop = 0;
 
+// How much of this taskbar the mod hides. "Hide completely" is for the
+// primary off the bottom edge only: the mod reveals that one itself, from the
+// pointer's position. Every other taskbar is revealed by Windows noticing the
+// pointer on what is left of the window, or by the mod sending it the hit test
+// a pointer there would cause, and both need the sliver to exist. (Tried
+// without it on the left edge: the secondary could not be brought back.)
+int HiddenTargetFor(const TaskbarRec* rec) {
+    const int thickness = (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT)
+                              ? rec->size.cx
+                              : rec->size.cy;
+    return HiddenTarget(thickness,
+                        g_settings.hideFully && rec->primary &&
+                            rec->edge < ABE_BOTTOM,
+                        rec->held);
+}
+
 // Move a taskbar's window, marking the move as the mod's own so the handler
 // puts this position back after the taskbar has replaced it. The mark names
 // the position: while this SetWindowPos runs, the taskbar reacts to the move
@@ -1903,9 +1919,8 @@ void HidePrimaryBar(const RECT& docked, UINT edge) {
     }
     rec->shown = {docked.left, docked.top};
     rec->size = {docked.right - docked.left, docked.bottom - docked.top};
-    const int thickness =
-        (edge == ABE_LEFT || edge == ABE_RIGHT) ? rec->size.cx : rec->size.cy;
-    rec->hiddenAsked = HiddenTarget(thickness, g_settings.hideFully, rec->held);
+    rec->edge = edge;
+    rec->hiddenAsked = HiddenTargetFor(rec);
     rec->placed = true;
     StartBarAnimation(rec, rec->hiddenAsked);
 }
@@ -2068,18 +2083,12 @@ void BarPosChanging(TaskbarRec* rec, WINDOWPOS* wp, int reqX, int reqY) {
         rec->lastAskedOff = off;
     }
 
-    // Windows says only "shown" or "hidden"; how much to hide is the mod's
-    // own answer. On the bottom edge that is Windows' own 2 px sliver.
-    const int thickness =
-        (rec->edge == ABE_LEFT || rec->edge == ABE_RIGHT) ? w : h;
-    const int target =
-        off == 0 ? 0
-                 : HiddenTarget(thickness,
-                                g_settings.hideFully && rec->edge < ABE_BOTTOM,
-                                rec->held);
-
     rec->shown = {asked.left + dx, asked.top + dy};
     rec->size = {w, h};
+
+    // Windows says only "shown" or "hidden"; how much to hide is the mod's
+    // own answer.
+    const int target = off == 0 ? 0 : HiddenTargetFor(rec);
     if (target != rec->hiddenAsked || !rec->placed) {
         rec->hiddenAsked = target;
         rec->dwellStart = 0;
@@ -2406,6 +2415,12 @@ void RefreshRecords() {
                 MoveBar(rec, rec->shown.x, rec->shown.y);
                 Wh_Log(L"taskbar %p taken over while hidden: dpi now %u",
                        rec->hwnd, GetDpiForWindow(rec->hwnd));
+            }
+            // Never take one over more hidden than the mod itself would hide
+            // it: a taskbar with nothing left on screen cannot be revealed.
+            const int most = HiddenTargetFor(rec);
+            if (rec->hiddenNow > most) {
+                rec->hiddenNow = rec->hiddenAsked = most;
             }
             ApplyPlacement(rec, rec->hiddenNow);
         }
