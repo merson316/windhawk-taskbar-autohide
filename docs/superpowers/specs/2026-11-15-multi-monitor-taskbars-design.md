@@ -170,8 +170,10 @@ For every taskbar the mod handles, `TrayUI::SlideWindow` is called with
 One thread paces all animations from a high-resolution timer; each step runs
 on the taskbar's thread. A taskbar steps once per refresh of its own display.
 
-"Animation frame rate" becomes a cap on that rate and keeps its default of
-90: a 60 Hz display steps at 60, a 240 Hz display at 90. 0 means no cap.
+"Animation frame rate" becomes a cap on that rate. It keeps its range of 30
+to 240 and its default of 90 (the owner's decision): a 60 Hz display steps at
+60, a 240 Hz display at 90, and setting 240 lets a 240 Hz display step at its
+own rate. There is no "no cap" value.
 
 Measured on the owner's 240 Hz primary (spike 0.6, CPU time inside Explorer
 per animation, from cycle counts; two runs per rate except five at 240):
