@@ -1,5 +1,30 @@
 # Taskbars on every display, and the four open issues
 
+> **Status, end of 2026-11-15: built, with these departures from the text below.**
+> The text is kept as the record of what was decided before the work; where it
+> and this note differ, this note and the code are right.
+>
+> - **A held taskbar does not slide half-way and wipe.** Its window stays on its
+>   shown position; its content window is slid inside it and a region keeps the
+>   visible band. Half-slide plus wipe, a cut and a proportional move were all
+>   tried on a real desktop and looked wrong against the stock bottom edge.
+> - **No cloaking.** Windows has one cloak switch for a taskbar and uses it
+>   itself; the two undid each other.
+> - **On the bottom edge the slide runs inside `TrayUI::SlideWindow`**, before
+>   Windows clips the taskbar and hides its content.
+> - **Edge changes and secondary unhides go through window messages**
+>   (`0x5CA` setting 6 and `0x5B2`; `0x5BE`), read out of `taskbar.dll`, so they
+>   need no symbols.
+> - **Off the bottom edge every hidden taskbar hides completely**, the
+>   secondaries included.
+> - **The taskbar stays up while Quick Settings is open on the bottom edge too**
+>   (owner's decision), which Windows alone does not do.
+> - **Testing is by `tools/test-taskbars.ps1`**, not by hand: it drives the
+>   desktop, measures the windows and looks at the screen. Run with the mod off,
+>   it reproduces issue #11 in Windows itself (the hidden upper taskbar at the
+>   lower display's scaling).
+> - Still open: the layouts in `docs/ROADMAP.md` section 4.
+
 Status: approved by the owner on 2026-11-15. Experimental branch
 `multimonitor-experiment`. Covers issues #9, #10, #11 and #12.
 

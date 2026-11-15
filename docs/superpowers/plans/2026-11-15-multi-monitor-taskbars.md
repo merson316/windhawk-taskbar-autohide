@@ -1,5 +1,13 @@
 # Taskbars on Every Display Implementation Plan
 
+> **Status, end of 2026-11-15:** Tasks 0 to 16 are done, several by another
+> route than written here; the design spec's status note lists the departures.
+> Of Task 17: the harness replaces the hand-run layout matrix (stacked displays
+> at equal and different scaling pass on all four edges; side-by-side and
+> single-display layouts are still to run), the README, roadmap and mod header
+> are updated, and the pre-release, the issue replies and the version bump to
+> 2.0.0 wait for the owner.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Fix issues #9, #10 and #12, then hold every hidden taskbar on its own display on every edge (#11), with the mod running the hide and reveal itself.

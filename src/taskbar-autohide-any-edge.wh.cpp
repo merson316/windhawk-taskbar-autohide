@@ -25,7 +25,21 @@ attempted. This mod unmasks the read, stores the same flag combination the
 bottom edge uses, and supplies the pointer tracking that Windows only performs
 on the bottom edge.
 
-The bottom edge is left untouched.
+It handles every taskbar when "Show my taskbar on all displays" is on, each at
+its own display's scaling and refresh rate.
+
+## More than one display
+
+A taskbar whose edge has another display beyond it has nowhere to hide into.
+Windows slides it onto the neighbouring display and clips it there, and the
+hidden window takes that display's scaling: with displays scaled differently,
+its icons can come back the wrong size. The mod keeps such a taskbar's window
+where it is and slides its content out of it, so nothing is drawn on the other
+display and the scaling never changes. This applies on every edge, the bottom
+included. Rest the pointer on the edge of the taskbar's own display for a
+moment to bring it back.
+
+With one display, or displays side by side, the bottom edge is left to Windows.
 
 ## Notification handling
 
@@ -50,31 +64,27 @@ In the order these actually turn out to be the cause:
 - **Auto-hide is not enabled in Windows.** Settings > Personalisation > Taskbar
   > Taskbar behaviours. Windows greys that option out when the taskbar is not
   at the bottom, so set it with the taskbar at the bottom and then move it.
-- **The taskbar is on the bottom edge**, where Windows already handles
-  auto-hide. The mod leaves it alone.
-- **The edge faces another display**, so the mod skips it deliberately. See
-  "Skip edges facing another display".
+- **The taskbar is on the bottom edge with no display below it**, where
+  Windows already handles auto-hide. The mod leaves the hiding to it.
+- **"Leave edges facing another display alone" is on** and the edge faces
+  another display.
 
-If auto-hide is off, the mod says so in a dialog. For the other two, it writes
-which one applies to the Windhawk log, once per session.
+If auto-hide stays off, the mod says so in a dialog. For the other two, it
+writes which one applies to the Windhawk log, once per session.
 
 ## Known limitations
 
-- The hide is a linear slide, not the eased Windows curve. Windows clamps every
-  intermediate position to the endpoint, so the mod animates the hide itself;
-  the reveal still uses Windows' own slide. Both durations are configurable.
-- Primary taskbar only. Secondary taskbars use a separate `CSecondaryTray`
-  class.
-- Windows parks a hidden taskbar with a sliver still on screen. The mod hides
-  it completely instead, since it does its own pointer tracking; "Hide
-  completely" turns that off.
-- An edge with another display beyond it has nowhere off-screen to hide into,
-  so the mod skips it and that edge behaves as it does without the mod. This is
-  detected automatically; see "Skip edges facing another display".
-- Windows can lower the taskbar out of the always-on-top band while it is
-  hidden, and its reveal does not raise it again. The mod raises it before the
-  slide starts, except while a full-screen window is in front. See "Keep the
-  taskbar above other windows".
+- On the bottom edge Windows decides when a taskbar hides, so "Hide delay" has
+  no effect there.
+- Windows parks a hidden taskbar with a sliver still on screen. Off the bottom
+  edge the mod hides every taskbar completely instead, since it does its own
+  pointer tracking; "Hide completely" turns that off.
+- Off the bottom edge a revealed taskbar can come up behind another window.
+  The mod raises it before the slide starts, except while a full-screen window
+  is in front. See "Keep the taskbar above other windows".
+- On a Windows build whose debug symbols Microsoft has not published, a
+  flashing button may bring a secondary taskbar on the bottom edge up again
+  for each flash.
 - Requires Windows 11 build 26200 or newer.
 
 ## If it does not work
@@ -92,8 +102,7 @@ reason instead of failing silently. The taskbar is left alone in that state.
   $name: Leave edges facing another display alone
   $description: >-
     An edge with a display beyond it has nowhere to hide into, so the mod keeps
-    such a taskbar on its own display: it slides part of the way and the rest
-    is wiped. Turn this on to leave such an edge alone instead, as it behaves
+    such a taskbar's window where it is and slides its content out of it. Turn this on to leave such an edge alone instead, as it behaves
     without this mod. The bottom edge is not affected.
 
     Default: off.
