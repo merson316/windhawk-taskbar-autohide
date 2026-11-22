@@ -2,7 +2,7 @@
 // @id              taskbar-autohide-any-edge
 // @name            Taskbar auto-hide on any edge
 // @description     Makes "Automatically hide the taskbar" work on every edge and on every display
-// @version         2.0.0
+// @version         2.1.0
 // @author          merson316
 // @github          https://github.com/merson316
 // @include         explorer.exe
