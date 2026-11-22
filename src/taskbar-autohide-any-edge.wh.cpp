@@ -848,17 +848,10 @@ using TrayUI_SlideWindow_t = void(WINAPI*)(void* pThis, HWND hWnd,
 
 TrayUI_GetStuckPlace_t TrayUI_GetStuckPlace_Original;
 TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Original;
-
-// Once a function is hooked, its _Original pointer is a trampoline, and the
-// bytes behind it belong to the hook engine rather than taskbar.dll. The
-// _Address pointers are resolved without hooking, for code that reads the
-// function's own instructions.
-TrayUI_GetAutoHideFlags_t TrayUI_GetAutoHideFlags_Address;
 TrayUI_SetAutoHideFlags_t TrayUI_SetAutoHideFlags_Original;
 TrayUI_GetDockedRect_t TrayUI_GetDockedRect_Original;
 TrayUI_Unhide_t TrayUI_Unhide_Original;
 TrayUI_SlideWindow_t TrayUI_SlideWindow_Original;
-TrayUI_SlideWindow_t TrayUI_SlideWindow_Address;
 
 bool g_offsetsVerified = false;
 
@@ -3907,31 +3900,127 @@ bool KnownBuildLooksRight(HMODULE taskbar, const KnownBuild& b) {
     return !b.secondaryTrayUnhide || isFunctionStart(b.secondaryTrayUnhide);
 }
 
-// The same hooks HookSymbols would set, at the tabled addresses.
-bool HookKnownBuild(HMODULE taskbar, const KnownBuild& b) {
-    auto at = [taskbar](DWORD rva) { return (void*)((BYTE*)taskbar + rva); };
+// Where the functions the mod hooks or calls start in taskbar.dll, resolved
+// without hooking any of them. Once a function is hooked, its _Original
+// pointer is a trampoline: the engine's relocated copy of however many leading
+// instructions the patch displaced, followed by a jump back. How much of it
+// matches the real function varies by engine version, so reading through it
+// gives different answers on machines with identical taskbar.dll. Code that
+// reads a function's own instructions reads them from here, before anything
+// is hooked, which also means an unrecognised build is never patched.
+// permitAutoHide and secondaryTrayUnhide may be null.
+struct HookTargets {
+    TrayUI_GetStuckPlace_t getStuckPlace;
+    TrayUI_GetAutoHideFlags_t getAutoHideFlags;
+    TrayUI_SetAutoHideFlags_t setAutoHideFlags;
+    TrayUI_GetDockedRect_t getDockedRect;
+    TrayUI_Unhide_t unhide;
+    TrayUI_SlideWindow_t slideWindow;
+    CTaskListWnd_PermitAutoHide_t permitAutoHide;
+    CSecondaryTray_Unhide_t secondaryTrayUnhide;
+};
 
-    TrayUI_GetStuckPlace_Original =
-        (TrayUI_GetStuckPlace_t)at(b.getStuckPlace);
-    TrayUI_SetAutoHideFlags_Original =
-        (TrayUI_SetAutoHideFlags_t)at(b.setAutoHideFlags);
-    TrayUI_GetDockedRect_Original =
-        (TrayUI_GetDockedRect_t)at(b.getDockedRect);
+// Every symbol in one HookSymbols call. Windhawk caches one symbol list per
+// mod and PDB, the last call's, so a second call on taskbar.dll would replace
+// the first one's entry, and every Explorer start would parse the PDB again.
+// All are optional here; SetUpHooks decides which it cannot do without.
+bool ResolveFromSymbols(HMODULE taskbar, HookTargets* t) {
+    WindhawkUtils::SYMBOL_HOOK symbols[] = {
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))",
+          LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"},
+         &t->getStuckPlace, nullptr, true},
 
-    return WindhawkUtils::SetFunctionHook(
-               (TrayUI_GetAutoHideFlags_t)at(b.getAutoHideFlags),
-               TrayUI_GetAutoHideFlags_Hook,
-               &TrayUI_GetAutoHideFlags_Original) &&
-           WindhawkUtils::SetFunctionHook((TrayUI_Unhide_t)at(b.unhide),
-                                          TrayUI_Unhide_Hook,
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))",
+          LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
+         &t->getAutoHideFlags, nullptr, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))",
+          LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int) )"},
+         &t->setAutoHideFlags, nullptr, true},
+
+        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int))",
+          LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int) )"},
+         &t->getDockedRect, nullptr, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
+          LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
+         &t->unhide, nullptr, true},
+
+        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
+          LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
+         &t->slideWindow, nullptr, true},
+
+        {{LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void))",
+          LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void) )"},
+         &t->permitAutoHide, nullptr, true},
+
+        {{LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
+          LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
+         &t->secondaryTrayUnhide, nullptr, true},
+    };
+    return WindhawkUtils::HookSymbols(taskbar, symbols, ARRAYSIZE(symbols));
+}
+
+// The first function the mod cannot do without that t lacks, or nullptr.
+// Every one of these is load-bearing: running with any missing would change
+// nothing while appearing to work.
+PCWSTR MissingRequired(const HookTargets& t) {
+    const struct {
+        PCWSTR name;
+        void* ptr;
+    } required[] = {
+        {L"GetStuckPlace", (void*)t.getStuckPlace},
+        {L"GetAutoHideFlags", (void*)t.getAutoHideFlags},
+        {L"SetAutoHideFlags", (void*)t.setAutoHideFlags},
+        {L"GetDockedRect", (void*)t.getDockedRect},
+        {L"Unhide", (void*)t.unhide},
+        {L"SlideWindow", (void*)t.slideWindow},
+    };
+    for (const auto& r : required) {
+        if (!r.ptr) {
+            return r.name;
+        }
+    }
+    return nullptr;
+}
+
+// The same functions at the tabled addresses; 0 in the table stays null.
+HookTargets ResolveFromKnownBuild(HMODULE taskbar, const KnownBuild& b) {
+    auto at = [taskbar](DWORD rva) {
+        return rva ? (void*)((BYTE*)taskbar + rva) : nullptr;
+    };
+    return {
+        (TrayUI_GetStuckPlace_t)at(b.getStuckPlace),
+        (TrayUI_GetAutoHideFlags_t)at(b.getAutoHideFlags),
+        (TrayUI_SetAutoHideFlags_t)at(b.setAutoHideFlags),
+        (TrayUI_GetDockedRect_t)at(b.getDockedRect),
+        (TrayUI_Unhide_t)at(b.unhide),
+        (TrayUI_SlideWindow_t)at(b.slideWindow),
+        (CTaskListWnd_PermitAutoHide_t)at(b.permitAutoHide),
+        (CSecondaryTray_Unhide_t)at(b.secondaryTrayUnhide),
+    };
+}
+
+// Hooks the functions the mod replaces, and points the _Original pointers of
+// the ones it only calls at the functions themselves. CSecondaryTray::_Unhide
+// is left to the caller, since the mod works without it.
+bool SetHooks(const HookTargets& t) {
+    TrayUI_GetStuckPlace_Original = t.getStuckPlace;
+    TrayUI_SetAutoHideFlags_Original = t.setAutoHideFlags;
+    TrayUI_GetDockedRect_Original = t.getDockedRect;
+
+    return WindhawkUtils::SetFunctionHook(t.getAutoHideFlags,
+                                          TrayUI_GetAutoHideFlags_Hook,
+                                          &TrayUI_GetAutoHideFlags_Original) &&
+           WindhawkUtils::SetFunctionHook(t.unhide, TrayUI_Unhide_Hook,
                                           &TrayUI_Unhide_Original) &&
-           WindhawkUtils::SetFunctionHook(
-               (TrayUI_SlideWindow_t)at(b.slideWindow),
-               TrayUI_SlideWindow_Hook, &TrayUI_SlideWindow_Original) &&
-           WindhawkUtils::SetFunctionHook(
-               (CTaskListWnd_PermitAutoHide_t)at(b.permitAutoHide),
-               CTaskListWnd_PermitAutoHide_Hook,
-               &CTaskListWnd_PermitAutoHide_Original);
+           WindhawkUtils::SetFunctionHook(t.slideWindow,
+                                          TrayUI_SlideWindow_Hook,
+                                          &TrayUI_SlideWindow_Original) &&
+           (!t.permitAutoHide ||
+            WindhawkUtils::SetFunctionHook(
+                t.permitAutoHide, CTaskListWnd_PermitAutoHide_Hook,
+                &CTaskListWnd_PermitAutoHide_Original));
 }
 
 // Returns nullptr when the mod is ready, or a reason fit to put in front of a
@@ -3952,36 +4041,17 @@ PCWSTR SetUpHooks() {
         return L"taskbar.dll could not be loaded.";
     }
 
-    // Resolve the functions whose instructions are read on their own first,
-    // passing no hook function so the pointers receive the symbol addresses.
-    // Once a hook is registered, the pointer is a trampoline: the engine's
-    // relocated copy of however many leading instructions the patch displaced,
-    // followed by a jump back. How much of it matches the real function varies
-    // by engine version, so reading through it gives different answers on
-    // machines with identical taskbar.dll. Validating first also means an
-    // unrecognised build is never patched.
-    WindhawkUtils::SYMBOL_HOOK resolveOnly[] = {
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))",
-          LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
-         &TrayUI_GetAutoHideFlags_Address, nullptr, true},
+    HookTargets t = {};
+    bool resolved = ResolveFromSymbols(taskbar, &t) && t.getAutoHideFlags;
+    PCWSTR missingFromSymbols = resolved ? MissingRequired(t) : nullptr;
 
-        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
-          LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
-         &TrayUI_SlideWindow_Address, nullptr, true},
-    };
-
+    // The table stands in when symbols failed, or resolved without a function
+    // the mod needs; published symbols that have everything always win.
     const KnownBuild* known = nullptr;
-    if (!WindhawkUtils::HookSymbols(taskbar, resolveOnly,
-                                    ARRAYSIZE(resolveOnly)) ||
-        !TrayUI_GetAutoHideFlags_Address) {
+    if (!resolved || missingFromSymbols) {
         known = FindKnownBuild(taskbar);
-        if (!known) {
-            g_symbolsMissingFor = taskbar;
-            return L"The taskbar's debug symbols could not be resolved. "
-                   L"Windhawk downloads these from Microsoft the first time a "
-                   L"mod needs them, so check the internet connection and "
-                   L"reload the mod.";
-        }
+    }
+    if (known) {
         if (!KnownBuildLooksRight(taskbar, *known)) {
             Wh_Log(L"built-in addresses for taskbar.dll %s failed the check",
                    known->version);
@@ -3989,16 +4059,25 @@ PCWSTR SetUpHooks() {
                    L"not check out, so it has left the taskbar alone. Please "
                    L"report this; the mod needs updating to match.";
         }
-        Wh_Log(L"no symbols, using the built-in addresses for taskbar.dll %s",
-               known->version);
-        TrayUI_GetAutoHideFlags_Address =
-            (TrayUI_GetAutoHideFlags_t)((BYTE*)taskbar + known->getAutoHideFlags);
-        TrayUI_SlideWindow_Address =
-            (TrayUI_SlideWindow_t)((BYTE*)taskbar + known->slideWindow);
+        if (missingFromSymbols) {
+            Wh_Log(L"symbols lack %s, using the built-in addresses for "
+                   L"taskbar.dll %s",
+                   missingFromSymbols, known->version);
+        } else {
+            Wh_Log(L"no symbols, using the built-in addresses for taskbar.dll "
+                   L"%s",
+                   known->version);
+        }
+        t = ResolveFromKnownBuild(taskbar, *known);
+    } else if (!resolved) {
+        g_symbolsMissingFor = taskbar;
+        return L"The taskbar's debug symbols could not be resolved. "
+               L"Windhawk downloads these from Microsoft the first time a "
+               L"mod needs them, so check the internet connection and "
+               L"reload the mod.";
     }
 
-    g_offsetsVerified =
-        ScanForOffsets((const BYTE*)TrayUI_GetAutoHideFlags_Address);
+    g_offsetsVerified = ScanForOffsets((const BYTE*)t.getAutoHideFlags);
     if (!g_offsetsVerified) {
         return L"This build of taskbar.dll does not match what the mod was "
                L"built against, so it cannot safely read the taskbar's state. "
@@ -4006,70 +4085,38 @@ PCWSTR SetUpHooks() {
                L"updating to match.";
     }
 
-    WindhawkUtils::SYMBOL_HOOK hooks[] = {
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void))",
-          LR"(public: virtual unsigned int __cdecl TrayUI::GetStuckPlace(void) )"},
-         &TrayUI_GetStuckPlace_Original, nullptr, true},
+    if (PCWSTR name = MissingRequired(t)) {
+        static WCHAR missing[256];
+        wsprintfW(missing,
+                  L"The taskbar function %s could not be found, so the mod "
+                  L"cannot hook it. This usually means the debug symbols "
+                  L"are incomplete; reloading the mod re-downloads them.",
+                  name);
+        return missing;
+    }
 
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void))",
-          LR"(public: virtual unsigned int __cdecl TrayUI::GetAutoHideFlags(void) )"},
-         &TrayUI_GetAutoHideFlags_Original, TrayUI_GetAutoHideFlags_Hook, true},
+    // Not required, since the rest of the mod works without it, but it is
+    // what holds the taskbar on the bottom edge: the hide delay, an open
+    // Quick Settings panel, a notification's hold.
+    if (!t.permitAutoHide) {
+        Wh_Log(L"CTaskListWnd::PermitAutoHide not found: on the bottom edge "
+               L"the hide delay and the holds for Quick Settings and "
+               L"notifications are unavailable");
+    }
 
-        {{LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int))",
-          LR"(public: virtual void __cdecl TrayUI::SetAutoHideFlags(unsigned int) )"},
-         &TrayUI_SetAutoHideFlags_Original, nullptr, true},
-
-        {{LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int))",
-          LR"(public: virtual unsigned int __cdecl TrayUI::GetDockedRect(struct tagRECT *,int) )"},
-         &TrayUI_GetDockedRect_Original, nullptr, true},
-
-        {{LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
-          LR"(public: virtual void __cdecl TrayUI::Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
-         &TrayUI_Unhide_Original, TrayUI_Unhide_Hook, true},
-
-        {{LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool))",
-          LR"(public: virtual void __cdecl TrayUI::SlideWindow(struct HWND__ *,struct tagRECT const *,struct HMONITOR__ *,bool,bool) )"},
-         &TrayUI_SlideWindow_Original, TrayUI_SlideWindow_Hook, true},
-
-        {{LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void))",
-          LR"(public: virtual int __cdecl CTaskListWnd::PermitAutoHide(void) )"},
-         &CTaskListWnd_PermitAutoHide_Original,
-         CTaskListWnd_PermitAutoHide_Hook, true},
-    };
-
-    if (known) {
-        if (!HookKnownBuild(taskbar, *known)) {
-            return L"The mod could not hook the taskbar's functions.";
-        }
-    } else if (!WindhawkUtils::HookSymbols(taskbar, hooks, ARRAYSIZE(hooks))) {
-        g_symbolsMissingFor = taskbar;
-        return L"The taskbar's debug symbols could not be resolved. "
-               L"Windhawk downloads these from Microsoft the first time a mod "
-               L"needs them, so check the internet connection and reload the "
-               L"mod.";
+    if (!SetHooks(t)) {
+        return L"The mod could not hook the taskbar's functions.";
     }
 
     // Optional: from symbols, or from kKnownBuilds where the entry has its
     // address (KnownBuildLooksRight has checked it with the others). Without
     // it the rest of the mod works, and a flashing button shows secondary
     // taskbars as Windows itself would.
-    WindhawkUtils::SYMBOL_HOOK secondaryHooks[] = {
-        {{LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest))",
-          LR"(private: void __cdecl CSecondaryTray::_Unhide(enum TrayCommon::TrayUnhideFlags,enum TrayCommon::UnhideRequest) )"},
-         &CSecondaryTray_Unhide_Original, CSecondaryTray_Unhide_Hook, true},
-    };
-    bool secondaryHooked;
-    if (known) {
-        secondaryHooked =
-            known->secondaryTrayUnhide &&
-            WindhawkUtils::SetFunctionHook(
-                (CSecondaryTray_Unhide_t)((BYTE*)taskbar +
-                                          known->secondaryTrayUnhide),
-                CSecondaryTray_Unhide_Hook, &CSecondaryTray_Unhide_Original);
-    } else {
-        secondaryHooked = WindhawkUtils::HookSymbols(
-            taskbar, secondaryHooks, ARRAYSIZE(secondaryHooks));
-    }
+    bool secondaryHooked =
+        t.secondaryTrayUnhide &&
+        WindhawkUtils::SetFunctionHook(t.secondaryTrayUnhide,
+                                       CSecondaryTray_Unhide_Hook,
+                                       &CSecondaryTray_Unhide_Original);
     if (!secondaryHooked || !CSecondaryTray_Unhide_Original) {
         // RevealSecondariesForFlash stands in when this pointer is null.
         CSecondaryTray_Unhide_Original = nullptr;
@@ -4082,32 +4129,6 @@ PCWSTR SetUpHooks() {
         Wh_Log(L"secondary taskbars: notification handling uses the built-in "
                L"address for taskbar.dll %s",
                known->version);
-    }
-
-    // Every one of these is load-bearing: running with any missing would change
-    // nothing while appearing to work.
-    struct {
-        PCWSTR name;
-        void* ptr;
-    } required[] = {
-        {L"GetStuckPlace", (void*)TrayUI_GetStuckPlace_Original},
-        {L"GetAutoHideFlags", (void*)TrayUI_GetAutoHideFlags_Original},
-        {L"SetAutoHideFlags", (void*)TrayUI_SetAutoHideFlags_Original},
-        {L"GetDockedRect", (void*)TrayUI_GetDockedRect_Original},
-        {L"Unhide", (void*)TrayUI_Unhide_Original},
-        {L"SlideWindow", (void*)TrayUI_SlideWindow_Address},
-    };
-
-    for (const auto& r : required) {
-        if (!r.ptr) {
-            static WCHAR missing[256];
-            wsprintfW(missing,
-                      L"The taskbar function %s could not be found, so the mod "
-                      L"cannot hook it. This usually means the debug symbols "
-                      L"are incomplete; reloading the mod re-downloads them.",
-                      r.name);
-            return missing;
-        }
     }
 
     // Pacing the reveal means pacing a loop this mod does not own. The hook is
