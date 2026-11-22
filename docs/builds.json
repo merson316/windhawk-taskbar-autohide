@@ -285,5 +285,12 @@
     "resolved": true,
     "layout": "inverted",
     "durations": true
+  },
+  {
+    "taskbar": "10.0.26100.10068",
+    "symbols": true,
+    "resolved": true,
+    "layout": "inverted",
+    "durations": true
   }
 ]
